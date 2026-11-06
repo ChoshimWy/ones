@@ -5,9 +5,12 @@
 /ones-request-validation*.json
 /SidusLinkPro-ONES-Bug-Auto-Fix-Proposal.html
 
-# Runtime configuration stays local; only reviewed example configs may be shared.
-/config/*
-!/config/*.example.json
+# Existing scripts, tests and all configuration remain local for now.
+/scripts/
+/tests/
+/config/
+
+# Local credentials and environment configuration.
 .env
 .env.*
 *.local.json

@@ -22,9 +22,8 @@
 | 路径 | 分类与处理 |
 | --- | --- |
 | `README.md`、`docs/`、`.gitignore` | 仓库文档和规则；脱敏后精确提交 |
-| `scripts/`、`tests/` | 本地已有源码和测试；未纳入本次提交，后续审查后单独交付 |
-| `config/*.example.json` | 仅允许无凭证、无真实业务标识的示例；本地现有示例使用环境变量名引用认证值，仍需逐次审查 |
-| `config/` 其他文件、`.env*`、`*.local.json/yaml/yml` | 本机配置，Git 忽略；凭证优先系统安全存储或运行时注入 |
+| `scripts/`、`tests/`、`config/` | 暂时整目录忽略，包括示例配置；保留本机，不纳入同步，后续另行授权后再评估入库 |
+| `.env*`、`*.local.json/yaml/yml` | 本机配置，Git 忽略；凭证优先系统安全存储或运行时注入 |
 | `state/` | 本地账本、锁和任务状态，整体忽略；其中历史 schema 不在本次单独发布 |
 | `pending-bugs*.json/csv`、`ones-request-validation*.json` | 真实 Bug 快照及接口验证响应，保留本机并忽略 |
 | `SidusLinkPro-ONES-Bug-Auto-Fix-Proposal.html` | 历史内部方案，未完成公开内容审查，暂不同步 |
