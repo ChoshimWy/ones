@@ -1,0 +1,53 @@
+# Local business records and historical internal material (never auto-publish).
+/state/
+/pending-bugs*.json
+/pending-bugs*.csv
+/ones-request-validation*.json
+/SidusLinkPro-ONES-Bug-Auto-Fix-Proposal.html
+
+# Runtime configuration stays local; only reviewed example configs may be shared.
+/config/*
+!/config/*.example.json
+.env
+.env.*
+*.local.json
+*.local.yaml
+*.local.yml
+/.secrets/
+/.auth/
+/credentials*
+/cookies*
+/tokens*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Raw exports, captures and logs may contain credentials or personal data.
+/exports/
+/captures/
+/artifacts/
+/logs/
+*.har
+*.log
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Local agent state, indexes, editor metadata and Python cache.
+/.claude/
+/.codex/
+/.agents/
+/.code-review-graph/
+/.agent-browser/
+.DS_Store
+.idea/
+.vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
