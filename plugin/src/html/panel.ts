@@ -1,5 +1,6 @@
 import type { Status, Site, Task, Option, TaskPage } from '../domain/model.ts'
 import {
+  arrowIcon,
   button,
   card,
   check,
@@ -351,18 +352,19 @@ export class WorkbenchUI {
         (this.project === 'all' || t.project.id === this.project) &&
         (this.statuses === null || this.statuses.includes(t.status.name))
     )
-    const tags = el('div', 'tags')
+    const selectedTags = el('div', 'selected-tags')
+    const tags = el('div', 'tags', selectedTags)
     for (const name of this.statuses ?? ['全部状态']) {
       const remove = button('×', () => {
         this.statuses = this.statuses === null ? [] : this.statuses.filter((s) => s !== name)
         this.render()
       })
       remove.setAttribute('aria-label', '移除状态：' + name)
-      tags.append(el('span', 'tag', name, remove))
+      selectedTags.append(el('span', 'tag', name, remove))
     }
-    if (this.statuses?.length === 0) tags.append(text('请选择状态', true))
+    if (this.statuses?.length === 0) selectedTags.append(text('请选择状态', true))
     const toggle = button(
-      this.expanded ? '⌃' : '⌄',
+      '',
       () => {
         this.expanded = !this.expanded
         if (this.expanded && this.catalog === null) this.loadStatuses()
@@ -370,9 +372,15 @@ export class WorkbenchUI {
       },
       this.busy
     )
+    toggle.classList.add('status-toggle')
+    toggle.append(arrowIcon('filter-arrow'))
     toggle.setAttribute('aria-label', this.expanded ? '收起状态选项' : '展开状态选项')
     toggle.setAttribute('aria-expanded', String(this.expanded))
     tags.append(toggle)
+    tags.addEventListener('click', (event) => {
+      // Nested buttons keep their own action; the rest of the field toggles the picker.
+      if (event.target instanceof Element && !event.target.closest('button')) toggle.click()
+    })
     const picker = stack(text('状态筛选'), tags)
     if (this.expanded) {
       const options = [...new Set((this.catalog ?? []).map((s) => s.name))]
@@ -428,19 +436,7 @@ export class WorkbenchUI {
       ...list.map((task) => {
         const item = button('', () => this.openDetail(task), this.busy, 'card bug-item')
         item.setAttribute('aria-label', `查看 Bug #${task.number} ${task.name} 的详情`)
-        const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-        arrow.setAttribute('viewBox', '0 0 24 24')
-        arrow.setAttribute('class', 'bug-item-arrow')
-        arrow.setAttribute('aria-hidden', 'true')
-        arrow.setAttribute('focusable', 'false')
-        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-        path.setAttribute('d', 'm9 5 7 7-7 7')
-        path.setAttribute('fill', 'none')
-        path.setAttribute('stroke', 'currentColor')
-        path.setAttribute('stroke-width', '1.75')
-        path.setAttribute('stroke-linecap', 'round')
-        path.setAttribute('stroke-linejoin', 'round')
-        arrow.append(path)
+        const arrow = arrowIcon('bug-item-arrow')
         item.append(
           el(
             'span',
@@ -475,7 +471,9 @@ export class WorkbenchUI {
           this.project = v
           this.projectName = projects.get(v)?.label ?? ''
           this.render()
-        }
+        },
+        false,
+        true
       ),
       picker,
       this.bugLoaded

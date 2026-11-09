@@ -95,12 +95,29 @@ export function check(
   field.addEventListener('change', () => change(field.checked))
   return el('label', 'check', field, el('span', '', label))
 }
+export function arrowIcon(className: string): SVGSVGElement {
+  const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  arrow.setAttribute('viewBox', '0 0 24 24')
+  arrow.setAttribute('class', className)
+  arrow.setAttribute('aria-hidden', 'true')
+  arrow.setAttribute('focusable', 'false')
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  path.setAttribute('d', 'm9 5 7 7-7 7')
+  path.setAttribute('fill', 'none')
+  path.setAttribute('stroke', 'currentColor')
+  path.setAttribute('stroke-width', '1.75')
+  path.setAttribute('stroke-linecap', 'round')
+  path.setAttribute('stroke-linejoin', 'round')
+  arrow.append(path)
+  return arrow
+}
 export function select(
   label: string,
   value: string,
   options: { value: string; label: string }[],
   change: (value: string) => void,
-  disabled = false
+  disabled = false,
+  withArrow = false
 ): HTMLElement {
   const field = el('select')
   field.id = label
@@ -114,7 +131,10 @@ export function select(
   field.addEventListener('change', () => change(field.value))
   const caption = el('label', '', label)
   caption.htmlFor = label
-  return el('div', 'field', caption, field)
+  const control = withArrow
+    ? el('div', 'select-control', field, arrowIcon('filter-arrow'))
+    : field
+  return el('div', 'field', caption, control)
 }
 export const hours = (minutes: number) => `${Number((minutes / 60).toFixed(3))} 小时`
 export const original = (team: string, task: string) =>

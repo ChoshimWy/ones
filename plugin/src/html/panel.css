@@ -172,13 +172,60 @@ nav button[aria-selected='true'] {
   font-weight: 600;
 }
 .tags {
+  cursor: pointer;
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   padding: 8px;
   border: 1px solid var(--orca-input);
   border-radius: 6px;
   background: var(--orca-muted);
+}
+.selected-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.filter-arrow {
+  display: block;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--orca-muted-foreground);
+  pointer-events: none;
+}
+.status-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+}
+.status-toggle[aria-expanded='true'] .filter-arrow,
+.select-control select:open + .filter-arrow {
+  transform: rotate(90deg);
+}
+.select-control {
+  position: relative;
+}
+.select-control select {
+  appearance: none;
+  padding-right: 40px;
+}
+.select-control > .filter-arrow {
+  position: absolute;
+  right: 15px;
+  top: calc(50% - 9px);
+}
+.select-control select:disabled + .filter-arrow {
+  opacity: 0.5;
 }
 .tag {
   display: inline-flex;
