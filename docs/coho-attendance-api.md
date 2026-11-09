@@ -1,12 +1,12 @@
 ---
 document_id: TSD-COHO-001
 document_type: technical-design
-version: "1.0.0"
+version: "1.1.0"
 status: draft
 owner: TBD
 related_requirements: []
 related_documents: []
-updated_at: "2026-11-06"
+updated_at: "2026-11-09"
 source_identity: "文档基线 56cb351b7042620eef070a7cdc06ed0438f4950c；现场 WTS 4.0 的 user.f017c521.js、app.f94d29ae.js、chunk-74d85dd4.fbde3ba9.js 及已加载模块 9138；服务端构建版本未知"
 evidence: ["EV-COHO-001: 本文第 7 节脱敏实测记录"]
 ---
@@ -15,12 +15,12 @@ evidence: ["EV-COHO-001: 本文第 7 节脱敏实测记录"]
 
 ## 1. 范围与状态
 
-记录已获用户授权、于 2026-11-06 完成的只读接口验证，以及用户确认的工时折算规则。涉及认证与个人考勤，按 L3 安全边界记录；不是公开 API 稳定性承诺，也不是已实现的 Orca 插件。
+记录已获用户授权、于 2026-11-06 完成的只读接口验证，以及用户确认的工时折算规则。涉及认证与个人考勤，按 L3 安全边界记录；不是公开 API 稳定性承诺，也不表示完整 Orca 插件已验收；2026-11-09 开发插件的登录及限定考勤读取证据见 [VR-ONES-PLUGIN-001](orca-plugin-verification.md)。
 
 - 站点：`https://w.coho.net.cn`；考勤页面：`/Workbench/WorkbenchCalendar`。
 - 业务链：登录 → 确认当前身份 → 解析员工 ID → 查询考勤 → 确认打卡有效性 → 折算额度 → 手动分配 ONES 任务 → 确认写入。
-- 已验证登录、当前身份、指定员工与考勤期查询；员工 ID 自动解析、ONES 写入与插件集成尚未闭环。
-- 考勤只读；不补卡、不修改记录、不自动写工时。本次不重新执行线上验证。
+- 已验证登录、当前身份、指定员工与考勤期查询；ATS 本人员工映射及插件只读链路于 2026-11-09 补充验证；其它租户映射与完整写入闭环仍未完成。
+- 考勤只读；不补卡、不修改记录、不自动写工时。2026-11-09 追加验证仍为只读，不新增线上工时。
 - 接入负责人尚未指定（owner=TBD）；实施前指定负责人，闭合第 8 节缺口。
 
 ## 2. 登录与身份
@@ -71,7 +71,11 @@ Authorization: Bearer <token>
 
 响应含 `tenantCode`、`tenantId`、`globalId`、`identityType`、`busId`、`envId` 等字段，也可能包含敏感认证字段；禁止打印完整响应。
 
-**不能直接把 `globalId` 或 `busId` 当作考勤 `userId`。** 本次查询使用已登录考勤页面 `WorkbenchCalendar.userInformationId` 所确认的本人 ID；自动映射未验证。调用方须先确认租户、登录身份与员工归属，不能使用其他员工 ID 或依赖服务端恰好允许查询。
+2026-11-06 的样本只依据已登录页面确认员工 ID，未闭合自动映射。2026-11-09 沿同一实例 `app.f94d29ae.js` 模块 `297a → 1dc8.c` 与 `chunk-74d85dd4.fbde3ba9.js` 核实：`getCurrentUser().data → USER_INFO → WorkbenchCalendar.userInformationId = USER_INFO.globalId`；插件以该链路读取本人 2026-11-06 考勤成功。
+
+因此**仅本实例 ATS、身份回读有效时**，可使用该 `globalId` 作为本人考勤键；不将 `busId` 当作员工键，不推广其它租户，不接受 UI 传入其它员工 ID。两站账号映射仍由本人确认。
+
+登录、身份回读、业务接口必须一致携带 `Cookie: sso_tenant_code=ATS`、`COHO-language: zh-CN` 及本节示例的 Origin/Referer。插件漏带租户上下文时身份回读曾返回 301 到 `cloud.coho.net.cn`，已修复；不把跨站重定向当成功，也不向该域转发令牌。
 
 ## 3. 考勤读取接口
 
@@ -85,9 +89,9 @@ POST /gateway/wtspro-attendance/attSummaryComfirm/attCalendar
 业务 data: {"userId": "<employee-id>", "kqqsId": "<period-id>", "kqqs": "<period>"}
 ```
 
-第一项为页面网络观察及前端调用链确认的考勤期解析入口，尚未通过独立客户端完成跨期验证；前端使用返回 `data.kqqs` 初始化查询期。第二项已独立调用成功。
+第一项为页面网络观察及前端调用链确认的考勤期解析入口，2026-11-09 插件已按所选日期独立读取一个考勤期；跨期仍未验证。前端使用返回 `data.kqqs` 初始化查询期，并将同一值传作日历参数 `kqqsId` 与 `kqqs`；插件匹配此 ATS 实例合同，缺少该值则停止，不默认当月。第二项已独立调用成功。
 
-本次 `kqqsId`、`kqqs` 均为 `202611`，返回 30 天日历；这不证明所有租户的考勤期都与自然月相同。不要永久假定两个参数总相等。当前报文无分页参数；跨期读取、边界和最大查询范围未验证。
+本次 `kqqsId`、`kqqs` 均为 `202611`，返回 30 天日历；这不证明所有租户的考勤期都与自然月相同。此结论只适用于已核实的 ATS 日历调用链；升级/换租户后重新核对，不将两参数全局视为同义字段。当前报文无分页参数；跨期读取、边界和最大查询范围未验证。
 
 以上 POST 业务参数须使用第 4 节的签名外层，不能直接发送裸业务对象。
 
@@ -111,7 +115,7 @@ POST /gateway/wtspro-attendance/attSummaryComfirm/attCalendar
 | `type` | 本次全部为“上下班” | 不能用于区分上班／下班打卡 |
 | `realDate` | 10 字符日期字符串 | 不可在未确认跨天语义时忽略 |
 | `isNext` | 本次全部为布尔 `false` | 未验证 `true` 的业务含义与配对规则 |
-| `outFence` | 返回字段 | 类型、有效性与外勤规则未验证 |
+| `outFence` | 2026-11-09 插件样本为布尔值 | 只有明确 `false` 可进入已确认规则计算；`true` 或未知值阻断，不能推断外勤计时政策 |
 
 系统 `dateList[].cqqs` 与已观察非零日期的 `detailCountList[code="cqgs"].value` 一致，页面单位是小时。但用户随后明确改为**按原始打卡折算**，不能将上述出勤值替代第 6 节规则，也不能额外叠加系统加班汇总。
 

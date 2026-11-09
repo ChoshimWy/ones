@@ -1,0 +1,31 @@
+{
+  "manifestVersion": 2,
+  "id": "ones-workbench",
+  "name": "ONES 工作台",
+  "version": "0.1.0",
+  "description": "读取 ONES 工作项；基于 Coho 考勤手动分配工时。未验证写能力默认禁用。",
+  "engines": {
+    "orca": ">=1.4.254"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "ones-workbench",
+        "title": "ONES 工作台",
+        "icon": "bug",
+        "entry": "src/panel.html"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "secrets:own"
+    }
+  ]
+}

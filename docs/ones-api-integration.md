@@ -1,7 +1,7 @@
 ---
 document_id: TSD-ONES-001
 document_type: technical-design
-version: "1.1.0"
+version: "1.4.0"
 status: draft
 owner: TBD
 related_requirements: ["REQ-ONES-001", "REQ-ONES-002", "REQ-ONES-003", "REQ-ONES-004"]
@@ -54,7 +54,7 @@ TEAM_API    = {PROJECT_API}/team/{teamUUID}
 
 ### 2.2 当前有效认证方式
 
-本次复用了已登录 ONES 浏览器会话；**未使用聊天中提供的密码重新登录**。使用其访问令牌执行同源请求，显式 `credentials: omit`，成功读取身份和业务数据，因此本次样本不依赖附带 Cookie。
+2026-11-06 的证据复用了已登录 ONES 浏览器会话；**未使用聊天中提供的密码重新登录**。使用其访问令牌执行同源请求，显式 `credentials: omit`，成功读取身份和业务数据，因此本次样本不依赖附带 Cookie。
 
 ```http
 Authorization: Bearer <access-token>
@@ -69,13 +69,25 @@ Accept: application/json
 | 能力 | 状态与接入方式 |
 | --- | --- |
 | 浏览器已登录会话 → 访问令牌 → 只读 API | `LIVE-READ`；令牌只在认证组件内使用，不进入模型上下文/业务 DTO |
-| 直接账号密码登录 | `STATIC/GAP`：前端常量为 `auth/v2/login`；独立登录完整参数、加密/SSO/MFA 分支、响应与续期未实测，不提供猜测的密码请求 |
+| 直接账号密码登录 | 2026-11-09 插件独立登录并回读身份成功，用户确认；实际使用下述 Identity OAuth 链路，不使用旧 `auth/v2/login` |
 | 过期/刷新 | `GAP`；首版停止请求并提示重新认证，不猜 refresh endpoint，不循环尝试密码 |
 | 旧认证头 | `REFERENCE`：旧文档使用 `Ones-User-Id`、`Ones-Auth-Token`；不得和当前 Bearer 方案混用或自动降级 |
 
 旧认证协议参见[官方旧式 API 概述](https://docs.ones.cn/project/open-api-doc/)。当前浏览器存储实现不构成插件公开认证 API；不要依赖读取全部 localStorage，正式插件需单独闭合安全授权/凭证提供通道。
 
 安全存储优先系统凭据库；开发调试只能使用运行时注入，不把密码、访问/刷新令牌、Cookie、密码摘要放入文件示例、CLI 参数、README、Git、错误日志或 Agent 提示词。HTTP 重定向默认拒绝，禁止把认证头转发给其它 origin。
+
+### 2.2.1 插件直接认证（2026-11-09）
+
+真实已验证路径：
+
+1. `GET /project/api/project/auth/login_support` 取目标组织；`POST /identity/api/encryption_cert` 取公钥。
+2. RSA PKCS#1 v1.5 加密当次密码，`POST /identity/api/login` 发送 `email/password`；从 `org_users` 唯一匹配目标组织与 `org_user.org_user_uuid`。
+3. 新建 PKCE S256 verifier/challenge 和随机 state；`POST /identity/authorize` 表单，`client_id=ones.v1`，scope 为 `openid offline_access ones:org:<region>:<org>:<org-user>`，回调固定本 origin 的 `/auth/authorize/callback`。
+4. 若进入固定 `/identity/organization_select?id=...`，`GET /identity/api/auth_request/{id}` 核对 scopes；`POST /identity/api/auth_request/finalize` 仅发送 `auth_request_id/region_uuid/org_uuid/org_user_uuid`。其 `callback_url` 是 Identity 相对地址，按官方 `getFullIDSUrl` 加 `/identity` 前缀，只执行受限同源认证 continuation，不自动跟随其它页面。
+5. 最终回调 origin/path/state 完全匹配且无 error 后，`POST /identity/oauth/token` 用 authorization_code 与 verifier 换 token；`users/me` 回读用户/邮箱，`auth/token_info` 回读团队。
+
+临时 Cookie 只属于本次 Identity 会话，不持久化或转发给 Project API。正常登录通过不代表验证码、MFA、密码过期或刷新分支已支持；未知步骤停止。密码及 token/code/state 不输出到日志。实现见 [ones-auth.ts](../plugin/src/adapters/ones-auth.ts)，完整现场边界见 [验证报告](orca-plugin-verification.md)。
 
 ### 2.3 不混用 API 家族
 
@@ -146,9 +158,22 @@ query DocBugs($filter: Filter) {
 
 请求体为 `{"query": "<上述 query 字符串>", "variables": {"filter": {}}}`，填入上面的真实运行时过滤器。不得把示例空过滤器用于生产全团队扫描。
 
-- 当前样本工作项类型显示为“缺陷”，但类型判断必须使用配置元数据返回的 ID；不能用标题含“Bug”或名称固定为“缺陷”进行业务识别。
+- 用户指定“我的 Bug”仅查缺陷。先在权威类型配置中唯一定位该实例的内置“缺陷”类型，再使用返回的 UUID 查询/校验；不能按任务标题或返回行的显示名在前端假装过滤。类型缺失、重复或属性变化时停止，不退回全部工作项。
 - 状态筛选、父子类型和项目范围依赖实际元数据。本次查询未限定状态；不能称为“待处理 Bug 列表”。
 - 列表 DTO 与权威详情分离：展示副本用于 UI，实施/写入前重新取详情及权限。字段映射为 `name ↔ summary`、GraphQL `status.uuid ↔ status_uuid`，不要把 REST 数值 `status` 误认成工作流状态。
+
+### 4.1.1 缺陷类型与状态范围
+
+1. `GET /project/api/project/team/{teamUUID}/issue_types`，唯一定位用户指定的“缺陷”类型，当前实例已核实 `built_in=true`、`type=0`、`detail_type=3`。实现校验此合同，保留返回的真实 UUID；不硬编码 UUID，不按任务标题识别，不猜测名称别名。
+2. “我的 Bug”分页必须同时传 `assign_in: [本人 UUID]` 和 `issueType_in: [缺陷 UUID]`，包括续页。回包任何条目的 `issueType.uuid` 不符则拒绝展示，不用前端隐藏掩盖服务端过滤失败。
+3. 状态只取该类型的 `default_configs.default_task_status_configs[].status_uuid`，与 `GET /task_statuses` 的 UUID/名称目录关联；拒绝缺失配置、重复引用或找不到引用的状态。完整团队状态目录仅用于解析引用，不能直接作为 Bug 下拉选项。
+4. 缺陷状态配置独立于已加载任务页，无需枚举任务才能提供选项。工时页继续使用独立 `tasks.list`（本人所有可见工作项），Bug 使用 `bugs.list`/`bugs.statuses`；两者列表、游标、分页去重集合分开。
+
+上述读取沿用插件受保护会话 `Authorization: Bearer <access-token>`，请求前回读身份/团队，回包前核对身份代次。官方参考：[工作项类型与默认配置](https://docs.ones.cn/project/open-api-doc/project/issue_type.html)、[状态目录](https://docs.ones.cn/project/open-api-doc/project/task_status.html)。
+
+2026-11-09 同源浏览器只读核实：“缺陷”默认配置为 7 项：待处理、重新打开、修复中、已修复、已验证、已拒绝、关闭。原团队目录 77 条是其它类型共用的全集，先前将其全部展示在 Bug 筛选中属于范围错误，该实现已替换。浏览器核实没有把凭证导入插件，也不替代插件修复后的认证实测。
+
+UI 默认选择前三项，按状态名称精确匹配；类型固定为缺陷、不提供切回普通任务的入口，项目与状态条件取交集。这里展示的是**缺陷类型默认配置**，不是当前 Bug 的可流转目标；项目若覆盖类型工作流，需另核实该项目配置，不声称覆盖所有项目定制。实际状态流转仍受第 6 节约束。
 
 ### 4.2 完整列表使用 bucket 游标
 
@@ -432,3 +457,22 @@ draft → validated → confirmed → submitting → acknowledged → verified
 - [旧式 GraphQL 工时示例](https://docs.ones.cn/project/open-api-doc/graphql/example.html#工时)：query 与工时 mutation 名称参考，不作为 v6.18.7 全部参数已验证的证明。
 - [旧式工作流接口](https://docs.ones.cn/project/open-api-doc/project/workflow.html)：流转与后置动作参考。
 - [新版 OpenAPI 简单模式工时](https://docs.ones.com/zh-Hans/developer/openapi/api/04-add-spent-time-of-issues/)：仅用于 API 家族差异说明，不纳入当前已验证路由。
+
+
+## 11. 插件完整 Bug 详情与受控媒体（2026-11-09）
+
+只读接口相对 `TEAM_API`：
+
+| 接口 | 本实例合同 | 证据边界 |
+| --- | --- | --- |
+| `GET /task/{id}/info` | 顶层 `uuid/project_uuid/issue_type_uuid/status_uuid/summary/desc/desc_rich/server_update_stamp`；与权威任务身份复核 | 真实插件 Worker 读取通过 |
+| `GET /task/{id}/messages?count=20[&max={send_time}]` | `messages/has_next`；评论 `type=discussion`，`ref_type=task/ref_id`，正文 `rich_text/text`，作者 `from_name`，时间微秒 | 真实评论读取；system 事件指向 project，必须先区分，不可误判为跨 Bug 评论 |
+| `GET /task/{id}/attachments?count=20[&max={create_time}]` | `attachments/has_next`，资源 `uuid/name/mime/size/ref_type/ref_id/create_time` | 真实空页；非空页与翻页使用虚构测试，尚未获真实非空附件样本 |
+| `GET /res/attachment/{resourceId}` | 资源元数据含 `uuid/mime/size/url`；ID 必须来自当前详情、评论或附件 | 同源浏览器结构核实及真实插件 JPEG 读取通过 |
+| 元数据返回的签名资源地址 | 本实例 origin 固定 ONES，路径前缀 `/api/project/`；无 Bearer 转发，不自动跟随重定向 | 真实 JPEG 372,333 字节、1 块读取通过；不输出 URL 或签名 |
+
+评论/附件 `max` 按包含边界处理，下一页使用该页最小时间戳；界面替换当前页并保留返回游标。重复、无进展、未知消息类型或身份不符明确失败，不静默标记完整。真实多页评论和相同时间戳密集页尚未核实；虚构测试证明无进展时阻断。系统动态不作为用户评论展示。
+
+富文本用 parse5 解析为纯文字和受控资源引用，不运行脚本、事件属性、iframe，也不把原始 URL/HTML 交给 renderer。实测图片用 `data-uuid/data-mime`；视频同样要求受控资源标识，实际 ONES 视频标记尚无样本，不能把虚构 WebM 播放通过扩大为真实 ONES 视频全链路通过。
+
+Worker 媒体会话绑定当前账号/团队/任务及打开代次，10 分钟有效；关闭/换 Bug/身份变化后拒绝旧 handle。只存内存，分块、格式、大小和预算规则见 [插件开发说明](../plugin/README.md) 与 [仅插件 HTML 方案](orca-plugin-plan.md#10-仅插件-html-面板方案取代-9-宿主扩展交付)。详情容量保守计入正文、当前评论/附件页及展示开销；超过容量明确要求查看原单，不静默截断。所有接口保持只读，未开放 Bug 或工时 mutation。
