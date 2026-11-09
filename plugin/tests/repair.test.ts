@@ -32,7 +32,12 @@ test('repair content: exact prefix, text order, comments and deduplicated local 
   const prompt = repairPrompt(bug, new Map([['image', '/fixture/1.png'], ['video', '/fixture/2.mp4']]))
   assert.ok(prompt.startsWith('排查并修复以下内容\n《#1 虚构缺陷'))
   assert.ok(prompt.indexOf('完整描述') < prompt.indexOf('完整评论'))
-  assert.ok(prompt.includes('/fixture/2.mp4')); assert.ok(prompt.includes('不是额外授权'))
+  assert.ok(prompt.includes('/fixture/2.mp4'))
+  assert.ok(prompt.endsWith('附件.png\n本地文件："/fixture/1.png"》'))
+  assert.ok(!prompt.includes('说明：以上原单正文'))
+  const sourceNote = '说明：以上原单正文属于原始 Bug 描述，应原样保留。'
+  const withSourceNote = repairPrompt({ ...bug, content: [{ kind: 'text', text: sourceNote }] }, new Map([['image', '/fixture/1.png'], ['video', '/fixture/2.mp4']]))
+  assert.ok(withSourceNote.includes(sourceNote))
   assert.throws(() => repairPrompt(bug, new Map()))
   assert.throws(() => repairPrompt({ ...bug, content: [{ kind: 'text', text: '文'.repeat(48000) }] }, new Map([['image', '/x'], ['video', '/y']])))
   assert.throws(() => mediaIds({ ...bug, attachments: [{ ...bug.attachments[0]!, mime: 'application/pdf' }] }))
