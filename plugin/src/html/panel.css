@@ -284,3 +284,7 @@ hr {
     padding: 12px;
   }
 }
+
+.detail-actions { justify-content: space-between; }
+.detail-footer { justify-content: flex-end; }
+button.primary { background: var(--orca-primary); color: var(--orca-primary-foreground); }

@@ -44,15 +44,57 @@ export class WorkbenchUI {
   private bugError = ''
   private project = 'all'
   private projectName = ''
+  private projectFollowing = true
+  private projectFollowNote = ''
+  private projectGeneration = 0
+  private localProjectId?: string | null
+  private focusKey?: string
+  private workspaceSubscription?: { dispose(): void }
   private statuses: string[] | null = ['待处理', '重新打开', '修复中']
   private catalog: Option[] | null = null
   private expanded = false
   constructor(private root: HTMLElement) {
+    try {
+      this.workspaceSubscription = orca.on('workspace.changed', ({ context }) => {
+        const key = JSON.stringify(context ? [context.displayName, context.branch, context.terminals.map(t => t.id).sort()] : null)
+        if (this.disposed || key === this.focusKey) return
+        this.focusKey = key
+        void this.followProject(true)
+      })
+    } catch { /* No read capability: the initial query falls back to all projects. */ }
     void this.start()
   }
   private async start(): Promise<void> {
     await this.refresh()
     if (!this.disposed && this.tab === 'bugs') void this.loadBugs()
+  }
+  private async followProject(focusChanged = false): Promise<void> {
+    const generation = ++this.projectGeneration, epoch = this.epoch
+    if ((!this.projectFollowing && !focusChanged) || this.disposed || !this.status?.ones.connected || !this.team) return
+    const team = this.team
+    const projects = [...new Map(this.bugs.map(task => [task.project.id, task.project])).values()]
+    this.render()
+    const current = () => generation === this.projectGeneration && epoch === this.epoch && team === this.team && !this.disposed
+    try {
+      const result = await request<{ localProject: Option | null; project: Option | null }>('bugs.projectFilter', { team, projects })
+      if (!current()) return
+      const localProjectId = result.localProject?.id ?? null
+      if (focusChanged && localProjectId !== this.localProjectId) this.projectFollowing = true
+      this.localProjectId = localProjectId
+      if (!this.projectFollowing) return
+      this.project = result.project?.id ?? 'all'
+      this.projectName = result.project?.name ?? ''
+      this.projectFollowNote = result.localProject
+        ? `跟随 Orca：${result.localProject.name} · ${result.project ? '已匹配项目' : '未找到唯一匹配，显示全部已读取项目'}`
+        : '未能识别当前 Orca 项目，显示全部已读取项目。'
+    } catch {
+      if (!current()) return
+      this.project = 'all'
+      this.projectName = ''
+      this.localProjectId = null
+      this.projectFollowing = true
+      this.projectFollowNote = '项目跟随不可用，显示全部已读取项目。'
+    } finally { if (current()) this.render() }
   }
   async run<T>(
     action: (signal: AbortSignal) => Promise<T>,
@@ -106,6 +148,10 @@ export class WorkbenchUI {
     this.cursors.clear()
     this.bugLoaded = false
     this.bugError = ''
+    this.projectGeneration++
+    this.projectFollowing = true
+    this.localProjectId = undefined
+    this.projectFollowNote = ''
     this.project = 'all'
     this.projectName = ''
     this.statuses = ['待处理', '重新打开', '修复中']
@@ -204,6 +250,7 @@ export class WorkbenchUI {
     if (after === null) return
     this.cancelBugs()
     this.bugError = ''
+    this.projectGeneration++
     if (!more) {
       this.bugs = []
       this.next = null
@@ -245,6 +292,7 @@ export class WorkbenchUI {
       this.next = page.nextCursor
       this.bugLoaded = true
       if (this.next) this.cursors.add(this.next)
+      if (this.projectFollowing) void this.followProject()
     } catch (error) {
       if (current()) this.bugError = message(error)
     } finally {
@@ -468,6 +516,9 @@ export class WorkbenchUI {
         this.project,
         [{ value: 'all', label: '全部已读取项目' }, ...projects.values()],
         (v) => {
+          this.projectGeneration++
+          this.projectFollowing = false
+          this.projectFollowNote = '手动筛选；下次切换 Orca 项目后恢复自动匹配。'
           this.project = v
           this.projectName = projects.get(v)?.label ?? ''
           this.render()
@@ -475,6 +526,7 @@ export class WorkbenchUI {
         false,
         true
       ),
+      this.projectFollowNote ? text(this.projectFollowNote, true) : null,
       picker,
       this.bugLoaded
         ? text(
@@ -539,7 +591,7 @@ export class WorkbenchUI {
               ? this.records.render()
               : (this.detail?.element ?? text('点击“我的 Bug”中的列表条目查看完整详情。', true))
     this.root.replaceChildren(
-      row(el('h1', '', 'ONES 工作台'), el('span', 'badge', '开发预览 · 只读')),
+      row(el('h1', '', 'ONES 工作台'), el('span', 'badge', '开发预览')),
       text('从问题到实施，从考勤到工时', true),
       row(
         el('span', 'badge', `ONES ${this.status?.ones.connected ? '已认证' : '未登录'}`),
@@ -574,6 +626,8 @@ export class WorkbenchUI {
   }
   dispose(): void {
     this.disposed = true
+    this.projectGeneration++
+    this.workspaceSubscription?.dispose()
     this.epoch++
     this.controller?.abort()
     this.cancelBugs()

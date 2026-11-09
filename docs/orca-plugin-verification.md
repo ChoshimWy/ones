@@ -1,13 +1,13 @@
 ---
 document_id: VR-ONES-PLUGIN-001
 document_type: verification-report
-version: "0.4.0"
+version: "0.5.0"
 status: draft
 owner: "Main：实施与定向验证"
 related_requirements: ["REQ-ONES-001", "REQ-ONES-002", "REQ-ONES-003", "REQ-ONES-004"]
 related_documents: ["IMP-ONES-PLUGIN-001: orca-plugin-plan.md", "TSD-ONES-001: ones-api-integration.md", "TSD-COHO-001: coho-attendance-api.md"]
 updated_at: "2026-11-09"
-source_identity: "main@9c83db0bc7cf980cd39201785cde15edc5ad4f19 + feat/ones-workbench 未提交变更；源码冻结结果见本机 chat-scratch/7330a24ebd94185a9f48bb35ee55a1ff/ones-plugin-bug-row-identity.json；宿主扩展身份仅为历史，文档不嵌自身指纹以避免递归变更"
+source_identity: "本轮 main@59f1225d439e15cb912b13e959f453e54044d109 + feat/bug-repair-session；最终未提交身份见本机 chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-repair-source-identity.json；历史证据身份仅适用于对应章节"
 evidence: ["EV-PLUGIN-002: 本会话定向 runner 结果", "EV-PLUGIN-003: Orca plugin validate/check 结果", "EV-PLUGIN-004: Orca dev load/open/status 与真实登录现场"]
 ---
 
@@ -239,3 +239,44 @@ HTML 迁移阶段源码身份见同目录 `ones-plugin-html-media-identity.json`
 - 已实际打开检查 460px 深浅色、360px 窄屏截图：箭头右侧居中、标题完整换行，未见遮挡或横向溢出。已 reload/open 用户右侧开发预览。
 - [浅色列表](</Users/choshim/Library/Application Support/orca/chat-scratch/7330a24ebd94185a9f48bb35ee55a1ff/ones-bug-row-light.png>) / [深色列表](</Users/choshim/Library/Application Support/orca/chat-scratch/7330a24ebd94185a9f48bb35ee55a1ff/ones-bug-row-dark.png>) / [窄屏列表](</Users/choshim/Library/Application Support/orca/chat-scratch/7330a24ebd94185a9f48bb35ee55a1ff/ones-bug-row-narrow.png>)；均为安装版 Orca 隔离实例中的虚构素材，不是业务写入证据。文件位于本机临时 chat-scratch，可能被清理。
 - 同目录 `ones-bug-row-evidence.json`、`verify-bug-rows.mts` 为定向旅程及驱动，最终源码身份为 `ones-plugin-bug-row-identity.json`。本轮复用任务分支，不提交、合并或推送。
+
+
+### CLI 修复聊天阶段（2026-11-09）
+
+本阶段按 IMP-ONES-PLUGIN-001 第 11 节实施，沿用已安装 Orca 1.4.254（macOS、Node 26.0.0），未修改宿主。代码位于 `feat/bug-repair-session` 隔离 Worktree；未提交、合并或推送。既有阶段通过项不等于本次真实启动通过。
+
+| 验证 | 实际结果与边界 |
+| --- | --- |
+| TC-PLUGIN-CLI-001 映射 | 5 个新定向用例通过：空格/大小写/全角/尾标记、歧义拒绝、稳定 ID、删除目标不静默重绑、重复身份拒绝 |
+| TC-PLUGIN-CLI-002 内容 | 2 个新定向用例通过：分页含空页、重叠一致性、游标停滞、完整正文顺序与评论、媒体引用、缺失/不支持/超限拒绝 |
+| TC-PLUGIN-CLI-003 启动 | 9 个新定向用例通过：本地主目录限定、argv 不经 shell、真实回执结构、媒体失败清理、账号变化、跨 Worker 防重、重启/超时不重发；CLI 启动由 fixture 替身，非真实 Agent 执行 |
+| TC-PLUGIN-CLI-004 权威数据 | 1 个服务用例通过：通过真实 Workbench 方法重新只读获取内容、校验原身份，退出登录撤销后续操作 |
+| 静态 | TypeScript 与 `plugin validate` 通过；没有全仓测试、跳过检查或新增 runtime 权限 |
+| CLI 现场只读 | 用本次 OrcaCli 适配器解析真实 SidusLinkPro，确认唯一就绪本机 setup 与已有主目录 selector；未创建工作区或启动 Agent |
+| UI | 未修改的安装版 Orca 隐藏隔离 profile，虚构 Bug/媒体/启动回执；双入口、顶行靠右、自动映射、手动回退（未选目标禁用发送）与回执提示已通过；视觉证据为 guest 原位截图，深浅色使用 fixture theme tokens，不冒称真实用户主题 |
+| 真实启动 | NOT_RUN：真实 Ones 项目联调会话启动被安全审批阻止，未执行 CLI 启动；需要用户单独允许创建测试 session。真实 Bug 修复、媒体在目标 Agent 中读取/解码、真实多账号/多窗口、远端与其它平台未验证 |
+
+截至本阶段，共 17 个不同的新风险用例通过；后续改动只复验受影响 CLI/启动用例，复用未变映射、内容及服务证据。首次错误的 Node transform flag/strip-only 方式因既有 parameter properties 不兼容，改用安装版官方 loader；一次同步异常误用异步断言已修正复验，均不作为通过证据。
+
+截图驱动发现 `plugin shot` 会重新打开 HTML 面板导致当前详情丢失，因此不用它的空白/列表图作详情证据；改用同一 guest 的原位 capturePage。隐藏 guest 的渲染等待曾挂起，已精确结束本次测试实例并为驱动增加 deadline；不改产品代码绕过。真实开发预览加载也被安全审批阻止，用户当前窗口未切换到此任务源码，需要单独授权加载。已查看有效深浅色与窄屏图：顶行按钮分居两侧，表单/提示换行正常，无横向溢出或遮挡；单张截图不能代表全部长页面或 Agent 执行通过。
+
+EV-PLUGIN-CLI-001 本机证据目录：`/Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18`（临时缓存，可能被清理，不纳入 Git）。
+- [自动匹配确认](</Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-repair-confirm.png>)、[窄屏](</Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-repair-narrow.png>)、[会话结果](</Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-repair-receipt.png>)。
+- [底部入口](</Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-repair-footer.png>)、[手动映射](</Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-repair-manual.png>)：同一安装版 guest 的虚构内容；底部滚动到位、按钮可见且靠右，已实际查看。
+- `ones-repair-evidence.json`、`verify-repair-panel.mts`：隐藏安装版身份、定向交互旅程和截图记录；fixture worker 中的 session 是明确的虚构值，不是真实创建证明。
+
+尚未开放直接跳转指定 session、完成后的重新发起及未知启动的自动恢复；在原项目手动核实。安全模型与资料保留见插件 README，不把 0600 权限称作加密。文档自检已完成：身份、旧方案替代关系、真实/fixture 证据与剩余风险分开记录。
+
+### 当前项目跟随筛选（2026-11-09）
+
+- Main 在 §11 相同任务 Worktree 内实现，新增 `workspace:read`；真实用户插件尚未加载此源码/授权新增权限。未修改 Orca，未启动真实聊天，未提交、合并或推送。
+- 8 个不同的 `project follow` 定向测试通过：工作区所属项目而非 cwd/显示名、空/歧义/截断/权限错误、切换中旧结果、稳定 ID selector、名称与显式反向映射、账号隔离，以及同名 main 的终端 ID 归属消歧。补充远端/缺失/跨归属拒绝后仅重跑该用例通过。共享 mapping key 的既有映射/修复持久化定向用例复验通过。严格 TypeScript 与 `plugin validate` 通过，未跑全量测试。
+- `project-follow.browser.mjs`：未修改的安装版 Orca 1.4.254、隐藏隔离 HOME/profile、3 个虚构 Git 项目（主分支均为 main），使用真实原生侧栏选择、宿主事件及 Worker CLI，只替换 ONES 数据。SidusLinkPro 自动匹配、第二项目切换、无匹配显示全部、手动筛选刷新保留、下一项目恢复跟随、受控旧响应延迟释放不覆盖新选择、状态筛选保持全部通过。补充旅程实际新增同项目 fixture 终端，手动筛选仍保留，再切项目恢复跟随。没有调用 Agent launch、ONES mutation 或真实账号。
+- 诊断发现普通文件夹 fixture 的宿主 context 为 null，按合同回退全部；多个 main 同名需终端 ID 消歧，不能只按名字。隔离 Worker 会清理 `ORCA_*` 路由变量，驱动在隔离 HOME 内把标准 profile 路径指向同一测试目录后验证 CLI；未指向真实 profile。隐藏 guest 计时器节流导致等待超时，改为驱动有界轮询后通过；前述失败不计通过证据。
+- 已实际打开检查 460px 深色匹配和 360px 浅色回退截图：项目选择及跟随提示正确，长提示正常换行，状态标签与缺陷列表完整，无横向溢出、遮挡或截断。使用 fixture 主题与虚构数据，不是真实账户上线验收；截图不代表会话执行通过。
+
+EV-PLUGIN-FOLLOW-001 与 CLI 阶段使用同一临时证据目录（可能被清理）：`/Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18`。
+- [SidusLinkPro 自动匹配](</Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-project-follow-sidus.png>)
+- [无匹配回退全部](</Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-project-follow-all.png>)
+- `ones-project-follow-evidence.json` / `ones-project-follow-terminal-evidence.json`：运行身份和行为结果；`verify-project-follow.mts` / `verify-project-follow-terminal.mts`：本机驱动；`ones-project-follow-source-identity.json`：收口源码身份。生产源码在两段 UI 旅程及最终类型检查间未变，最后仅补充负向测试和文档。
+- 边界：筛选仍限已读取本人缺陷；没有匹配项目的缺陷尚未加载时显示全部，续页后重匹配。无上下文/无终端且同名歧义、其它 Orca 版本、多窗口/远端与真实账号项目切换未验证。原 CLI 修复聊天的真实启动/媒体消费 NOT_RUN 保持不变，不能用本轮只读筛选验证替代。

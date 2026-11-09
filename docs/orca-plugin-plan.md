@@ -1,13 +1,13 @@
 ---
 document_id: IMP-ONES-PLUGIN-001
 document_type: implementation-plan
-version: "1.5.0"
+version: "1.6.0"
 status: draft
 owner: "Main：实施与验证；本轮单 writer"
 related_requirements: ["REQ-ONES-001", "REQ-ONES-002", "REQ-ONES-003", "REQ-ONES-004"]
 related_documents: ["TSD-ONES-001: ones-api-integration.md", "TSD-COHO-001: coho-attendance-api.md"]
 updated_at: "2026-11-09"
-source_identity: "ONES main@9c83db0bc7cf980cd39201785cde15edc5ad4f19；Orca 1.4.253 / ee04233cf26ada323037c1e3c9e081e3e1e58536，macOS arm64"
+source_identity: "本轮 main@59f1225d439e15cb912b13e959f453e54044d109 + feat/bug-repair-session 未提交变更；Orca 1.4.254；旧阶段身份保留在对应章节"
 evidence: ["EV-PLUGIN-001: 第 2 节本机 Orca 能力发现；仅文档与类型事实"]
 ---
 
@@ -287,3 +287,25 @@ DAG：080（HTML 公共桥接/主题/生命周期）→ 081（同面板列表、
 已自问“是否还有遗漏点或可优化点”：补入整个展示层迁移的回归面、键盘焦点/标签可删除、跨标签保留草稿但切身份失效、HTML 不插入不可信 innerHTML、旧详情与迟到媒体释放、认证信息不进入页面资源 URL，以及本机未修改宿主与真实外部接口证据分开。仅插件刷新，不重启用户应用；未验证版本保留原入口作为阶段回退，完成后移除废弃 native 展示代码，避免长期双实现。
 
 080–083 已完成本机限定验收：唯一正式入口为 `src/panel.html`，旧 native 展示层及其专用测试已移出插件并留本机回退副本；未修改 Worker。未修改安装版 Orca 1.4.254 的隐藏隔离 guest 完成筛选/评论/考勤/草稿/认证/核对/媒体旅程，360/460 像素及深浅色截图已实际检查。已刷新用户右侧开发预览，真实缺陷首屏与两站认证正常；写闸仍关闭。真实 ONES 视频、MP4 与实际多页评论样本尚待补齐，不宣称全方案生产验收。
+
+
+## 11. REQ-ONES-001：已有项目内创建修复聊天（2026-11-09）
+
+本节是用户明确确认的当前方案，替代第 4.1 节关于“为 Bug 创建隔离工作区”的启动步骤及 TASK-PLUGIN-040 原工作区路径阻塞；不修改 Orca 宿主，不新增 Worktree。开发本插件自身仍遵守隔离开发规则，两者不能混淆。
+
+- DEC-PLUGIN-CLI-001：顶部“打开原单”同排最右侧与详情末尾各一个“执行修复”；自动匹配已有项目，只有无可靠唯一匹配/失效映射才手动选择一次。确认 Agent 后在该项目已有主目录启动聊天。映射、限额、媒体本地引用、隐私和恢复合同唯一维护于 [插件说明](../plugin/README.md#已实现与边界)。
+- DEC-PLUGIN-CLI-002：只调用已核实的 `project list`、`project setups --host local`、`worktree list` 和 `agent launch --surface chat --prompt …`。`--worktree` 为已有目录的 selector，不调用 create/setup。正文格式为 `排查并修复以下内容\n《Bug 标题、描述、图片视频引用及完整评论》`，追加外部数据及权限边界说明。
+- DEC-PLUGIN-CLI-003：独占启动意图先落盘；只有 structured session 与 journaled message 回执同时存在才显示已发送。超时、终端降级、回执不完整保持待核实，不能盲目重发。session ID 是真实返回值，不伪造“打开指定 session”能力。
+- 身份：canonical Git root `/Users/choshim/Desktop/Aputure/Code/Projects/Ones`；`base_branch=main`；`base_sha=59f1225d439e15cb912b13e959f453e54044d109`；`target_branch=feat/bug-repair-session`；任务目录 `/Users/choshim/.agent-worktrees/choshimwy-ones/feat/bug-repair-session`。Main 单 writer，ownership 为 `plugin/`、本文及验证报告。
+- DAG：TASK-PLUGIN-090（CLI 真源核实）→091（映射、完整内容、启动账本）→092（双入口/回执）→093（定向测试与截图）。共享协议与状态串行实施，无并行写入；验收映射/分页/媒体失败/账号切换/防重/截图，结果见 [CLI 阶段验证](orca-plugin-verification.md#cli-修复聊天阶段2026-11-09)。
+- 真实会话启动测试与真实 Bug 修复分开授权。能力缺失只阻塞对应功能；未授权提交、合并、推送或宿主源码修改。回滚使用旧开发插件路径，不删除已有会话、媒体或启动记录。
+- 自检完成：未把创建会话当作修复完成；未把媒体文件保存当作 Agent 已检查；正文之外无 ONES mutation；未知状态不以“失败”重新发送。
+
+
+## 12. 当前项目跟随筛选（2026-11-09）
+
+沿用 §11 的 canonical Git root、基线、任务分支与 ownership；只修改 ONES 插件，不修改宿主或创建用户工作区。Main 单 writer 串行：TASK-PLUGIN-094（核实选择事件及稳定身份）→095（反向映射与 UI 生命周期）→096（定向测试、隔离原生切换与截图）。接口/状态强耦合，不拆并行写入。
+
+验收：选中 SidusLinkPro 自动筛选对应 ONES 项目；无唯一匹配显示全部已读取项目；显式映射优先；同名 main 不误认；账号/团队变化与旧响应隔离；状态筛选不变；手动选择直到下次切项目前保留。新增 `workspace:read`，真实加载需重新核对授权；不授予业务写或自动聊天启动。截图覆盖 460px 深色匹配、360px 浅色无匹配，必须实际查看控件/换行/遮挡。完整合同见 [插件说明](../plugin/README.md#已实现与边界)，真实加载与隐藏 fixture 的验证分别记录。
+
+已自问“是否还有遗漏点或可优化点”：补入多个主分支均叫 main、终端事件与真正项目切换区别、宿主上下文为空、CLI 不继承 cwd、分页匹配范围与迟到结果保护。回退到全部筛选，不猜项目，不清除既有映射；未授权 Git 交付与真实 session 测试仍不执行。

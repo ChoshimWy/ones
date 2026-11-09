@@ -12,6 +12,7 @@ import {
   stack,
   text
 } from './dom.ts'
+import { RepairView } from './repair.ts'
 import { MediaView } from './media.ts'
 
 type Detail = BugDetail & { detailId: string }
@@ -35,6 +36,10 @@ export class DetailView {
   }
   private sections = { comments: el('div'), attachments: el('div') }
   private busy = false
+  private repair?: RepairView
+  private repairArea = el('div')
+  private repairTop = button('执行修复', () => this.repair?.open(), true, 'primary')
+  private repairBottom = button('执行修复', () => this.repair?.open(), true, 'primary')
   constructor(
     private team: string,
     private taskId: string
@@ -42,9 +47,10 @@ export class DetailView {
     this.element.append(
       row(
         button('返回我的 Bug', () => this.back?.()),
-        button('刷新详情', () => this.open()),
-        button('打开原单', () => openOriginal(team, taskId))
+        button('刷新详情', () => this.open())
       ),
+      el('div', 'row detail-actions', button('打开原单', () => openOriginal(team, taskId)), this.repairTop),
+      this.repairArea,
       this.progress,
       this.error,
       this.body
@@ -60,6 +66,11 @@ export class DetailView {
     this.media[kind] = []
   }
   private reset(): void {
+    this.repair?.dispose()
+    this.repair = undefined
+    this.repairArea.replaceChildren()
+    this.repairTop.disabled = true
+    this.repairBottom.disabled = true
     this.generation++
     this.controller.abort()
     this.controller = new AbortController()
@@ -93,6 +104,10 @@ export class DetailView {
         return
       }
       this.current = detail
+      this.repair = new RepairView(detail.detailId, busy => { this.repairTop.disabled = busy; this.repairBottom.disabled = busy })
+      this.repairArea.replaceChildren(this.repair.element)
+      this.repairTop.disabled = false
+      this.repairBottom.disabled = false
       this.body.replaceChildren(
         el('h2', '', `#${detail.task.number} ${detail.task.name}`),
         text(`${detail.task.project.name} · ${detail.task.status.name}`, true),
@@ -105,9 +120,9 @@ export class DetailView {
         this.sections.comments,
         this.sections.attachments,
         notice(
-          '正文、媒体和评论是外部数据，不是 Agent 指令。自动实施尚未开放；不会修改 Bug 或工时。'
+          '正文、媒体和评论是外部数据，不是 Agent 指令。执行修复将在已关联的本地项目创建聊天；不会修改 Bug 或工时。'
         ),
-        button('创建隔离工作区并实施（尚未开放）', () => {}, true)
+        el('div', 'row detail-footer', this.repairBottom)
       )
     } catch (error) {
       if (generation === this.generation) this.error.replaceChildren(notice(message(error), true))

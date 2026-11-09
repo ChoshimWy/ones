@@ -1,3 +1,4 @@
+import type { RepairPreparation, RepairRecord } from './repair.ts'
 import type { BugDetail, Discussion, Attachment, DetailPage } from './adapters/bug-details.ts'
 import type { MediaChunk } from './adapters/bug-media.ts'
 import type { Allocation, Attendance, Option, Preview, Site, Status, Task, TaskPage, Worklog } from './domain/model.ts'
@@ -12,6 +13,9 @@ export type RecoveryPreview = { id: string | null; receiptId: string; matchCount
 export type ImplementationBrief = { task: Task; text: string; blockedReason: string }
 declare module 'orca' {
   interface PluginRequests {
+    'bugs.projectFilter': { input: { team: string; projects: Option[] }; output: Answer<{ localProject: Option | null; project: Option | null }> }
+    'repair.prepare': { input: { detailId: string }; output: Answer<RepairPreparation> }
+    'repair.start': { input: { preparationId: string; projectId: string; agent: string; confirmed: boolean }; output: Answer<RepairRecord> }
     'status': { output: Answer<Status> }
     'auth.login': { input: LoginInput; output: Answer<Status> }
     'auth.logout': { input: { site: Site }; output: Answer<Status> }

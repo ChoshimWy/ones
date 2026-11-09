@@ -56,10 +56,17 @@ const detail = {
 }
 export default function activate(orca: OrcaWorkerApi): void {
   const calls: string[] = []
+  let repairManual = false
   let draft: unknown = null
   let listCount = 0
   const handlers: Record<string, (input: Record<string, unknown>) => unknown> = {
     status: () => status,
+    'fixture.repair-manual': () => { repairManual = true; return { changed: true } },
+    'repair.prepare': () => ({ id: 'repair-plan', mapping: repairManual ? { kind: 'manual', reason: 'missing', candidates: [{ id: 'local-fixture', name: '本地虚构项目' }] } : { kind: 'mapped', via: 'automatic', project: { id: 'local-fixture', name: '本地虚构项目' } }, existing: null }),
+    'repair.start': input => {
+      if (input.projectId !== 'local-fixture' || input.confirmed !== true) throw Error('Invalid fixture repair')
+      return { state: 'sent', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1, sessionId: 'session-fixture-only' }
+    },
     'fixture.calls': () => ({ calls, listCount }),
     'auth.login': (input) => {
       status[input.site === 'coho' ? 'coho' : 'ones'].connected = true

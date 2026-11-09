@@ -26,6 +26,9 @@
     },
     {
       "kind": "secrets:own"
+    },
+    {
+      "kind": "workspace:read"
     }
   ]
 }

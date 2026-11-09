@@ -1,3 +1,5 @@
+import { filterProject, projectMappingKey, type ProjectMapping } from './domain/project-mapping.ts'
+import type { Option } from './domain/model.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { type Allocation, type Attendance, type Preview, type Site, type Status, type Worklog, AppError, id, record, requireThat, text, validDate } from './domain/model.ts'
 import { apiHours, attendanceBudget, checkAllocations, existingMinutes, startSeconds, validateDescription } from './domain/attendance.ts'
@@ -9,6 +11,7 @@ import { CohoClient, loginCoho, type CohoSession } from './adapters/coho.ts'
 import { OnesClient, worklogWriter } from './adapters/ones.ts'
 import { BugMediaStore } from './adapters/bug-media.ts'
 import { assertDetailFits, type BugDetail, type Discussion, type Attachment, type DetailPage } from './adapters/bug-details.ts'
+import { allPages, mediaIds, type CompleteBug } from './domain/repair-content.ts'
 import type { BugContent } from './domain/bug-content.ts'
 export interface Store { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void>; delete(key: string): Promise<void> }
 export interface Vault { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; delete(key: string): Promise<void> }
@@ -63,7 +66,7 @@ export class Workbench {
   async status(): Promise<Status> {
     await this.ready
     const ones = this.sessions.ones; const coho = this.sessions.coho
-    return { ones: { connected: !!ones && ones.expiresAt > Date.now(), label: ones?.label ?? '未登录' }, coho: { connected: !!coho && coho.expiresAt > Date.now(), label: coho?.label ?? '未登录' }, teams: ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, blockers: ['工时写入尚待插件端到端验证，当前仅开放预览。', 'Coho 外勤标志与考勤异常规则仍需实例验证。', 'Orca 创建命令不能指定受管隔离路径，自动发起实施暂未开放。', 'Bug 创建、修改与流转的动态字段契约待验证。'] }
+    return { ones: { connected: !!ones && ones.expiresAt > Date.now(), label: ones?.label ?? '未登录' }, coho: { connected: !!coho && coho.expiresAt > Date.now(), label: coho?.label ?? '未登录' }, teams: ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, blockers: ['工时写入尚待插件端到端验证，当前仅开放预览。', 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建、修改与流转的动态字段契约待验证。'] }
   }
   async login(input: LoginInput, signal?: AbortSignal): Promise<Status> {
     await this.ready
@@ -178,6 +181,65 @@ export class Workbench {
       this.detail = {team,taskId,identity,media,view:result}
       return result
     })
+  }
+  async projectFilter(team: string, localProject: Option | null, projects: Option[]) {
+    await this.ready
+    const client = this.ones(team), identity = this.identity()
+    requireThat(Array.isArray(projects) && projects.length <= 2000, 'input', '项目筛选范围过大。')
+    const candidates = projects.map(p => ({ id: id(p.id), name: text(p.name, 500) }))
+    requireThat(new Set(candidates.map(p => p.id)).size === candidates.length, 'input', '项目身份重复。')
+    const bindings: ProjectMapping[] = []
+    if (localProject) for (const project of candidates) {
+      const saved = await this.deps.store.get(projectMappingKey(this.scope(client), project.id))
+      if (saved) {
+        const value = record(saved)
+        requireThat(value.sourceProjectId === project.id && typeof value.targetProjectId === 'string', 'schema', '项目映射无效。')
+        bindings.push({ sourceProjectId: project.id, targetProjectId: value.targetProjectId })
+      }
+    }
+    requireThat(identity === this.identity(), 'stale', '账号已变化，请重新读取项目筛选。')
+    return { localProject, project: filterProject(localProject, candidates, bindings) }
+  }
+  async repairContext(detailId: string) {
+    await this.ready
+    const detail = this.currentDetail(detailId)
+    const client = this.ones(detail.team)
+    await client.assertIdentity()
+    requireThat(this.currentDetail(detailId) === detail, 'stale', '详情或账号已变化。')
+    return { scope: this.scope(client), task: detail.view.task }
+  }
+  async collectRepair(detailId: string, signal?: AbortSignal) {
+    await this.ready
+    const detail = this.currentDetail(detailId)
+    const client = this.ones(detail.team)
+    const check = () => {
+      requireThat(!signal?.aborted && this.currentDetail(detailId) === detail, 'stale', '详情或账号已变化，已取消启动。')
+    }
+    await client.assertIdentity(signal)
+    check()
+    const task = await client.task(detail.taskId, signal)
+    await client.assertBug(task, signal)
+    requireThat(task.project.id === detail.view.task.project.id, 'stale', 'Bug 项目已变化，请刷新详情。')
+    const reader = client.details(), body = await reader.content(task, signal)
+    const comments = await allPages(await reader.comments(task.id, undefined, signal), before => reader.comments(task.id, before, signal))
+    const attachments = await allPages(await reader.attachments(task.id, undefined, signal), before => reader.attachments(task.id, before, signal))
+    check()
+    const bug: CompleteBug = { task, ...body, comments, attachments }
+    const media = new BugMediaStore(this.onesTransport, detail.team, client.session.token)
+    try { media.allow(mediaIds(bug)) } catch (error) { media.dispose(); throw error }
+    return {
+      bug,
+      read: async (resource: string, offset: number) => { check(); return media.read(media.detailId, resource, offset, signal) },
+      validate: async () => {
+        await client.assertIdentity(signal)
+        const freshTask = await client.task(task.id, signal)
+        const fresh = await reader.content(freshTask, signal)
+        check()
+        requireThat(JSON.stringify(freshTask) === JSON.stringify(task) && fresh.updatedAt === body.updatedAt, 'stale', 'Bug 收集期间已更新，请刷新后重试。')
+      },
+      check,
+      dispose: () => media.dispose()
+    }
   }
   private currentDetail(detailId: string) {
     const detail = this.detail

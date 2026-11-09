@@ -1,4 +1,6 @@
+import { FocusedProject } from './adapters/focused-project.ts'
 import type { OrcaWorkerApi } from 'orca/worker'
+import { RepairWorkflow } from './repair.ts'
 import { Workbench } from './service.ts'
 import { safeFailure } from './domain/model.ts'
 import type { Answer } from './protocol.ts'
@@ -15,6 +17,19 @@ export default function activate(orca: OrcaWorkerApi): void {
     try { return { ok: true, value: await action() } }
     catch (error) { return { ok: false, error: safeFailure(error) } }
   }
+  const repair = new RepairWorkflow(service, {
+    get: key => orca.storage.get(key),
+    set: (key, value) => orca.storage.set(key, value as never),
+    delete: key => orca.storage.delete(key)
+  })
+  const focusedProject = new FocusedProject({
+    context: () => orca.host.call('workspace.readContext'),
+    list: () => orca.host.call('workspace.list')
+  })
+  orca.panels.handle('bugs.projectFilter', input => answer(async () =>
+    service.projectFilter(input.team, await focusedProject.current(), input.projects)))
+  orca.panels.handle('repair.prepare', input => answer(() => repair.prepare(input.detailId)))
+  orca.panels.handle('repair.start', input => answer(() => repair.start(input)))
   orca.panels.handle('status', () => answer(() => service.status()))
   orca.panels.handle('auth.login', (input, context) => answer(() => service.login(input, context.signal)))
   orca.panels.handle('auth.logout', input => answer(() => service.logout(input.site)))

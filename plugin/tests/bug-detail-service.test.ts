@@ -162,3 +162,30 @@ test("TC-PLUGIN-008-service: excessively fragmented content fails before publish
   const f = fixture("<p>x</p>".repeat(2000));
   await assert.rejects(() => f.service.bugDetail("team", "bug"), /详情超出面板容量/);
 });
+
+
+test("repair source: complete read-only collection validates original identity and revokes on logout", async () => {
+  const f = fixture('<p>完整描述</p>');
+  const detail = await f.service.bugDetail('team', 'bug');
+  const context = await f.service.repairContext(detail.detailId);
+  assert.equal(context.task.id, 'bug');
+  const source = await f.service.collectRepair(detail.detailId);
+  try {
+    assert.equal(source.bug.content[0]?.kind, 'text');
+    assert.deepEqual(source.bug.comments, []);
+    await source.validate();
+    await f.service.logout('ones');
+    assert.throws(source.check);
+    await assert.rejects(source.validate());
+    assert.ok(f.methods.every(method => method === 'GET' || method === 'POST'));
+  } finally { source.dispose(); }
+});
+
+
+test('project follow service: authenticated candidates select by current project; logout cannot reuse previous account', async () => {
+  const f = fixture();
+  const result = await f.service.projectFilter('team', { id: 'local', name: '项目' }, [{ id: 'project', name: '项目' }]);
+  assert.equal(result.project?.id, 'project');
+  await f.service.logout('ones');
+  await assert.rejects(f.service.projectFilter('team', { id: 'local', name: '项目' }, [{ id: 'project', name: '项目' }]));
+});
