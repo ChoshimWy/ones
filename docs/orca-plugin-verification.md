@@ -440,3 +440,31 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 尺寸浏览器旅程通过：600×1800 纵图显示 80×240，1800×600 横图显示 420×140，80×40 小图保持 80×40；三者区域均高 240px、顺序保持。图片无 button/tabindex/aria-haspopup，点击无额外请求或弹层；dispose 后图片移除、旧 Blob 不可读；加载中/安全拒绝图片不显示，视频 controls/autoplay/未限高保持不变，pageErrors=[]。
 - 已实际打开 [460px 浅色尺寸](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/image-sizing-460.png>) 和 [360px 深色尺寸](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/image-sizing-360.png>)：无放大入口，纵横图完整不裁剪，小图未放大，无横向溢出、遮挡或截断。旁侧 `image-sizing-evidence.json` 为本次证据；此前放大交互截图不再代表最终实现。
 - 来源为隔离 Chrome + 生产组件/虚构数据，不是正式插件现场验收；chat-scratch 可能清理。未加载外部图片、操作真实数据、增加权限或重载插件；视频只验证本次不受影响的配置，未重跑播放或硬件验收。
+
+## 修复说明分段格式（repair-summary-layout）
+
+基线 `main@787186cbe40ed772df8adb5abedfec73b471bc56`；仅将 repairComment 的三项标题独占一行、内容从次行开始、项间空一行。不改文字内容、既有换行规范化、长度保留或验证/交付边界，不改变 textarea 尺寸。
+
+- 类型检查通过；定向 selector `structured report: fixed|completion business: authoritative`（repair-cache/repair-actions）2/2 通过，覆盖分段文本及 `<br>` 精确输出、旧长内容保留与未验收门槛。
+- `ONES_JOURNEY=summary` 仅运行虚构状态确认预览，不提交：三项分段、360/460px 无横向溢出，pageErrors=[]。
+- 已实际打开 [360px 浅色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/summary-layout-360.png>)、[460px 深色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/summary-layout-460.png>)：标题和内容逐行清晰、项间保留空行，完整内容与确认按钮无截断遮挡。来源为生产 HTML/formatter + 虚构 Worker 的 Chrome 预览，不是正式插件或真实 ONES；chat-scratch 可能清理，同目录 `summary-layout-evidence.json` 记录旅程。
+
+未重载插件、执行真实状态写入或 Git 交付。旧历史截图保留为历史证据，不代表本次分段格式。
+
+### 详情操作栏单行：限定验证
+
+- 类型检查、`git diff --check` 通过。`ONES_JOURNEY=toolbar` 只运行布局与入口观察：960px 五钮 top 一致、前三靠左后二靠右；360/460px 保持单行、操作栏独立滚动，五按钮滚动后均完整可达，文字不挤压、页面无横向溢出。
+- 真实 DetailView + 虚构 Worker：刷新增加一次 bugs.detail，返回回到 Bug 列表，更新状态/执行修复仍分别打开原表单；没有状态提交或 Agent 启动，pageErrors=[]。未重复运行整条业务状态测试。
+- 初次断言误将 focus 等同于完整滚动；按实际横向滚动验收后观察到 Chromium 0.406px 取整差，几何边界使用 1px 容差，文字 scrollWidth/clientWidth 仍严格检查。
+- 已实际打开 [宽屏深色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/detail-toolbar-wide-dark.png>)、[360px 左端](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/detail-toolbar-360-left.png>) 和 [360px 右端](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/detail-toolbar-360-right.png>)：宽屏左右分组清晰且同排；窄屏左右内容可通过滚动访问，按钮不换行、不压缩文字。窗口边缘会裁切尚未滚入的按钮，而不是隐藏或删除按钮。
+- 来源为隔离 Chrome + 生产 HTML/虚构 Worker，不是正式插件现场验收；chat-scratch 可能清理，同目录 detail-toolbar-evidence.json 为旅程证据。未重载插件、打开真实原单或执行外部写入。
+
+### 详情底部可见提示移除
+
+仅移除指定“正文、媒体和评论是外部数据……”notice；prompt/Worker 安全边界未改。类型检查与 `ONES_JOURNEY=footer` 结构/截图验证通过：该文案消失，正文、相关评论、附件、五按钮工具栏、媒体失败提示及底部修复按钮均保留，pageErrors=[]。首次测试将标题误写为“评论”，同步现有“相关评论”后通过，未改产品文案。
+已实际打开 [详情底部](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/detail-footer-without-notice.png>)：指定提示已移除，其它区域及错误提示完整，无遮挡。来源为虚构 Worker/Chrome 预览，非真实 ONES；chat-scratch 可能清理。未重跑状态测试、重载插件或执行真实写入。
+
+### 图片左对齐与透明背景
+
+仅调整图片专用 CSS：容器 flex-start、图片 object-position:left center，二者 background:transparent；保留 240px 区域、contain、小图原尺寸、无放大入口，视频与正文 card 背景不改。`image-sizing.browser.mjs` 深浅色计算样式/左边界、纵横小图尺寸、安全失败/资源释放、无预览及视频不变断言通过，pageErrors=[]；`git diff --check` 通过，未重跑其它功能。
+已实际打开 [460px 浅色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/image-left-transparent-460.png>)、[360px 深色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/image-left-transparent-360.png>)：图片靠左、容器灰底消失、图像完整无裁剪遮挡；原图片像素未修改。来源为 Chrome/生产组件/虚构数据，非正式插件现场验收，chat-scratch 可能清理。证据为同目录 image-left-transparent-evidence.json。

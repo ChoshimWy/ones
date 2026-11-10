@@ -54,10 +54,16 @@ try{
   assert.equal(await page.locator('dialog').count(),0)
   assert.equal(await portrait.evaluate(image=>image.tabIndex),-1)
   assert.equal(await page.evaluate(()=>mediaReads),reads)
-  await page.locator('main').screenshot({path:join(output,'image-sizing-460.png')})
+  const checkAppearance=async()=>{
+    const values=await page.locator('.media-image-frame').evaluateAll(frames=>frames.map(frame=>{const image=frame.querySelector('img');return {left:image.getBoundingClientRect().left-frame.getBoundingClientRect().left,frameBackground:getComputedStyle(frame).backgroundColor,imageBackground:getComputedStyle(image).backgroundColor,position:getComputedStyle(image).objectPosition}}))
+    for(const value of values){assert.ok(Math.abs(value.left)<1);assert.equal(value.frameBackground,'rgba(0, 0, 0, 0)');assert.equal(value.imageBackground,'rgba(0, 0, 0, 0)');assert.equal(value.position,'0% 50%')}
+  }
+  await checkAppearance()
+  await page.locator('main').screenshot({path:join(output,'image-left-transparent-460.png')})
   await page.setViewportSize({width:360,height:900});await theme(true)
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
-  await page.locator('main').screenshot({path:join(output,'image-sizing-360.png')})
+  await checkAppearance()
+  await page.locator('main').screenshot({path:join(output,'image-left-transparent-360.png')})
   const oldURL=await portrait.getAttribute('src')
   await page.evaluate(()=>disposeMedia())
   assert.equal(await page.locator('img').count(),0)
@@ -75,7 +81,7 @@ try{
   assert.equal(await page.locator('video').evaluate(video=>video.controls&&!video.autoplay&&!video.classList.contains('media-thumbnail')&&getComputedStyle(video).maxHeight==='none'),true)
   assert.equal(await page.locator('.media-image-frame').count(),0)
   assert.deepEqual(errors,[])
-  const evidence={environment:'Isolated Chrome + production MediaView + fictional bytes; non-interactive image sizing',sizes,checks:['240px contain portrait/landscape','small image not enlarged','images have no button/tabindex/preview entry','click has no effect or refetch','dispose revokes Blob','pending/failed images not displayed','video unchanged'],pageErrors:errors}
-  await writeFile(join(output,'image-sizing-evidence.json'),JSON.stringify(evidence,null,2))
+  const evidence={environment:'Isolated Chrome + production MediaView + fictional bytes; non-interactive image sizing',sizes,checks:['left aligned and frame/image backgrounds transparent in light/dark','240px contain portrait/landscape','small image not enlarged','images have no button/tabindex/preview entry','click has no effect or refetch','dispose revokes Blob','pending/failed images not displayed','video unchanged'],pageErrors:errors}
+  await writeFile(join(output,'image-left-transparent-evidence.json'),JSON.stringify(evidence,null,2))
   console.log(JSON.stringify(evidence,null,2))
 }finally{await browser.close()}

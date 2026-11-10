@@ -289,7 +289,28 @@ hr {
   }
 }
 
-.detail-actions { justify-content: space-between; }
+/* 详情五钮始终单行；空间不足仅此工具栏滚动，不扩张面板。 */
+.detail-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 2px;
+}
+.detail-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.detail-toolbar-right { margin-left: auto; }
+.detail-toolbar button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
 .detail-footer { justify-content: flex-end; }
 button.primary { background: var(--orca-primary); color: var(--orca-primary-foreground); }
 
@@ -297,12 +318,12 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
 .media-image-frame {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   height: 240px;
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  background: var(--orca-muted);
+  background: transparent;
   border-radius: 6px;
 }
 .media-image-frame .media-thumbnail {
@@ -311,4 +332,6 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+  object-position: left center;
+  background: transparent;
 }

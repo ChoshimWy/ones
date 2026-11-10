@@ -47,10 +47,10 @@ export function repairProgress(report: RepairReport | undefined): string {
   if (report.repair.state === 'fixed') return report.repair.workspace === 'isolated_worktree' ? '已在隔离 Worktree 修复' : '代码修复已完成'
   return report.repair.state === 'blocked' ? '代码修复受阻' : '正在排查修复'
 }
-/// 评论仅展示三项说明；只规范换行，不截断、推断或代写旧报告的简短摘要。
+/// 评论展示三项分段说明：标题独占一行，内容次行，项间空一行；不截断或改写内容。
 export function repairComment(report: RepairReport | undefined): string {
   // 无结构化字段时不能编造三项；原始历史回执仍在详情中保留。
   if (!report || !('reportVersion' in report)) return ''
   const line = (value: string) => value.replace(/[\r\n]+/g, ' ').trim()
-  return `根本原因：${line(report.rootCause)}\n解决方法：${line(report.solution)}\n影响范围：${line(report.impact)}`
+  return `根本原因：\n${line(report.rootCause)}\n\n解决方法：\n${line(report.solution)}\n\n影响范围：\n${line(report.impact)}`
 }

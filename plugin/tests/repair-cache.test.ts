@@ -117,10 +117,10 @@ test('structured report: fixed worktree remains fixed with hardware not run; leg
   assert.equal(repairProgress(pending),'已在隔离 Worktree 修复')
   assert.ok(repairCompletionBlocker(pending).includes('硬件'))
   assert.ok(repairComment(pending).includes('根本原因'))
-  assert.equal(repairComment(pending),'根本原因：根本原因\n解决方法：修复完成\n影响范围：影响列表')
+  assert.equal(repairComment(pending),'根本原因：\n根本原因\n\n解决方法：\n修复完成\n\n影响范围：\n影响列表')
   for(const removed of ['说明来源','验证结果','交付情况','尚未提交'])assert.ok(!repairComment(pending).includes(removed))
   const long='旧长说明。'.repeat(100)
-  assert.equal(repairComment({...pending,rootCause:'第一行\r\n第二行',solution:long}),`根本原因：第一行 第二行\n解决方法：${long}\n影响范围：影响列表`)
+  assert.equal(repairComment({...pending,rootCause:'第一行\r\n第二行',solution:long}),`根本原因：\n第一行 第二行\n\n解决方法：\n${long}\n\n影响范围：\n影响列表`)
   assert.equal(repairCompletionBlocker(reportFixture),'')
   const f=await fixture()
   try{

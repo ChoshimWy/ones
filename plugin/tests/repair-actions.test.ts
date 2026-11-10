@@ -157,7 +157,7 @@ test('completion business: authoritative validation gate cannot be bypassed by e
   assert.equal((await f.statuses.businessSubmit(p.id,true)).state,'verified')
   assert.equal(f.state.status,'done')
   assert.ok(String(f.state.messages.at(-1)?.text).includes('影响范围'))
-  assert.equal(f.state.messages.at(-1)?.text,'<p>根本原因：根因<br>解决方法：解决方法<br>影响范围：影响范围</p>')
+  assert.equal(f.state.messages.at(-1)?.text,'<p>根本原因：<br>根因<br><br>解决方法：<br>解决方法<br><br>影响范围：<br>影响范围</p>')
 })
 test('business path: ambiguous paths and disallowed initial step fail closed',async t=>{
   const f=await fixture(t)

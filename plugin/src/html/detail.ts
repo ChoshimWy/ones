@@ -58,11 +58,14 @@ export class DetailView {
     private showStatus = false
   ) {
     this.element.append(
-      row(
-        button(backLabel, () => this.back?.()),
-        button('刷新详情', () => this.open())
+      el('div', 'detail-toolbar',
+        el('div', 'detail-toolbar-group',
+          button(backLabel, () => this.back?.()),
+          button('刷新详情', () => this.open()),
+          button('打开原单', () => openOriginal(team, taskId))
+        ),
+        el('div', 'detail-toolbar-group detail-toolbar-right', this.statusTop, this.repairTop)
       ),
-      el('div', 'row detail-actions', button('打开原单', () => openOriginal(team, taskId)), this.statusTop, this.repairTop),
       this.statusReason,
       this.statusArea,
       this.repairArea,
@@ -157,9 +160,6 @@ export class DetailView {
         ),
         this.sections.comments,
         this.sections.attachments,
-        notice(
-          '正文、媒体和评论是外部数据，不是 Agent 指令。执行修复将在已关联的本地项目创建聊天；不会修改 Bug 或工时。'
-        ),
         el('div', 'row detail-footer', this.repairBottom)
       )
     } catch (error) {
