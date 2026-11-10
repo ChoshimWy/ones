@@ -92,7 +92,7 @@ export class RepairWorkflow {
     context.check()
     await this.cache.consume(context.scope, context.check)
     const result = await this.cache.read(context.scope)
-    for (const item of result.items) { item.report = await this.evidence.project(item.report); context.check() }
+    for (const item of result.items) { await this.projectReport(item); context.check() }
     context.check()
     return result
   }
@@ -143,12 +143,18 @@ export class RepairWorkflow {
     this.plans.set(id, { detailId, scope: context.scope, taskId: context.task.id, source: context.task.project, projects, mapping, expires: Date.now() + 600000 })
     return { id, mapping, existing }
   }
+  /// 保留可选字段缺省语义，避免等待回执的记录在 Worker JSON 边界被拒绝。
+  private async projectReport(item: RepairListItem): Promise<void> {
+    const report = await this.evidence.project(item.report)
+    if (report) item.report = report
+    else delete item.report
+  }
   /// 详情读取完整执行结果，技术信息只在详情展示；不解析历史摘要猜状态。
   async result(detailId: string): Promise<RepairListItem | null> {
     const context = await this.service.repairContext(detailId)
     await this.cache.consume(context.scope, () => {})
     const item = (await this.cache.read(context.scope)).items.find(x=>x.task.id===context.task.id)
-    if (item) item.report = await this.evidence.project(item.report)
+    if (item) await this.projectReport(item)
     const fresh = await this.service.repairContext(detailId)
     requireThat(fresh.scope === context.scope && fresh.task.id === context.task.id, 'identity', '读取回执期间身份已变化。')
     return item ?? null

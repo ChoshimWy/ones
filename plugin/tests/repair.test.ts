@@ -365,3 +365,17 @@ test('acceptance workflow: cached and detail project same legacy artifacts witho
     assert.equal(f.launches,1)
   }finally{await e.close();await rm(f.root,{recursive:true,force:true});await rm(f.root+'-cache',{recursive:true,force:true})}
 })
+
+test('repair JSON boundary: pending receipt cache and detail omit an absent report',async()=>{
+  const f=await fixture()
+  try{
+    assert.equal(await f.flow.result('detail'),null)
+    await f.start((await f.flow.prepare('detail')).id)
+    const cached=await f.flow.cached({scope:'scope',check(){}})
+    const detail=await f.flow.result('detail')
+    assert.equal(cached.items.length,1)
+    assert.ok(detail)
+    for(const value of [cached,detail])assert.deepEqual(value,JSON.parse(JSON.stringify(value)))
+    assert.equal(Object.hasOwn(detail,'report'),false)
+  }finally{await rm(f.root,{recursive:true,force:true});await rm(f.root+'-cache',{recursive:true,force:true})}
+})

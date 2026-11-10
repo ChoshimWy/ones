@@ -300,3 +300,20 @@ test('acceptance business: legacy artifact projection permits submit but changed
   const fresh=await f.statuses.businessPreview(input)
   assert.equal((await f.statuses.businessSubmit(fresh.id,true)).state,'verified')
 })
+
+test('repair JSON boundary: first repair preparation and status options omit absent acceptance fields',async t=>{
+  for(const hasReport of [false,true]){
+    const f=await fixture(t,async value=>hasReport?value:undefined)
+    for(const goal of ['修复中','已修复'] as const){
+      const options=await f.statuses.businessOptions(f.detail.detailId,goal)
+      assert.deepEqual(options,JSON.parse(JSON.stringify(options)))
+      assert.equal(options.completionBlocker,goal==='已修复'&&!hasReport?'验收状态：暂无单元测试结果':'')
+    }
+    const preparation=await f.actions.prepare(f.detail.detailId)
+    assert.deepEqual(preparation,JSON.parse(JSON.stringify(preparation)))
+    const preview=await f.actions.preview(await f.input())
+    assert.deepEqual(preview,JSON.parse(JSON.stringify(preview)))
+    assert.equal(f.state.launches,0)
+    assert.equal(f.state.writes.length,0)
+  }
+})

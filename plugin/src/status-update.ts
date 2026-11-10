@@ -111,7 +111,10 @@ export class StatusWorkflow {
     const route = statusPath(options.snapshot, goal)
     const context = await this.context(detailId)
     context.check()
-    return { ...options, goal, route, comment: goal === '修复中' ? null : repairComment(report), validationSummary: repairValidationSummary(report), acceptanceStamp: createHash('sha256').update(JSON.stringify(report) ?? '').digest('hex'), noUnitTestsConfirmationRequired: goal === '已修复' && repairRequiresNAConfirmation(report), acceptance: repairAcceptance(report), acceptanceNote: report?.acceptanceEvidence?.note, completionBlocker: goal === '已修复' ? repairCompletionBlocker(report) : '' }
+    // Orca 的 Worker 边界只接收 JSON；缺失字段须省略，不能返回 undefined。
+    const acceptance = repairAcceptance(report)
+    const acceptanceNote = report?.acceptanceEvidence?.note
+    return { ...options, goal, route, comment: goal === '修复中' ? null : repairComment(report), validationSummary: repairValidationSummary(report), acceptanceStamp: createHash('sha256').update(JSON.stringify(report) ?? '').digest('hex'), noUnitTestsConfirmationRequired: goal === '已修复' && repairRequiresNAConfirmation(report), ...(acceptance ? { acceptance } : {}), ...(acceptanceNote ? { acceptanceNote } : {}), completionBlocker: goal === '已修复' ? repairCompletionBlocker(report) : '' }
   }
   /// 全部未来步骤必填项先校验；没有完整预览不得开始任何状态写入。
   async businessPreview(input: BusinessInput): Promise<BusinessPreview> {
