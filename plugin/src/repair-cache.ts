@@ -1,12 +1,13 @@
+import { RepairEvidence } from './repair-evidence.ts'
 import { isDeepStrictEqual } from 'node:util'
-import { parseRepairReport, type RepairReport } from './domain/repair-report.ts'
+import { parseRepairReport, repairAcceptance, isNotApplicable, type RepairReport } from './domain/repair-report.ts'
 export type { RepairReport } from './domain/repair-report.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, mkdir, open } from 'node:fs/promises'
 import { join } from 'node:path'
-import { requireThat, record, type Task } from './domain/model.ts'
+import { AppError, requireThat, record, type Task } from './domain/model.ts'
 import type { RepairListItem, RepairRecord } from './repair.ts'
 
 /// Agent 回执只是报告，不等价于独立验证证据通过。
@@ -20,7 +21,7 @@ const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 export class RepairCache {
   private database?: DatabaseSync
   private opening?: Promise<DatabaseSync>
-  constructor(private root: string) {}
+  constructor(private root: string, private evidence = new RepairEvidence()) {}
   /// 惰性创建私有目录，拒绝符号链接及未知数据库版本，不迁移其它数据。
   private async db(): Promise<DatabaseSync> {
     if (this.database) return this.database
@@ -136,25 +137,42 @@ export class RepairCache {
         // 已接受 v2 的原文件保留可读；只允许显式 v3 更高序号更新，不重新接纳旧协议。
         if (payload.reportVersion === 2 && row.report && isDeepStrictEqual(payload, JSON.parse(String(row.report)))) continue
         const report = parseRepairReport(payload)
+        if (isNotApplicable(report.validation.unitTests)) {
+          // 只阻止已明确要求单测的历史；旧 v2 无受管引用并不等于已执行测试。
+          const history = db.prepare('SELECT report FROM report_history WHERE scope=? AND task_id=? AND run_id=?').all(scope,String(row.task_id),String(row.run_id))
+          if (row.report) history.push({report:row.report})
+          for (const item of history) {
+            const prior = await this.evidence.project(JSON.parse(String(item.report)))
+            const tests = repairAcceptance(prior)
+            requireThat(prior?.acceptanceEvidence?.state !== 'pending' && (!tests || isNotApplicable(tests) || tests.total === 0), 'acceptance', '本次执行已有单元测试要求或测试证据待核对，不能改为无需单元测试。')
+          }
+        }
         check()
         // 同一事务重读最新序号，跨 Worker 的迟到旧报告也不能覆盖新报告。
         db.exec('BEGIN IMMEDIATE')
         try {
           const current = db.prepare('SELECT run_id,report FROM repairs WHERE scope=? AND task_id=?').get(scope,String(row.task_id))
           requireThat(current?.run_id === row.run_id, 'receipt', '执行轮次已变化，未接收旧回执。')
+          requireThat(!isNotApplicable(report.validation.unitTests) || current.report === row.report, 'receipt', '核对不适用期间报告已变化，请重新接收。')
           const previous = current.report ? JSON.parse(String(current.report)) : undefined
           requireThat(!previous || ('reportSequence' in previous && report.reportSequence >= previous.reportSequence), 'receipt', '旧报告序号不能覆盖最新结果。')
           requireThat(!previous || report.reportSequence !== previous.reportSequence || JSON.stringify(report) === JSON.stringify(previous), 'receipt', '同一报告序号的内容不可变更。')
+          // 导入旧报告的审计锚点仅复制已有内容，不改变原序号或推断结果。
+          if (previous?.reportSequence) db.prepare('INSERT OR IGNORE INTO report_history(scope,task_id,run_id,sequence,report,received_at) VALUES(?,?,?,?,?,?)').run(scope,String(row.task_id),String(row.run_id),previous.reportSequence,String(current.report),Date.now())
           const encoded = JSON.stringify(report)
           db.prepare('INSERT OR IGNORE INTO report_history(scope,task_id,run_id,sequence,report,received_at) VALUES(?,?,?,?,?,?)').run(scope,String(row.task_id),String(row.run_id),report.reportSequence,encoded,Date.now())
           db.prepare('UPDATE repairs SET report=?,report_error=NULL WHERE scope=? AND task_id=? AND run_id=?').run(encoded,scope,String(row.task_id),String(row.run_id))
-          db.prepare('DELETE FROM report_history WHERE scope=? AND task_id=? AND run_id=? AND sequence NOT IN (SELECT sequence FROM report_history WHERE scope=? AND task_id=? AND run_id=? ORDER BY sequence DESC LIMIT 20)').run(scope,String(row.task_id),String(row.run_id),scope,String(row.task_id),String(row.run_id))
+          // 最近二十条之外，最多保留两个防降级锚点，避免零占位更新挤掉既有单测要求。
+          db.prepare(`DELETE FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3
+            AND sequence NOT IN (SELECT sequence FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3 ORDER BY sequence DESC LIMIT 20)
+            AND sequence NOT IN (SELECT MIN(sequence) FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3 AND json_extract(report,'$.validation.unitTests.total')>0 HAVING MIN(sequence) IS NOT NULL)
+            AND sequence NOT IN (SELECT MIN(sequence) FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3 AND json_extract(report,'$.reportVersion')=2 AND EXISTS (SELECT 1 FROM json_each(report,'$.validation.evidence') WHERE value LIKE '%/data/apple/%') HAVING MIN(sequence) IS NOT NULL)`).run({'1':scope,'2':String(row.task_id),'3':String(row.run_id)})
           db.exec('COMMIT')
         } catch (error) { db.exec('ROLLBACK'); throw error }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           check()
-          db.prepare('UPDATE repairs SET report_error=? WHERE scope=? AND task_id=? AND run_id=? ').run('回执未接收：格式、身份、权限或证据不符合协议；可修正结果文件后重试。',scope,String(row.task_id),String(row.run_id))
+          db.prepare('UPDATE repairs SET report_error=? WHERE scope=? AND task_id=? AND run_id=? ').run(error instanceof AppError && error.code === 'acceptance' ? error.message : '回执未接收：格式、身份、权限或证据不符合协议；可修正结果文件后重试。',scope,String(row.task_id),String(row.run_id))
         }
       } finally { await handle?.close() }
     }

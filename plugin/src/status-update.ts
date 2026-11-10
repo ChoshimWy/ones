@@ -1,5 +1,5 @@
 import { statusPath, type StatusGoal, type StatusRoute } from './domain/status-path.ts'
-import { repairComment, repairCompletionBlocker, repairValidationSummary, type RepairReport } from './domain/repair-report.ts'
+import { repairComment, repairCompletionBlocker, repairValidationSummary, repairRequiresNAConfirmation, repairAcceptance, type RepairReport } from './domain/repair-report.ts'
 import { createHash, randomUUID, randomInt } from 'node:crypto'
 import { mkdir, lstat, readFile, open, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -23,7 +23,7 @@ export type StatusContext = { scope: string; task: Task; adapter: OnesTransition
 type Plan = { detailId: string; scope: string; snapshot: TransitionSnapshot; intent: TransitionIntent; view: StatusPreview }
 
 /// 一次确认覆盖完整路径和各步骤字段；开始修复不评论，完成修复保留三项简述与独立验收门槛。
-export type BusinessInput = { detailId: string; goal: StatusGoal; fields: Record<string,Record<string,string>>; comment: string | null }
+export type BusinessInput = { noUnitTestsConfirmed?: boolean; detailId: string; goal: StatusGoal; fields: Record<string,Record<string,string>>; comment: string | null }
 export type BusinessPreview = { id: string; task: Task; goal: StatusGoal; route: StatusRoute; fields: Record<string,Record<string,string>>; comment: string | null; expiresAt: number }
 export type BusinessResult = { state: 'verified' | 'unknown'; operations: StatusResult[]; target: StatusGoal }
 type BusinessPlan = { view: BusinessPreview; detailId: string; scope: string; snapshot: TransitionSnapshot; reportStamp: string }
@@ -111,7 +111,7 @@ export class StatusWorkflow {
     const route = statusPath(options.snapshot, goal)
     const context = await this.context(detailId)
     context.check()
-    return { ...options, goal, route, comment: goal === '修复中' ? null : repairComment(report), validationSummary: repairValidationSummary(report), completionBlocker: goal === '已修复' ? repairCompletionBlocker(report) : '' }
+    return { ...options, goal, route, comment: goal === '修复中' ? null : repairComment(report), validationSummary: repairValidationSummary(report), acceptanceStamp: createHash('sha256').update(JSON.stringify(report) ?? '').digest('hex'), noUnitTestsConfirmationRequired: goal === '已修复' && repairRequiresNAConfirmation(report), acceptance: repairAcceptance(report), acceptanceNote: report?.acceptanceEvidence?.note, completionBlocker: goal === '已修复' ? repairCompletionBlocker(report) : '' }
   }
   /// 全部未来步骤必填项先校验；没有完整预览不得开始任何状态写入。
   async businessPreview(input: BusinessInput): Promise<BusinessPreview> {
@@ -119,16 +119,19 @@ export class StatusWorkflow {
     const options = await this.businessOptions(input.detailId,input.goal)
     requireThat(!options.operation || options.operation.state === 'verified', 'pending', '已有未知状态操作，必须先核对，不能重发。')
     requireThat(!options.completionBlocker, 'validation', options.completionBlocker)
+    requireThat(!options.noUnitTestsConfirmationRequired || input.noUnitTestsConfirmed === true, 'confirm', '请明确确认本次无需单元测试且替代检查已完成。')
     requireThat(Object.keys(input.fields).length === options.route.length && Object.keys(input.fields).every(key=>options.route.some(x=>x.step.id===key)), 'input', '业务字段与完整路径不一致。')
     // 业务目标决定评论意图，调用者不能向开始修复流程注入评论。
     const comment = input.goal === '修复中' ? null : input.comment
     requireThat(input.goal !== '已修复' || typeof comment === 'string', 'input', '请填写修复说明。')
     for (const edge of options.route) transitionIntent({...options.snapshot,task:{...options.snapshot.task,status:edge.source},steps:[edge.step]}, {detailId:input.detailId,stepId:edge.step.id,fields:input.fields[edge.step.id]!,comment}, 'preview1')
+    const confirmedReport = await this.report(input.detailId)
+    requireThat(input.goal !== '已修复' || (!repairCompletionBlocker(confirmedReport) && (!repairRequiresNAConfirmation(confirmedReport) || input.noUnitTestsConfirmed === true) && createHash('sha256').update(JSON.stringify(confirmedReport) ?? '').digest('hex') === options.acceptanceStamp), 'stale', '验收结果已变化，请重新读取后确认。')
     const view: BusinessPreview = {id:randomUUID(),task:options.snapshot.task,goal:input.goal,route:options.route,fields:input.fields,comment,expiresAt:Date.now()+300000}
     for (const [key,plan] of this.businessPlans) if (plan.view.expiresAt <= Date.now()) this.businessPlans.delete(key)
     requireThat(this.businessPlans.size < 50, 'busy', '业务预览过多。')
     context.check()
-    this.businessPlans.set(view.id,{view,detailId:input.detailId,scope:context.scope,snapshot:options.snapshot,reportStamp:JSON.stringify(await this.report(input.detailId)) ?? ''})
+    this.businessPlans.set(view.id,{view,detailId:input.detailId,scope:context.scope,snapshot:options.snapshot,reportStamp:JSON.stringify(confirmedReport) ?? ''})
     return view
   }
   /// 一次确认串行执行已预览路径；每步仍先持久化、单次发送、独立回读。

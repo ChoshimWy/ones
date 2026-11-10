@@ -1,3 +1,7 @@
+import { DatabaseSync } from 'node:sqlite'
+import { RepairEvidence } from '../src/repair-evidence.ts'
+import { evidenceFixture } from './fixtures/repair-evidence.ts'
+import { repairValidationSummary } from '../src/domain/repair-report.ts'
 import { bugContent } from '../src/domain/bug-content.ts'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
@@ -75,7 +79,7 @@ test('repair CLI: recognizes actual chat and journaled prompt, never treats term
   assert.equal(launchReceipt({ ...success, warning: 'partial' }).state, 'unknown')
   assert.equal(launchReceipt({ outcome: { kind: 'terminal', handle: 'terminal' } }).state, 'terminal')
 })
-async function fixture() {
+async function fixture(evidence = new RepairEvidence()) {
   const root = await mkdtemp(join(tmpdir(), 'ones-repair-test-'))
   let launches = 0, collected = 0, changed = false, broken = false, response: Record<string, unknown> | Error = success
   let sent = '', protocolCollision = false
@@ -110,7 +114,7 @@ async function fixture() {
     }
   }
   const cli = new FakeCli()
-  const create = () => new RepairWorkflow(service, store, cli, root)
+  const create = () => new RepairWorkflow(service, store, cli, root,evidence)
   const flow = create()
   const start = (id: string) => flow.start({ preparationId: id, projectId: project.id, agent: 'codex', confirmed: true })
   return { root, flow, create, start, store, data, get launches() { return launches }, get collected() { return collected }, get sent() { return sent }, setProtocolCollision: () => { protocolCollision = true }, setChanged: () => { changed = true }, setBroken: (value: boolean) => { broken = value }, setResponse: (value: typeof response) => { response = value } }
@@ -301,7 +305,7 @@ test('repair receipt instructions: private complete contract, short prompt and c
     assert.equal(template.reportVersion,3)
     assert.equal(template.reportSequence,1)
     assert.deepEqual(template.validation.unitTests,{status:'not_run',passed:0,failed:0,skipped:0,notRun:0,total:0})
-    for(const rule of ['单元测试 runner 真实结果','build-only','硬件、截图或人工验证未完成'])assert.ok(protocol.includes(rule))
+    for(const rule of ['applicability','not_applicable','替代检查不是虚构单测数量','仍需用户明确确认','单元测试 runner 真实结果','build-only','硬件、截图或人工验证未完成'])assert.ok(protocol.includes(rule))
     for(const rule of ['每项一句简短白话','30–60 字','不加入代码符号、路径或测试命令','技术身份放 sourceIdentity','验证详情与命令放 validation.reason/evidence'])assert.ok(protocol.includes(rule))
     for(const key of ['rootCause','solution','impact'])assert.ok(template[key].includes('一句简短白话'))
     for(const field of ['runId','revision','token','rootCause','solution','impact','repair','validation','delivery','sourceIdentity'])assert.ok(field in template)
@@ -343,3 +347,21 @@ test('content spacing: repair prompt reuses normalized content without a second 
   assert.ok(prompt.includes('步骤\n\n结果\n图片：Bug 图片\n本地文件："/fixture/image.png"\n期望'));
   assert.ok(!prompt.includes('\n\n\n'));
 });
+
+/// 展示和完成门槛读取同一实时投影，数据库中原始回执保持不变。
+test('acceptance workflow: cached and detail project same legacy artifacts without DB migration',async()=>{
+  const e=await evidenceFixture(),f=await fixture(e.projector)
+  try{
+    await f.start((await f.flow.prepare('detail')).id)
+    const path=join(f.root+'-cache','cache.sqlite')
+    const db=new DatabaseSync(path)
+    db.prepare('UPDATE repairs SET report=?').run(JSON.stringify(e.report));db.close()
+    const cached=await f.flow.cached({scope:'scope',check(){}}),detail=await f.flow.result('detail')
+    assert.equal(repairValidationSummary(cached.items[0].report),'验收状态：3/3项验证已通过')
+    assert.deepEqual(cached.items[0].report,detail?.report)
+    const read=new DatabaseSync(path,{readOnly:true})
+    assert.deepEqual(JSON.parse(String(read.prepare('SELECT report FROM repairs').get()!.report)),e.report);read.close()
+    assert.equal((await f.flow.cached({scope:'foreign',check(){}})).items.length,0)
+    assert.equal(f.launches,1)
+  }finally{await e.close();await rm(f.root,{recursive:true,force:true});await rm(f.root+'-cache',{recursive:true,force:true})}
+})

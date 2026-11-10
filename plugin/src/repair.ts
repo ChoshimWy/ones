@@ -1,3 +1,4 @@
+import { RepairEvidence } from './repair-evidence.ts'
 import { RepairCache, type CachedRepairs, type RepairReport } from './repair-cache.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, writeFile, rename, rm, lstat, mkdtemp } from 'node:fs/promises'
@@ -25,8 +26,9 @@ export class RepairWorkflow {
     private service: Pick<Workbench, 'repairContext' | 'collectRepair'>,
     private store: Store,
     private cli = new OrcaCli(),
-    private root = join(homedir(), 'Library', 'Application Support', 'ones-workbench', 'repairs')
-  ) { this.cache = new RepairCache(root + '-cache') }
+    private root = join(homedir(), 'Library', 'Application Support', 'ones-workbench', 'repairs'),
+    private evidence = new RepairEvidence()
+  ) { this.cache = new RepairCache(root + '-cache',evidence) }
   private key(scope: string, taskId: string) { return digest([scope, taskId]) }
   private async ensureRoot() {
     await mkdir(this.root, { recursive: true, mode: 0o700 })
@@ -90,6 +92,7 @@ export class RepairWorkflow {
     context.check()
     await this.cache.consume(context.scope, context.check)
     const result = await this.cache.read(context.scope)
+    for (const item of result.items) { item.report = await this.evidence.project(item.report); context.check() }
     context.check()
     return result
   }
@@ -145,6 +148,7 @@ export class RepairWorkflow {
     const context = await this.service.repairContext(detailId)
     await this.cache.consume(context.scope, () => {})
     const item = (await this.cache.read(context.scope)).items.find(x=>x.task.id===context.task.id)
+    if (item) item.report = await this.evidence.project(item.report)
     const fresh = await this.service.repairContext(detailId)
     requireThat(fresh.scope === context.scope && fresh.task.id === context.task.id, 'identity', '读取回执期间身份已变化。')
     return item ?? null

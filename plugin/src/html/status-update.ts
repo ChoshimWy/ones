@@ -1,5 +1,5 @@
 import type { StatusWorkflow, BusinessPreview, BusinessResult, StatusResult } from '../status-update.ts'
-import { button, card, el, input, message, notice, request, row, select, text } from './dom.ts'
+import { button, card, check, el, input, message, notice, request, row, select, text } from './dom.ts'
 
 /// 面向“更新为已修复”的单次业务确认，不要求用户逐步提交工作流。
 export class StatusView {
@@ -7,6 +7,7 @@ export class StatusView {
   private options?: Awaited<ReturnType<StatusWorkflow['businessOptions']>>
   private fields: Record<string,Record<string,string>> = {}
   private comment = ''
+  private noUnitTestsConfirmed = false
   private preview?: BusinessPreview
   private expanded = false
   private busy = false
@@ -24,6 +25,7 @@ export class StatusView {
       this.options=options
       this.fields=Object.fromEntries(options.route.map(edge=>[edge.step.id,Object.fromEntries(edge.step.fields.map(field=>[field.id,field.value]))]))
       this.comment=options.comment??''
+      this.noUnitTestsConfirmed=false
       this.availability(false,'')
       this.error=''
     } catch(error) { if(!this.disposed){this.error=message(error);this.availability(false,'状态配置暂不可用，可打开查看原因。')} }
@@ -55,7 +57,13 @@ export class StatusView {
     }
     content.append(notice(options.validationSummary,!!options.completionBlocker))
     if(options.completionBlocker.startsWith('代码修复'))content.append(notice(options.completionBlocker,true))
-    content.append(text('三项简述自动填入评论，可编辑；不会覆盖原始描述。单元测试结果独立保留，全部通过后才可更新为已修复。',true))
+    if(options.acceptanceNote)content.append(el('details','stack',el('summary','','验收依据'),text(options.acceptanceNote,true)))
+    if(options.noUnitTestsConfirmationRequired){
+      const acceptance=options.acceptance
+      if(acceptance && 'applicability' in acceptance)content.append(text(`不适用原因：${acceptance.reason}`,true),el('details','stack',el('summary','','替代检查记录'),...acceptance.checks.flatMap(item=>[text(`${item.name}：${item.status}`,true),...item.evidence.map(value=>text(value,true))])))
+      content.append(check('我确认本次无需单元测试，替代检查已完成',this.noUnitTestsConfirmed,value=>{this.noUnitTestsConfirmed=value;this.invalidate();this.render()},this.busy || !!options.completionBlocker))
+    }
+    content.append(text('三项简述自动填入评论，可编辑；不会覆盖原始描述。单元测试或替代检查结果独立保留，完成并确认后才可更新为已修复。',true))
     for(const edge of options.route){
       if(edge.step.fields.length)content.append(text(`${edge.source.name} → ${edge.step.target.name} 所需字段`))
       for(const field of edge.step.fields){
@@ -68,8 +76,8 @@ export class StatusView {
     summary.classList.add('repair-summary')
     content.append(summary)
     content.append(button('预览状态更新',()=>this.act(async()=>{
-      this.preview=await request<BusinessPreview>('bugs.businessPreview',{detailId:this.detailId,fields:this.fields,comment:this.comment})
-    }),this.busy||!!options.completionBlocker||!!(operation&&operation.state!=='verified')||!options.route.length))
+      this.preview=await request<BusinessPreview>('bugs.businessPreview',{detailId:this.detailId,fields:this.fields,comment:this.comment,noUnitTestsConfirmed:this.noUnitTestsConfirmed})
+    }),this.busy||!!options.completionBlocker||(options.noUnitTestsConfirmationRequired&&!this.noUnitTestsConfirmed)||!!(operation&&operation.state!=='verified')||!options.route.length))
     if(this.preview){
       const preview=this.preview
       const confirmation=card('确认一次完成状态更新',text([preview.task.status.name,...preview.route.map(x=>x.step.target.name)].join(' → ')),...preview.route.flatMap(x=>x.step.fields.map(f=>text(`${x.step.name} · ${f.name}：${f.options.find(o=>o.id===f.value)?.name??(f.value||'（空）')} → ${f.options.find(o=>o.id===preview.fields[x.step.id]![f.id])?.name??(preview.fields[x.step.id]![f.id]||'（空）')}`))),text(preview.comment??''),notice('每步回读成功才继续；部分成功保留，未知结果停止，不回滚已成功步骤。'),button('确认更新为已修复',()=>this.act(async()=>{

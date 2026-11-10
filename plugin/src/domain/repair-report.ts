@@ -13,7 +13,12 @@ export type PreviousRepairReport = {
   sourceIdentity: string
 }
 /// 单元测试计数直接来自 runner；未运行与跳过分开，不能由文字或证据条数推断。
-export type UnitTestResult = { status: 'passed' | 'failed' | 'not_run'; passed: number; failed: number; skipped: number; notRun: number; total: number }
+export type UnitTestCounts = { status: 'passed' | 'failed' | 'not_run'; passed: number; failed: number; skipped: number; notRun: number; total: number }
+/// 不适用必须说明范围原因并提供实际替代检查，不能把未运行测试自动当作不适用。
+export type NotApplicableTests = { applicability: 'not_applicable'; reason: string; checks: { name: string; status: 'passed' | 'failed' | 'not_run'; evidence: string[] }[] }
+export type UnitTestResult = UnitTestCounts | NotApplicableTests
+/// 只由插件读受管文件生成的临时投影；不写回原始回执或接纳 Agent 注入。
+export type AcceptanceEvidence = { state: 'verified' | 'pending'; fingerprint: string; note: string; counts?: UnitTestCounts; source?: string; run?: string }
 /// 当前回执沿用原技术记录，新增明确单元测试统计作为唯一验收门槛。
 export type StructuredRepairReport = Omit<PreviousRepairReport, 'reportVersion' | 'validation'> & {
   reportVersion: 3
@@ -21,7 +26,7 @@ export type StructuredRepairReport = Omit<PreviousRepairReport, 'reportVersion' 
 }
 /// 已接受的历史回执只读保留，不补造结构化结论。
 export type LegacyRepairReport = { outcome: 'passed' | 'failed' | 'blocked'; summary: string; sourceIdentity: string; evidence: string[] }
-export type RepairReport = StructuredRepairReport | PreviousRepairReport | LegacyRepairReport
+export type RepairReport = (StructuredRepairReport | PreviousRepairReport | LegacyRepairReport) & { acceptanceEvidence?: AcceptanceEvidence }
 /// 只接受明确的新版本；已存历史报告由读取路径保留，不重新接纳旧协议。
 export function parseRepairReport(input: unknown): StructuredRepairReport {
   const value = record(input)
@@ -38,27 +43,58 @@ export function parseRepairReport(input: unknown): StructuredRepairReport {
   requireThat(['passed','failed','not_run'].includes(String(validation.status)) && ['uncommitted','committed','merged','released'].includes(String(delivery.state)), 'receipt', '验证或交付状态不符合协议。')
   const remaining = strings(validation.remaining), evidence = strings(validation.evidence)
   const unitTests = record(validation.unitTests)
+  let tests: UnitTestResult
+  if (unitTests.applicability === 'not_applicable') {
+    exact(unitTests,['applicability','reason','checks'])
+    requireThat(Array.isArray(unitTests.checks) && unitTests.checks.length > 0 && unitTests.checks.length <= 20, 'receipt', '无需单元测试也必须列出替代检查。')
+    const checks = (unitTests.checks as unknown[]).map(input => {
+      const check = record(input)
+      exact(check,['name','status','evidence'])
+      requireThat(['passed','failed','not_run'].includes(String(check.status)), 'receipt', '替代检查状态无效。')
+      const evidence = strings(check.evidence)
+      requireThat(check.status === 'not_run' || evidence.length > 0, 'receipt', '已执行替代检查必须提供证据。')
+      return {name:string(check.name),status:check.status as NotApplicableTests['checks'][number]['status'],evidence}
+    })
+    requireThat(new Set(checks.map(check=>check.name)).size === checks.length, 'receipt', '替代检查不能重复计入。')
+    tests = {applicability:'not_applicable',reason:string(unitTests.reason),checks}
+  } else {
   exact(unitTests,['status','passed','failed','skipped','notRun','total'])
   const counts = ['passed','failed','skipped','notRun','total'] as const
   requireThat(counts.every(key => Number.isSafeInteger(unitTests[key]) && Number(unitTests[key]) >= 0), 'receipt', '单元测试计数必须为非负安全整数。')
-  const tests = unitTests as UnitTestResult
+  tests = unitTests as UnitTestCounts
   requireThat(tests.total === tests.passed + tests.failed + tests.skipped + tests.notRun, 'receipt', '单元测试总数与分类计数不一致。')
   const expectedStatus = tests.total > 0 && tests.passed === tests.total ? 'passed' : tests.failed > 0 ? 'failed' : 'not_run'
   requireThat(tests.status === expectedStatus, 'receipt', '单元测试状态与计数不一致，不能把跳过或未运行算作通过。')
   requireThat(tests.passed + tests.failed === 0 || evidence.length > 0, 'receipt', '已执行单元测试必须提供命令、结果及证据。')
+  }
   return { reportVersion:3,reportSequence:value.reportSequence as number,rootCause:string(value.rootCause),solution:string(value.solution),impact:string(value.impact),sourceIdentity:string(value.sourceIdentity),repair:repair as StructuredRepairReport['repair'],validation:{status:validation.status as StructuredRepairReport['validation']['status'],reason:string(validation.reason),remaining,evidence,unitTests:tests},delivery:{state:delivery.state as StructuredRepairReport['delivery']['state'],note:string(delivery.note)} }
 }
-/// 统一短验收描述；旧协议和缺失报告不推断单元测试数量。
-export function repairValidationSummary(report: RepairReport | undefined): string {
-  if (!report || !('reportVersion' in report) || report.reportVersion !== 3 || report.validation.unitTests.total === 0) return '验收状态：暂无单元测试结果'
-  return `验收状态：${report.validation.unitTests.passed}/${report.validation.unitTests.total}项验证已通过`
+/// 临时证据投影优先；Agent 报告的原始字段不被覆盖。
+export function repairAcceptance(report: RepairReport | undefined): UnitTestResult | undefined {
+  if (report?.acceptanceEvidence) return report.acceptanceEvidence.state === 'verified' ? report.acceptanceEvidence.counts : undefined
+  return report && 'reportVersion' in report && report.reportVersion === 3 ? report.validation.unitTests : undefined
 }
-/// 已修复闸只读取明确单元测试结果，硬件/截图/人工剩余项不阻断。
+/// 不适用是显式合同分支，不从零计数或自然语言推断。
+export function isNotApplicable(tests: UnitTestResult | undefined): tests is NotApplicableTests {
+  return !!tests && 'applicability' in tests && tests.applicability === 'not_applicable'
+}
+/// 不适用的替代检查必须全部实际通过，且仍需用户明确确认。
+export function repairRequiresNAConfirmation(report: RepairReport | undefined): boolean { return isNotApplicable(repairAcceptance(report)) }
+/// 统一短验收描述；证据不可读取不等于没有测试结果。
+export function repairValidationSummary(report: RepairReport | undefined): string {
+  if (report?.acceptanceEvidence?.state === 'pending') return '验收状态：测试证据待核对'
+  const tests = repairAcceptance(report)
+  if (isNotApplicable(tests)) return `验收状态：无需单元测试，检查${tests.checks.length > 0 && tests.checks.every(check=>check.status === 'passed' && check.evidence.length > 0) ? '已完成' : '未完成'}`
+  if (!tests || tests.total === 0) return '验收状态：暂无单元测试结果'
+  return `验收状态：${tests.passed}/${tests.total}项验证已通过`
+}
+/// 已修复闸读取明确测试或替代检查；硬件/截图/人工剩余项不阻断。
 export function repairCompletionBlocker(report: RepairReport | undefined): string {
-  if (!report || !('reportVersion' in report) || report.reportVersion !== 3) return repairValidationSummary(report)
+  if (!report || !('reportVersion' in report)) return repairValidationSummary(report)
   if (report.repair.state !== 'fixed') return '代码修复尚未完成，不能更新为已修复。'
-  const tests = report.validation.unitTests
-  if (tests.status !== 'passed' || !Number.isSafeInteger(tests.total) || tests.total <= 0 || tests.passed !== tests.total || tests.failed !== 0 || tests.skipped !== 0 || tests.notRun !== 0) return repairValidationSummary(report)
+  const tests = repairAcceptance(report)
+  if (isNotApplicable(tests)) return tests.reason.trim() && tests.checks.length > 0 && tests.checks.every(check=>check.status === 'passed' && check.evidence.length > 0) ? '' : repairValidationSummary(report)
+  if (!tests || tests.status !== 'passed' || !Number.isSafeInteger(tests.total) || tests.total <= 0 || tests.passed !== tests.total || tests.failed !== 0 || tests.skipped !== 0 || tests.notRun !== 0) return repairValidationSummary(report)
   return ''
 }
 /// 列表只呈现明确字段，历史摘要不用于推断工作区或完成维度。

@@ -131,8 +131,11 @@ select {
 textarea {
   resize: vertical;
 }
-/* 三项说明保留三行、滚动与拖拽，仅收紧该输入框留白。 */
+/* 默认容纳三项简短说明；长文可滚动，也可手动拉高。 */
 .repair-summary textarea {
+  height: 200px;
+  min-height: 120px;
+  overflow-y: auto;
   padding: 6px 8px;
 }
 .field {

@@ -1,6 +1,7 @@
+import { evidenceFixture } from './fixtures/repair-evidence.ts'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Workbench } from '../src/service.ts'
@@ -9,10 +10,10 @@ import { RepairActions } from '../src/repair-actions.ts'
 import { StatusJournal, StatusWorkflow } from '../src/status-update.ts'
 import { OrcaCli } from '../src/adapters/orca-cli.ts'
 import { statusPath } from '../src/domain/status-path.ts'
-import type { StructuredRepairReport } from '../src/domain/repair-report.ts'
+import type { RepairReport, StructuredRepairReport } from '../src/domain/repair-report.ts'
 
 const report: StructuredRepairReport={reportVersion:3,reportSequence:1,rootCause:'根因',solution:'解决方法',impact:'影响范围',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向验收通过',remaining:[],evidence:['fixture passed'],unitTests:{status:'passed',passed:3,failed:0,skipped:0,notRun:0,total:3}},delivery:{state:'uncommitted',note:'未提交未合并'},sourceIdentity:'HEAD fixture patch fixture'}
-async function fixture(t:{after(fn:()=>Promise<void>):void}){
+async function fixture(t:{after(fn:()=>Promise<void>):void},project: (report: RepairReport)=>Promise<RepairReport | undefined> = async report=>report){
   const root=await mkdtemp(join(tmpdir(),'ones-business-'))
   t.after(()=>rm(root,{recursive:true,force:true}))
   const names:Record<string,string>={pending:'待处理',confirmed:'确认',repairing:'修复中',done:'已修复'}
@@ -60,7 +61,7 @@ async function fixture(t:{after(fn:()=>Promise<void>):void}){
   }
   const repair=new RepairWorkflow(service,store,new CLI(),join(root,'repairs'))
   const journal=new StatusJournal(join(root,'status'))
-  const create=()=>new StatusWorkflow(id=>service.transitionContext(id),journal,true,async()=>state.report)
+  const create=()=>new StatusWorkflow(id=>service.transitionContext(id),journal,true,async()=>project(state.report))
   const statuses=create(),actions=new RepairActions(repair,statuses)
   const detail=await service.bugDetail('team','bug')
   const input=async()=>{
@@ -264,4 +265,38 @@ test('completion business: zero failed skipped and not-run unit tests cause zero
     await assert.rejects(f.statuses.businessPreview({detailId:f.detail.detailId,goal:'已修复',fields:{'finish-action':{}},comment:'已经全部完成'}),/验收状态/)
     assert.deepEqual(f.state.writes,[])
   }
+})
+
+/// 不适用必须独立人工确认，评论不能代替；替代检查失败仍零写。
+test('acceptance business: N/A completed checks require explicit confirmation and failed checks block',async t=>{
+  const f=await fixture(t)
+  f.state.status='repairing';f.state.version++
+  f.state.report.validation.unitTests={applicability:'not_applicable',reason:'仅调整提示文案，不涉及逻辑',checks:[{name:'文案与差异检查',status:'passed',evidence:['fixture review passed']}]}
+  const input={detailId:f.detail.detailId,goal:'已修复' as const,fields:{'finish-action':{}},comment:'三项说明'}
+  assert.equal((await f.statuses.businessOptions(f.detail.detailId,'已修复')).noUnitTestsConfirmationRequired,true)
+  await assert.rejects(f.statuses.businessPreview(input),/明确确认/)
+  assert.deepEqual(f.state.writes,[])
+  const preview=await f.statuses.businessPreview({...input,noUnitTestsConfirmed:true})
+  assert.equal((await f.statuses.businessSubmit(preview.id,true)).state,'verified')
+  const g=await fixture(t)
+  g.state.status='repairing';g.state.version++
+  g.state.report.validation.unitTests={applicability:'not_applicable',reason:'仅提示文案',checks:[{name:'文案检查',status:'failed',evidence:['fixture failed']}]}
+  await assert.rejects(g.statuses.businessPreview({...input,detailId:g.detail.detailId,noUnitTestsConfirmed:true}),/检查未完成/)
+  assert.deepEqual(g.state.writes,[])
+})
+/// 旧回执通过同一投影进入真实业务路径；证据改变后旧确认立即失效。
+test('acceptance business: legacy artifact projection permits submit but changed artifact invalidates preview',async t=>{
+  const e=await evidenceFixture();t.after(e.close)
+  const f=await fixture(t,report=>e.projector.project(report))
+  f.state.status='repairing';f.state.version++
+  f.state.report=e.report as unknown as StructuredRepairReport
+  const input={detailId:f.detail.detailId,goal:'已修复' as const,fields:{'finish-action':{}},comment:'根本原因：虚构原因'}
+  const options=await f.statuses.businessOptions(f.detail.detailId,'已修复')
+  assert.equal(options.validationSummary,'验收状态：3/3项验证已通过')
+  const preview=await f.statuses.businessPreview(input)
+  await writeFile(join(e.directory,'test-summary.json'),JSON.stringify({...e.summary,observation:'changed'}),{mode:0o600})
+  await assert.rejects(f.statuses.businessSubmit(preview.id,true),/回执已变化/)
+  assert.deepEqual(f.state.writes,[])
+  const fresh=await f.statuses.businessPreview(input)
+  assert.equal((await f.statuses.businessSubmit(fresh.id,true)).state,'verified')
 })

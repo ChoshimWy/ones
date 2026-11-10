@@ -49,7 +49,43 @@ try{
     else await page.screenshot({path:join(output,name+'.png'),fullPage:true})
   }
   const api={evaluate:expression=>page.evaluate(expression),wait:async expression=>{try{return await page.waitForFunction(expression)}catch(error){console.log(JSON.stringify({waiting:expression,body:await page.locator('body').innerText(),errors}));throw error}},screenshot,press:key=>page.keyboard.press(key)}
-  if(process.env.ONES_JOURNEY==='unit-list'){
+  if(process.env.ONES_JOURNEY==='acceptance'){
+    for(const mode of ['legacy','na-pending','na-passed']){
+      await page.evaluate(mode=>orca.host.call('plugin.request',{name:'fixture.report-mode',input:{mode}}),mode)
+      if(mode==='legacy')await page.locator('button.bug-item').first().click()
+      else await page.getByRole('button',{name:'刷新详情',exact:true}).click()
+      await page.getByRole('button',{name:'更新状态',exact:true}).click()
+      const message=mode==='legacy'?'验收状态：3/3项验证已通过':mode==='na-passed'?'验收状态：无需单元测试，检查已完成':'验收状态：无需单元测试，检查未完成'
+      await page.getByText(message,{exact:true}).waitFor()
+      const preview=page.getByRole('button',{name:'预览状态更新',exact:true})
+      if(mode==='legacy'){
+        assert.equal(await preview.isEnabled(),true)
+        await page.getByText('验收依据',{exact:true}).click()
+        await page.getByText('受管历史测试证据，仅对应报告引用的交付前源码；不表示合并后的 HEAD 已重新测试。',{exact:true}).waitFor()
+      }else{
+        assert.equal(await preview.isDisabled(),true)
+        const confirmation=page.getByRole('checkbox',{name:'我确认本次无需单元测试，替代检查已完成',exact:true})
+        if(mode==='na-pending')assert.equal(await confirmation.isDisabled(),true)
+        else{
+          await confirmation.check()
+          assert.equal(await preview.isEnabled(),true)
+          await page.getByText('替代检查记录',{exact:true}).click()
+          await page.getByText('文案与差异检查：passed',{exact:true}).waitFor()
+        }
+      }
+      await screenshot('completion-acceptance-'+mode+'-360','light',360)
+      await screenshot('completion-acceptance-'+mode+'-460','dark',460)
+      if(mode!=='na-pending'){
+        await page.getByLabel('完成修复 · 根因 *（必填）',{exact:true}).selectOption('logic')
+        await preview.click()
+        await page.locator('[data-status-preview]').waitFor()
+      }
+    }
+    assert.deepEqual(errors,[])
+    const evidence={environment:'Production HTML and helpers + fictional Worker, no live mutation',checks:['legacy artifact counts visible with pre-delivery scope','N/A unfinished disables confirmation and preview','N/A completed requires explicit checkbox','alternative checks visible and original three-item comment retained','360/460px no horizontal overflow'],pageErrors:errors}
+    await writeFile(join(output,'acceptance-ui-evidence.json'),JSON.stringify(evidence,null,2))
+    console.log(JSON.stringify(evidence,null,2))
+  }else if(process.env.ONES_JOURNEY==='unit-list'){
     await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true}}))
     await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.report-mode',input:{mode:'passed'}}))
     await page.getByRole('tab',{name:'实施',exact:true}).click()
@@ -137,6 +173,16 @@ try{
     const comment=page.getByLabel('修复说明（三项，可编辑）',{exact:true})
     const expected='根本原因：\n列表还在显示旧内容。\n\n解决方法：\n刷新后重新读取最新内容。\n\n影响范围：\n影响列表和状态更新。'
     assert.equal(await comment.inputValue(),expected)
+    const sizing=await comment.evaluate(field=>({height:field.getBoundingClientRect().height,resize:getComputedStyle(field).resize}))
+    assert.equal(sizing.height,200)
+    assert.equal(sizing.resize,'vertical')
+    await comment.fill('长说明。'.repeat(500))
+    assert.ok(await comment.evaluate(field=>field.scrollHeight>field.clientHeight))
+    await comment.fill(expected)
+    for(const width of [360,460]){
+      await page.setViewportSize({width,height:1100})
+      await page.locator('.repair-summary').screenshot({path:join(output,`summary-input-${width}.png`)})
+    }
     await page.getByLabel('完成修复 · 根因 *（必填）',{exact:true}).selectOption('logic')
     await page.getByRole('button',{name:'预览状态更新',exact:true}).click()
     const preview=page.locator('[data-status-preview]')
