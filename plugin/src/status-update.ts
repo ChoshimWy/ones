@@ -1,9 +1,9 @@
 import { statusPath, type StatusGoal, type StatusRoute } from './domain/status-path.ts'
 import { repairComment, repairCompletionBlocker, repairValidationSummary, repairRequiresNAConfirmation, repairAcceptance, type RepairReport } from './domain/repair-report.ts'
 import { createHash, randomUUID, randomInt } from 'node:crypto'
-import { mkdir, lstat, readFile, open, rename, unlink } from 'node:fs/promises'
+import { lstat, readFile, open, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
+import { privateDataRoot, ensurePrivateDirectory, assertPrivatePath, syncDirectory } from './private-files.ts'
 import { id, record, requireThat, type Task } from './domain/model.ts'
 import { transitionIntent, transitionVerified, type OnesTransitions, type TransitionInput, type TransitionIntent, type TransitionSnapshot, type TransitionEvidence } from './adapters/ones-transitions.ts'
 
@@ -31,21 +31,20 @@ type BusinessPlan = { view: BusinessPreview; detailId: string; scope: string; sn
 /// 本机单任务锁及原子账本；崩溃残留锁不自动删除，仍允许只读核对。
 export class StatusJournal {
   /// 默认目录与修复记录隔离；测试可注入临时目录。
-  constructor(private root = join(homedir(), 'Library', 'Application Support', 'ones-workbench', 'status-updates')) {}
+  constructor(private root = join(privateDataRoot(), 'status-updates')) {}
   /// 对身份和任务进行不可逆路径编码，外部标识不成为任意路径。
   private key(scope: string, taskId: string): string { return createHash('sha256').update(JSON.stringify([scope, taskId])).digest('hex') }
   /// 要求资料目录仅当前用户可读写，不声称加密。
   private async ensure(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const st = await lstat(this.root)
-    requireThat(st.isDirectory() && !st.isSymbolicLink() && (st.mode & 0o077) === 0 && st.uid === process.getuid?.(), 'storage', '状态账本目录权限不安全。')
+    await ensurePrivateDirectory(this.root, '状态账本目录权限不安全。')
   }
   /// 读取失败或损坏必须阻断新写入，不能当成没有记录。
   async read(scope: string, taskId: string): Promise<StatusOperation | null> {
     await this.ensure()
     try {
       const file = join(this.root, this.key(scope, taskId) + '.json'), st = await lstat(file)
-      requireThat(st.isFile() && !st.isSymbolicLink() && st.size <= 100000 && (st.mode & 0o077) === 0, 'storage', '状态操作记录不可安全读取。')
+      await assertPrivatePath(file, 'file', '状态操作记录不可安全读取。')
+      requireThat(st.size <= 100000, 'storage', '状态操作记录不可安全读取。')
       const value = record(JSON.parse(await readFile(file, 'utf8')))
       requireThat(value.scope === scope && value.taskId === taskId && ['submitting', 'unknown', 'verified'].includes(String(value.state)), 'storage', '状态操作记录损坏。')
       id(value.id)
@@ -91,8 +90,7 @@ export class StatusJournal {
     const file = await open(temporary, 'wx', 0o600)
     try { await file.writeFile(JSON.stringify(value)); await file.sync() } finally { await file.close() }
     await rename(temporary, path)
-    const directory = await open(this.root, 'r')
-    try { await directory.sync() } finally { await directory.close() }
+    await syncDirectory(this.root)
   }
 }
 /// 状态预览、单次提交与核对流程；不订阅会话、不修改 Bug 描述。

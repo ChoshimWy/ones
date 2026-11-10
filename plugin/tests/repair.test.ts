@@ -13,6 +13,7 @@ import { OrcaCli, launchReceipt } from '../src/adapters/orca-cli.ts'
 import { allPages, mediaIds, repairPrompt, type CompleteBug } from '../src/domain/repair-content.ts'
 import { AppError } from '../src/domain/model.ts'
 import { RepairWorkflow } from '../src/repair.ts'
+import { assertPrivatePath, ensurePrivateDirectory } from '../src/private-files.ts'
 import type { Workbench } from '../src/service.ts'
 const bug: CompleteBug = {
   task: { id: 'bug', number: 1, name: '虚构缺陷', project: { id: 'source', name: 'Fixture Project 【TEST】' }, issueType: { id: 'bug-type', name: '缺陷' }, status: { id: 'pending', name: '待处理' } },
@@ -81,6 +82,7 @@ test('repair CLI: recognizes actual chat and journaled prompt, never treats term
 })
 async function fixture(evidence = new RepairEvidence()) {
   const root = await mkdtemp(join(tmpdir(), 'ones-repair-test-'))
+  await ensurePrivateDirectory(root, 'private test root')
   let launches = 0, collected = 0, changed = false, broken = false, response: Record<string, unknown> | Error = success
   let sent = '', protocolCollision = false
   const data = new Map<string, unknown>()
@@ -107,7 +109,7 @@ async function fixture(evidence = new RepairEvidence()) {
       const path = JSON.parse(prompt.split('开始前读取插件协议：')[1]!.split('。\n')[0]!)
       const instructions = await readFile(path,'utf8')
       assert.ok(instructions.startsWith('# 执行与回执协议'))
-      assert.equal((await stat(path)).mode & 0o777,0o600)
+      await assertPrivatePath(path, 'file', 'receipt instructions must be private')
       launches++; sent = prompt
       if (response instanceof Error) throw response
       return response
@@ -127,7 +129,7 @@ test('repair workflow: persists scoped mapping, readable private media and sessi
     const result = await f.start(plan.id)
     assert.equal(result.state, 'sent'); assert.equal(result.sessionId, 'session-fixture')
     assert.equal(await readFile(join(result.directory!, '1.png'), 'utf8'), 'abc')
-    assert.equal((await stat(join(result.directory!, '1.png'))).mode & 0o777, 0o600)
+    await assertPrivatePath(join(result.directory!, '1.png'), 'file', 'media must be private')
     assert.ok(f.sent.includes('完整评论')); assert.equal(f.data.size, 1)
     const restored = await f.create().prepare('detail')
     assert.equal(restored.existing?.sessionId, 'session-fixture')
@@ -301,7 +303,7 @@ test('repair receipt instructions: private complete contract, short prompt and c
     const path=join(result.directory!,'receipt-instructions.md')
     const protocol=await readFile(path,'utf8')
     const template=JSON.parse(protocol.split('字段须严格为：')[1]!.split('\n')[0]!)
-    assert.equal((await stat(path)).mode & 0o777,0o600)
+    await assertPrivatePath(path, 'file', 'receipt instructions must be private')
     assert.equal(template.reportVersion,3)
     assert.equal(template.reportSequence,1)
     assert.deepEqual(template.validation.unitTests,{status:'not_run',passed:0,failed:0,skipped:0,notRun:0,total:0})

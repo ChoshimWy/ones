@@ -2,7 +2,7 @@ import { RepairEvidence } from './repair-evidence.ts'
 import { RepairCache, type CachedRepairs, type RepairReport } from './repair-cache.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, writeFile, rename, rm, lstat, mkdtemp } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { privateDataRoot, ensurePrivateDirectory, assertPrivatePath, syncDirectory } from './private-files.ts'
 import { join } from 'node:path'
 import { OrcaCli, launchReceipt, type LaunchReceipt } from './adapters/orca-cli.ts'
 import { mediaIds, repairPrompt, repairInstructions } from './domain/repair-content.ts'
@@ -26,14 +26,12 @@ export class RepairWorkflow {
     private service: Pick<Workbench, 'repairContext' | 'collectRepair'>,
     private store: Store,
     private cli = new OrcaCli(),
-    private root = join(homedir(), 'Library', 'Application Support', 'ones-workbench', 'repairs'),
+    private root = join(privateDataRoot(), 'repairs'),
     private evidence = new RepairEvidence()
   ) { this.cache = new RepairCache(root + '-cache',evidence) }
   private key(scope: string, taskId: string) { return digest([scope, taskId]) }
   private async ensureRoot() {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const st = await lstat(this.root)
-    requireThat(st.isDirectory() && !st.isSymbolicLink() && (st.mode & 0o077) === 0 && st.uid === process.getuid?.(), 'storage', '修复资料目录权限不安全。')
+    await ensurePrivateDirectory(this.root, '修复资料目录权限不安全。')
   }
   private async existing(key: string): Promise<RepairRecord | null> {
     try {
@@ -49,8 +47,7 @@ export class RepairWorkflow {
   }
   private async hasRoot(): Promise<boolean> {
     try {
-      const st = await lstat(this.root)
-      requireThat(st.isDirectory() && !st.isSymbolicLink() && (st.mode & 0o077) === 0 && st.uid === process.getuid?.(), 'storage', '修复资料目录权限不安全。')
+      await assertPrivatePath(this.root, 'directory', '修复资料目录权限不安全。')
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
       throw error
@@ -243,10 +240,8 @@ export class RepairWorkflow {
         await instructions.writeFile(repairInstructions(contract))
         await instructions.sync()
       } finally { await instructions.close() }
-      const directoryHandle = await open(directory, 'r')
-      try { await directoryHandle.sync() } finally { await directoryHandle.close() }
-      const instructionsStat = await lstat(instructionsFile)
-      requireThat(instructionsStat.isFile() && !instructionsStat.isSymbolicLink() && (instructionsStat.mode & 0o777) === 0o600, 'storage', '回执协议文件权限不安全，未启动。')
+      await syncDirectory(directory)
+      await assertPrivatePath(instructionsFile, 'file', '回执协议文件权限不安全，未启动。')
       const prompt = repairPrompt(source.bug, files, instructionsFile)
       await source.validate()
       requireThat(!hook || source.bug.task.status.id === hook.targetStatus, 'stale', 'Agent 启动前 Bug 已不处于已确认的修复中状态，未启动。')
@@ -282,7 +277,6 @@ export class RepairWorkflow {
     await this.syncRoot()
   }
   private async syncRoot() {
-    const directory = await open(this.root, 'r')
-    try { await directory.sync() } finally { await directory.close() }
+    await syncDirectory(this.root)
   }
 }
