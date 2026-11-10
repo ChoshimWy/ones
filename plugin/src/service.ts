@@ -201,6 +201,17 @@ export class Workbench {
     requireThat(identity === this.identity(), 'stale', '账号已变化，请重新读取项目筛选。')
     return { localProject, project: filterProject(localProject, candidates, bindings) }
   }
+  /// 本地缓存只绑定仍有效的登录身份；首屏不联网，所有远端动作另外鉴权。
+  async repairCacheContext(team: string, signal?: AbortSignal) {
+    await this.ready
+    const identity = this.identity(), client = this.ones(team)
+    const check = () => {
+      signal?.throwIfAborted()
+      requireThat(identity === this.identity(), 'stale', '账号已变化，请重新读取执行记录。')
+      this.ones(team)
+    }
+    return { scope: this.scope(client), check }
+  }
   async repairListContext(team: string, signal?: AbortSignal) {
     await this.ready
     const identity = this.identity(), client = this.ones(team)
@@ -209,12 +220,19 @@ export class Workbench {
       requireThat(identity === this.identity(), 'stale', '账号已变化，请重新读取执行记录。')
     }
     await client.assertIdentity(signal)
+    const reader = await client.repairReader(signal)
     check()
     return {
       scope: this.scope(client), check,
+      readTask: async (taskId: string) => {
+        check()
+        const task = await reader.task(taskId)
+        check()
+        return task
+      },
       readPage: async (after: string) => {
         check()
-        const page = await client.bugs(after, signal)
+        const page = await reader.page(after)
         check()
         return page
       }

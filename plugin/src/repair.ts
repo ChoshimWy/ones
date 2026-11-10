@@ -1,3 +1,4 @@
+import { RepairCache, type CachedRepairs, type RepairReport } from './repair-cache.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, writeFile, rename, rm, lstat, mkdtemp } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -5,11 +6,11 @@ import { join } from 'node:path'
 import { OrcaCli, launchReceipt, type LaunchReceipt } from './adapters/orca-cli.ts'
 import { mediaIds, repairPrompt } from './domain/repair-content.ts'
 import { resolveProjectMapping, projectMappingKey, type MappingResult, type ProjectMapping } from './domain/project-mapping.ts'
-import { requireThat, record, type Option, type Task } from './domain/model.ts'
+import { AppError, requireThat, record, type Option, type Task } from './domain/model.ts'
 import type { Store, Workbench } from './service.ts'
 
 export type RepairRecord = LaunchReceipt & { projectName: string; projectId: string; createdAt: number; directory?: string }
-export type RepairListItem = { task: Task; record: RepairRecord }
+export type RepairListItem = { task: Task; record: RepairRecord; report?: RepairReport; reportError?: string }
 export type RepairPreparation = { id: string; mapping: MappingResult; existing: RepairRecord | null }
 type Plan = { detailId: string; scope: string; taskId: string; source: Option; mapping: MappingResult; projects: Option[]; expires: number }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -18,12 +19,14 @@ const extension: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'j
 /** Durable no-resend journal. Unknown outcomes intentionally require human reconciliation. */
 export class RepairWorkflow {
   private plans = new Map<string, Plan>()
+  private cache: RepairCache
+  private syncing = new Map<string, Promise<CachedRepairs>>()
   constructor(
     private service: Pick<Workbench, 'repairContext' | 'collectRepair'>,
     private store: Store,
     private cli = new OrcaCli(),
     private root = join(homedir(), 'Library', 'Application Support', 'ones-workbench', 'repairs')
-  ) {}
+  ) { this.cache = new RepairCache(root + '-cache') }
   private key(scope: string, taskId: string) { return digest([scope, taskId]) }
   private async ensureRoot() {
     await mkdir(this.root, { recursive: true, mode: 0o700 })
@@ -57,7 +60,7 @@ export class RepairWorkflow {
     if (!await this.hasRoot()) return null
     return this.existing(this.key(context.scope, context.task.id))
   }
-  async list(context: Awaited<ReturnType<Workbench['repairListContext']>>): Promise<RepairListItem[]> {
+  async list(context: Pick<Awaited<ReturnType<Workbench['repairListContext']>>, 'scope' | 'check' | 'readPage'>): Promise<RepairListItem[]> {
     context.check()
     if (!await this.hasRoot()) { context.check(); return [] }
     const items: RepairListItem[] = [], cursors = new Set<string>(), tasks = new Set<string>()
@@ -81,6 +84,47 @@ export class RepairWorkflow {
       cursors.add(page.nextCursor)
       after = page.nextCursor
     }
+  }
+  /// 首屏仅访问本地；顺带接收插件关闭期间完成的回执。
+  async cached(context: Awaited<ReturnType<Workbench['repairCacheContext']>>): Promise<CachedRepairs> {
+    context.check()
+    await this.cache.consume(context.scope, context.check)
+    const result = await this.cache.read(context.scope)
+    context.check()
+    return result
+  }
+  /// 合并同 scope 同步；网络快照只在完整成功后发布，每日对账恢复旧账本。
+  async sync(context: Awaited<ReturnType<Workbench['repairCacheContext']>>, online: () => Promise<Awaited<ReturnType<Workbench['repairListContext']>>>): Promise<CachedRepairs> {
+    let pending = this.syncing.get(context.scope)
+    if (!pending) {
+      pending = (async () => {
+        const fresh = await online()
+        context.check()
+        requireThat(fresh.scope === context.scope, 'identity', '同步账号已变化，未写入缓存。')
+        const prior = await this.cache.read(context.scope)
+        const reconcile = !prior.reconciledAt || Date.now() - prior.reconciledAt > 86400000
+        const items: RepairListItem[] = []
+        if (reconcile) items.push(...await this.list(fresh))
+        else for (const item of await this.cache.targets(context.scope)) {
+          fresh.check()
+          const task = await fresh.readTask(item.task.id)
+          if (task) {
+            const receipt = await this.existing(this.key(fresh.scope, task.id))
+            if (receipt) items.push({ task, record: receipt })
+          }
+        }
+        await this.cache.publish(context.scope, items, reconcile, fresh.check, prior.version)
+        return this.cached(fresh)
+      })().catch(async error => {
+        if (error instanceof AppError && ['auth','forbidden','identity'].includes(error.code)) await this.cache.revoke(context.scope)
+        throw error
+      })
+      this.syncing.set(context.scope, pending)
+      void pending.finally(() => { if (this.syncing.get(context.scope) === pending) this.syncing.delete(context.scope) }).catch(() => {})
+    }
+    const result = await pending
+    context.check()
+    return result
   }
   async prepare(detailId: string): Promise<RepairPreparation> {
     const context = await this.service.repairContext(detailId)
@@ -127,6 +171,7 @@ export class RepairWorkflow {
     try { await reservation.writeFile(JSON.stringify(receipt)); await reservation.sync() }
     finally { await reservation.close() }
     await this.syncRoot()
+    let registered = false
     let attempted = false, directory: string | undefined, source: Awaited<ReturnType<Workbench['collectRepair']>> | undefined
     try {
       source = await this.service.collectRepair(plan.detailId)
@@ -153,7 +198,10 @@ export class RepairWorkflow {
         await writeFile(file, Buffer.concat(chunks), { mode: 0o600, flag: 'wx' })
         files.set(resource, file)
       }
-      const prompt = repairPrompt(source.bug, files)
+      const revision = digest(source.bug)
+      const contract = await this.cache.register(plan.scope, source.bug.task, receipt, revision, directory)
+      registered = true
+      const prompt = repairPrompt(source.bug, files, contract)
       await source.validate()
       const currentTarget = await this.cli.target(fresh)
       requireThat(JSON.stringify(currentTarget) === JSON.stringify(target), 'stale', '项目执行目录已变化。')
@@ -166,11 +214,13 @@ export class RepairWorkflow {
       try { Object.assign(receipt, launchReceipt(await this.cli.launch(target, input.agent, prompt))) }
       catch { receipt.state = 'unknown' }
       await this.persist(journal, receipt)
+      await this.cache.launched(plan.scope, plan.taskId, receipt)
       return receipt
     } finally {
       source?.dispose()
       this.plans.delete(input.preparationId)
       if (!attempted) {
+        if (registered) await this.cache.abandon(plan.scope, plan.taskId)
         if (directory) await rm(directory, { recursive: true, force: true })
         await rm(journal, { force: true })
       }

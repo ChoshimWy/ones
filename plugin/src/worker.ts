@@ -35,7 +35,8 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
   orca.panels.handle('bugs.projectFilter', input => answer(async () =>
     service.projectFilter(input.team, await focusedProject.current(), input.projects)))
-  orca.panels.handle('repair.list', (input, context) => answer(async () => repair.list(await service.repairListContext(input.team, context.signal))))
+  orca.panels.handle('repair.cache', (input, context) => answer(async () => repair.cached(await service.repairCacheContext(input.team, context.signal))))
+  orca.panels.handle('repair.sync', (input, context) => answer(async () => repair.sync(await service.repairCacheContext(input.team, context.signal), () => service.repairListContext(input.team))))
   orca.panels.handle('repair.read', input => answer(() => repair.read(input.detailId)))
   orca.panels.handle('repair.prepare', input => answer(() => repair.prepare(input.detailId)))
   orca.panels.handle('repair.start', input => answer(() => repair.start(input)))

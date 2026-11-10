@@ -78,6 +78,21 @@ export class OnesClient {
       return status
     })
   }
+  /// 一个同步周期仅解析一次缺陷类型；定向查询同时约束负责人和类型。
+  async repairReader(signal?: AbortSignal) {
+    const type = await this.bugType(signal)
+    return {
+      page: (after: string) => this.assignedTaskPage(after, signal, type.id),
+      task: async (taskId: string): Promise<Task | null> => {
+        const data = await this.graph(`query PluginRepairTask($filter: Filter){tasks(filter:$filter,limit:2){${TASK_FIELDS}}}`, { filter: { uuid_equal: id(taskId), assign_in: [this.session.userId], issueType_in: [type.id] } }, 'Task', signal)
+        requireThat(Array.isArray(data.tasks) && data.tasks.length <= 1, 'partial', '定向缺陷响应不完整。')
+        if (!data.tasks.length) return null
+        const task = parseTask(data.tasks[0])
+        requireThat(task.id === taskId && task.issueType.id === type.id, 'identity', '定向缺陷身份不匹配。')
+        return task
+      }
+    }
+  }
   async bugs(after = '', signal?: AbortSignal): Promise<TaskPage> {
     const type = await this.bugType(signal)
     return this.assignedTaskPage(after, signal, type.id)

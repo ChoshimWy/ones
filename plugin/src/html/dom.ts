@@ -1,7 +1,10 @@
 import type { Answer } from '../protocol.ts'
 import type { JsonValue } from 'orca/host'
 
-export class UIError extends Error {}
+export class UIError extends Error {
+  /// 保留业务错误码，身份失效时不得继续展示私有缓存。
+  constructor(message: string, readonly code?: string) { super(message) }
+}
 export async function request<T>(name: string, input?: unknown, signal?: AbortSignal): Promise<T> {
   signal?.throwIfAborted()
   const response = await orca.host.call(
@@ -15,7 +18,7 @@ export async function request<T>(name: string, input?: unknown, signal?: AbortSi
   )
   signal?.throwIfAborted()
   const result = response.output as Answer<T>
-  if (!result.ok) throw new UIError(result.error.message)
+  if (!result.ok) throw new UIError(result.error.message, result.error.code)
   return result.value
 }
 export function message(error: unknown): string {

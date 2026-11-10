@@ -343,3 +343,24 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 以上实写使用源码指纹 `78f4fae93f50f1ea56c73bacb81009ff70af3ba31ab48318602c5cc605818baf`；随后仅文档/注释收口，复用有效行为证据，没有额外 mutation 或重跑既有测试。真实操作只按当前允许工作流执行，没有直接写 status_uuid、没有重放先前已修复样本。
 
 结论：正式 CLI handler → Worker → Adapter/API → 独立回读通过；fixture UI 的表单/预览/防重/刷新与截图通过。**没有宣称真实人工点击 UI 到服务端整链通过**，亦未用 fixture 证明真实异常恢复。异步 `none` 仍不是后置完成；其它项目/schema、真实网络失败/崩溃恢复、跨平台仍未验证。状态写闸只开放 Adapter 明确支持的步骤，工时及其它 Bug 写入继续关闭。
+
+
+## 2026-11-10 缓存与回执定向验证
+
+环境：安装版 Orca 的 Node 24.22.1 实测可加载 `node:sqlite` 并读取 SQLite 3.53.4；源码测试运行于本机 Node 26.0.0，复用安装版 `orca-test-register.mjs`。不修改真实宿主或 ONES，不运行全量测试。
+
+- `repair-cache.test.ts` + `repair.test.ts`：20/20。覆盖 SQLite 重启/账号隔离、快照/并发 CAS、离线完成与首次回执幂等、旧 run/token/revision、缺验证证据、未知字段、权限/符号链接/容量拒绝、原始修复防重发、缓存首屏零网络、单 scope 合并同步、首次对账后定向刷新、网络失败保留、明确权限拒绝隐藏及转回恢复。
+- `bug-detail-service.test.ts` 仅选择 `repair (cache|list) service`：2/2。覆盖本地 scope 零网络、单次类型读取、分页/定向请求、注销/取消失效。
+- TypeScript 严格检查通过（既有本机 tsc，`--preserveSymlinks false` 与插件生成类型）；`orca plugin validate <task-worktree>/plugin --json` valid=true，无新增 capability。
+- `cache-panel.browser.mjs`：独立无头 Chrome 虚构桥接预览，缓存先于未完成网络显示、30 秒内重入不额外同步、Agent 结果独立标签、失败保留缓存、认证失效清屏、轮询后刷新按钮可用、离页迟到响应不覆盖均通过，pageErrors=[]。这不是正式 Orca Worker/真实 ONES/真实 Agent 的端到端通过。
+- 首轮原 prompt 精确前缀测试因新增外部数据边界失败，更新对应合同断言后通过。预览默认 Playwright 浏览器缺失，未下载，显式复用已安装 Google Chrome 的隔离临时 profile 后通过。
+
+视觉：已实际打开检查最终 360×1000 深浅色缓存加载、Agent 完成报告与失败保留缓存截图。标题、状态、长路径、按钮正常换行，无横向溢出、遮挡或截断。加载图中的 1970 日期为刻意过期的虚构缓存时间，不是用户数据。
+
+证据位于本机临时 scratch，可能被清理：
+- [缓存先显示](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/cache-receipts/cache-first-light.png>)
+- [完成回执深色窄屏](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/cache-receipts/receipt-dark-narrow.png>)
+- [同步失败保留缓存](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/cache-receipts/sync-failed-cache.png>)
+- 同目录 `browser-evidence.json` 保存旅程判据。
+
+复现：`ONES_TOOLING=<已安装 Orca tooling checkout> ONES_BROWSER=<现有 Chrome executable> ONES_EVIDENCE=<证据目录> node plugin/tests/cache-panel.browser.mjs`。真实部署、真实接口更新/时延、Agent 沙箱对 result.json 的实际写权限，以及证据内容的独立核验尚未覆盖。

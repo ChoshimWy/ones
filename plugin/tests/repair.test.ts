@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { OrcaCli, launchReceipt } from '../src/adapters/orca-cli.ts'
 import { allPages, mediaIds, repairPrompt, type CompleteBug } from '../src/domain/repair-content.ts'
+import { AppError } from '../src/domain/model.ts'
 import { RepairWorkflow } from '../src/repair.ts'
 import type { Workbench } from '../src/service.ts'
 const bug: CompleteBug = {
@@ -31,7 +32,8 @@ test('repair content: collects all pages including empty pages, rejects stalled 
 test('repair content: exact prefix, text order, comments and deduplicated local media references', () => {
   assert.deepEqual(mediaIds(bug), ['image', 'video'])
   const prompt = repairPrompt(bug, new Map([['image', '/fixture/1.png'], ['video', '/fixture/2.mp4']]))
-  assert.ok(prompt.startsWith('排查并修复以下内容\n《#1 虚构缺陷'))
+  assert.ok(prompt.startsWith('排查并修复以下内容\n以下原单正文'))
+  assert.ok(prompt.includes('《#1 虚构缺陷'))
   assert.ok(prompt.indexOf('完整描述') < prompt.indexOf('完整评论'))
   assert.ok(prompt.includes('/fixture/2.mp4'))
   assert.ok(prompt.endsWith('附件.png\n本地文件："/fixture/1.png"》'))
@@ -236,4 +238,42 @@ test('repair list: fails closed on corrupt journal, stalled pagination and inval
     await assert.rejects(f.flow.list(context))
     assert.equal(f.launches, 1)
   } finally { await rm(f.root, { recursive: true, force: true }) }
+})
+
+
+test('repair sync: cached first read needs no API, initial reconcile then targeted refresh; failures retain cache and no launches', async () => {
+  const f = await fixture()
+  try {
+    await f.start((await f.flow.prepare('detail')).id)
+    const offline = { scope:'scope', check() {} }
+    assert.equal((await f.flow.cached(offline)).items.length,1)
+    let pages = 0, tasks = 0, verifies = 0, assigned = true
+    const online = async () => {
+      verifies++
+      return { ...offline, readPage: async () => { pages++; return {items:[bug.task],nextCursor:null} }, readTask: async () => { tasks++; return assigned ? {...bug.task,name:'最新标题'} : null } }
+    }
+    const first = await f.flow.sync(offline,online)
+    assert.ok(first.syncedAt)
+    assert.equal(pages,1)
+    const pending = [f.flow.sync(offline,online),f.flow.sync(offline,online)]
+    const second = (await Promise.all(pending))[0]
+    assert.equal(second.items[0].task.name,'最新标题')
+    assert.equal(tasks,1)
+    assert.equal(verifies,2)
+    await assert.rejects(f.flow.sync(offline,async()=>{throw Error('offline')}))
+    assert.equal((await f.flow.cached(offline)).items[0].task.name,'最新标题')
+    assigned = false
+    assert.equal((await f.flow.sync(offline,online)).items.length,0)
+    assigned = true
+    assert.equal((await f.flow.sync(offline,online)).items.length,1)
+    assert.equal(pages,1)
+    assert.equal((await f.flow.cached({...offline,scope:'foreign'})).items.length,0)
+    await assert.rejects(f.flow.sync(offline,async()=>({...await online(),scope:'foreign'})))
+    await f.flow.sync(offline,online)
+    await assert.rejects(f.flow.sync(offline,async()=>{throw new AppError('forbidden','denied')}))
+    assert.equal((await f.flow.cached(offline)).items.length,0)
+    await f.flow.sync(offline,online)
+    assert.equal((await f.flow.cached(offline)).items.length,1)
+    assert.equal(f.launches,1)
+  } finally { await rm(f.root,{recursive:true,force:true}); await rm(f.root+'-cache',{recursive:true,force:true}) }
 })

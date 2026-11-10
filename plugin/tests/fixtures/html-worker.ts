@@ -106,7 +106,14 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (implementationSeeded) repairRecord = { state: 'sent', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794186000000, sessionId: 'session-fixture-only' }
       return {}
     },
-    'repair.list': async () => {
+    'repair.cache': () => {
+      const rows = implementationSeeded ? [
+        { task, record: repairRecord },
+        { task: { ...task, id: 'closed-bug', number: 90, name: '虚构已关闭缺陷', status: { id: 'closed', name: '已关闭' } }, record: { state: 'unknown', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794185000000 } }
+      ] : repairRecord ? [{ task, record: repairRecord }] : []
+      return { items: rows, syncedAt: 1794186000000, reconciledAt: 1794186000000, version: 1 }
+    },
+    'repair.sync': async () => {
       const failed = repairReadFails
       const rows = implementationSeeded ? [
         { task, record: repairRecord },
@@ -114,7 +121,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       ] : repairRecord ? [{ task, record: repairRecord }] : []
       if (implementationDelay) await new Promise(resolve => setTimeout(resolve, implementationDelay))
       if (failed) throw Error('Fixture record list failed')
-      return rows
+      return { items: rows, syncedAt: Date.now(), reconciledAt: Date.now(), version: 2 }
     },
     'repair.read': () => {
       if (repairReadFails) return Promise.reject(Error('Fixture record read failed'))

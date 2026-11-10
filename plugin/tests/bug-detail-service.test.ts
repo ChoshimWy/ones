@@ -212,3 +212,21 @@ test('repair list service: scopes all-status bugs without detail, revokes on log
   await assert.rejects(current.readPage(''));
   await assert.rejects(f.service.repairListContext('team'));
 });
+
+
+test('repair cache service: local scope is network-free, all reads share one type resolution and logout revokes scope', async () => {
+  const f = fixture();
+  const local = await f.service.repairCacheContext('team');
+  assert.equal(f.methods.length, 0);
+  await assert.rejects(f.service.repairCacheContext('foreign'));
+  const remote = await f.service.repairListContext('team');
+  assert.equal(local.scope, remote.scope);
+  const before = f.methods.length;
+  await remote.readPage('');
+  await remote.readPage('next');
+  await remote.readTask('bug');
+  assert.equal(f.methods.length - before, 3);
+  await f.service.logout('ones');
+  assert.throws(local.check);
+  await assert.rejects(f.service.repairCacheContext('team'));
+});

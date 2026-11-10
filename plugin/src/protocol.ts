@@ -1,6 +1,7 @@
+import type { CachedRepairs } from './repair-cache.ts'
 import type { StatusWorkflow, StatusPreview, StatusResult } from './status-update.ts'
 import type { TransitionInput } from './adapters/ones-transitions.ts'
-import type { RepairPreparation, RepairRecord, RepairListItem } from './repair.ts'
+import type { RepairPreparation, RepairRecord } from './repair.ts'
 import type { BugDetail, Discussion, Attachment, DetailPage } from './adapters/bug-details.ts'
 import type { MediaChunk } from './adapters/bug-media.ts'
 import type { Allocation, Attendance, Option, Preview, Site, Status, Task, TaskPage, Worklog } from './domain/model.ts'
@@ -21,7 +22,8 @@ declare module 'orca' {
     'bugs.transitionReconcile': { input: { detailId: string; operationId: string }; output: Answer<StatusResult> }
 
     'bugs.projectFilter': { input: { team: string; projects: Option[] }; output: Answer<{ localProject: Option | null; project: Option | null }> }
-    'repair.list': { input: { team: string }; output: Answer<RepairListItem[]> }
+    'repair.cache': { input: { team: string }; output: Answer<CachedRepairs> }
+    'repair.sync': { input: { team: string }; output: Answer<CachedRepairs> }
     'repair.read': { input: { detailId: string }; output: Answer<RepairRecord | null> }
     'repair.prepare': { input: { detailId: string }; output: Answer<RepairPreparation> }
     'repair.start': { input: { preparationId: string; projectId: string; agent: string; confirmed: boolean }; output: Answer<RepairRecord> }
