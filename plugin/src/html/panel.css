@@ -338,3 +338,24 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
   object-position: left center;
   background: transparent;
 }
+
+/* 与主题前景混色，兼顾深浅底色；保留状态名称，不以颜色代替文字。 */
+.implementation-status {
+  color: var(--orca-muted-foreground);
+  font-weight: 600;
+}
+.implementation-status.status-confirmed {
+  color: color-mix(in srgb, #986be8 65%, var(--orca-foreground));
+}
+.implementation-status.status-repairing {
+  color: color-mix(in srgb, #0080ff 65%, var(--orca-foreground));
+}
+.implementation-status.status-fixed {
+  color: color-mix(in srgb, #159b59 65%, var(--orca-foreground));
+}
+.implementation-status.status-closed {
+  color: color-mix(in srgb, #008d8d 65%, var(--orca-foreground));
+}
+.implementation-status.status-reopened {
+  color: color-mix(in srgb, #d86c00 65%, var(--orca-foreground));
+}

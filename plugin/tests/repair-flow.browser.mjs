@@ -49,7 +49,37 @@ try{
     else await page.screenshot({path:join(output,name+'.png'),fullPage:true})
   }
   const api={evaluate:expression=>page.evaluate(expression),wait:async expression=>{try{return await page.waitForFunction(expression)}catch(error){console.log(JSON.stringify({waiting:expression,body:await page.locator('body').innerText(),errors}));throw error}},screenshot,press:key=>page.keyboard.press(key)}
-  if(process.env.ONES_JOURNEY==='acceptance'){
+  if(process.env.ONES_JOURNEY==='list-status'){
+    const statuses=['待处理','确认','修复中','已修复','已关闭','重新打开','自定义状态']
+    await page.evaluate(statuses=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true,statuses}}),statuses)
+    await page.getByRole('tab',{name:'实施',exact:true}).click()
+    const labels=page.locator('.implementation-status')
+    await labels.last().waitFor()
+    assert.deepEqual(await labels.allTextContents(),statuses.map(name=>'Bug 状态：'+name))
+    // Agent 的代码修复回执不能覆盖 ONES 状态。
+    assert.equal(await page.getByText('已在隔离 Worktree 修复',{exact:true}).count(),7)
+    for(const [mode,width] of [['light',360],['dark',460]]){
+      await screenshot(`implementation-status-${mode}-${width}`,mode,width)
+      const colors=await labels.evaluateAll(items=>items.map(item=>getComputedStyle(item).color))
+      assert.equal(new Set(colors.slice(0,6)).size,6)
+      assert.equal(colors[6],colors[0])
+    }
+    // 刷新以同步的 task 状态为准，失败则保留状态并明确缓存过期。
+    await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true,statuses:['已修复']}}))
+    await page.getByRole('button',{name:'刷新执行记录',exact:true}).click()
+    await page.waitForFunction(()=>document.querySelectorAll('.implementation-status').length===1)
+    assert.equal(await labels.innerText(),'Bug 状态：已修复')
+    await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true,statuses:['已修复'],error:true}}))
+    await page.getByRole('button',{name:'刷新执行记录',exact:true}).click()
+    await page.getByText(/同步失败，当前显示上次缓存/).waitFor()
+    assert.equal(await labels.innerText(),'Bug 状态：已修复')
+    const calls=await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.calls',input:{}}).then(r=>r.output.value.calls))
+    assert.equal(calls.some(name=>['repair.start','bugs.businessSubmit'].includes(name)),false)
+    assert.deepEqual(errors,[])
+    const evidence={environment:'Chrome production HTML + fictional Worker, no live ONES writes',checks:['seven state labels; six distinct semantic colors','unknown state neutral','light 360px / dark 460px without overflow','repair report cannot override Bug status','refresh updates state; sync failure preserves marked cache','no business writes'],pageErrors:errors}
+    await writeFile(join(output,'list-status-evidence.json'),JSON.stringify(evidence,null,2))
+    console.log(JSON.stringify(evidence,null,2))
+  }else if(process.env.ONES_JOURNEY==='acceptance'){
     for(const mode of ['legacy','na-pending','na-passed']){
       await page.evaluate(mode=>orca.host.call('plugin.request',{name:'fixture.report-mode',input:{mode}}),mode)
       if(mode==='legacy')await page.locator('button.bug-item').first().click()

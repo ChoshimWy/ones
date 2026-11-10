@@ -3,6 +3,21 @@ import type { CachedRepairs } from '../repair-cache.ts'
 import type { Task } from '../domain/model.ts'
 import { button, card, el, message, notice, request, row, text, UIError } from './dom.ts'
 
+// 仅用于文字着色；业务状态名称仍使用 ONES 原值，未知状态不猜测。
+const statusTones: Record<string, string> = {
+  '待处理': 'pending',
+  '确认': 'confirmed',
+  '已确认': 'confirmed',
+  '修复中': 'repairing',
+  '已修复': 'fixed',
+  '已关闭': 'closed',
+  '重新打开': 'reopened'
+}
+function bugStatus(task: Task): HTMLElement {
+  const name = task.status.name.trim() || '未知状态'
+  return el('p', `implementation-status status-${statusTones[name] ?? 'unknown'}`, `Bug 状态：${name}`)
+}
+
 /// 缓存首屏与远端同步分离；切页销毁后所有迟到响应失效。
 export class ImplementationView {
   readonly element = el('div', 'stack')
@@ -36,6 +51,7 @@ export class ImplementationView {
       this.failed ? notice(this.status, true) : text(`${this.busy ? '正在同步' : '本地记录'}${data?.syncedAt ? ` · 上次更新 ${new Date(data.syncedAt).toLocaleTimeString()}` : ' · 首次同步中'}`, true),
       ...((data?.items.length ?? 0) ? data!.items.map(({ task, record, report, reportError }) => card(
         `#${task.number} ${task.name}`,
+        bugStatus(task),
         text(report ? repairProgress(report) : record.state === 'sent' ? '已发起 · 等待修复回执' : '启动结果待核实，不会重复发送'),
         text(repairValidationSummary(report), true),
         ...(reportError ? [notice('修复回执更新未接收，请在详情查看。', true)] : []),

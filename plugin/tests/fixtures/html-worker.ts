@@ -65,6 +65,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   let repairManual = false
   let repairRecord: Record<string, unknown> | null = null
   let repairReadFails = false
+  let implementationStatuses: string[] | undefined
   let implementationSeeded = false
   let implementationDelay = 0
   let draft: unknown = null
@@ -118,6 +119,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     'fixture.repair-manual': () => { repairRecord = null; repairManual = true; return { changed: true } },
     'fixture.repair-error': input => { repairReadFails = input.enabled === true; return {} },
     'fixture.implementation': input => {
+      implementationStatuses = Array.isArray(input.statuses) ? input.statuses.map(String) : undefined
       implementationSeeded = input.seeded === true
       implementationDelay = Number(input.delay ?? 0)
       repairReadFails = input.error === true
@@ -125,7 +127,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       return {}
     },
     'repair.cache': () => {
-      const rows = implementationSeeded ? [
+      const rows = implementationStatuses ? implementationStatuses.map((name,index)=>({task:{...task,id:`status-${index}`,number:100+index,name:'虚构状态展示',status:{id:`state-${index}`,name}},record:repairRecord,report:report()})) : implementationSeeded ? [
         { task, record: repairRecord, report: report() },
         { task: { ...task, id: 'closed-bug', number: 90, name: '虚构已关闭缺陷', status: { id: 'closed', name: '已关闭' } }, record: { state: 'unknown', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794185000000 } }
       ] : repairRecord ? [{ task, record: repairRecord, report: report() }] : []
@@ -133,7 +135,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     },
     'repair.sync': async () => {
       const failed = repairReadFails
-      const rows = implementationSeeded ? [
+      const rows = implementationStatuses ? implementationStatuses.map((name,index)=>({task:{...task,id:`status-${index}`,number:100+index,name:'虚构状态展示',status:{id:`state-${index}`,name}},record:repairRecord,report:report()})) : implementationSeeded ? [
         { task, record: repairRecord, report: report() },
         { task: { ...task, id: 'closed-bug', number: 90, name: '虚构已关闭缺陷', status: { id: 'closed', name: '已关闭' } }, record: { state: 'unknown', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794185000000 } }
       ] : repairRecord ? [{ task, record: repairRecord, report: report() }] : []
