@@ -67,7 +67,7 @@ export class RepairView {
       try{
         const value=await request<Awaited<ReturnType<RepairActions['preview']>>>('repair.previewStart',{preparationId:preparation.id,projectId,agent,fields})
         if(this.disposed)return
-        confirmation.replaceChildren(card('确认开始修复',text(`项目：${value.projectName}`),text([value.status.task.status.name,...value.status.route.map(x=>x.step.target.name)].join(' → ')),...value.status.route.flatMap(x=>x.step.fields.map(f=>text(`${x.step.name} · ${f.name}：${f.options.find(o=>o.id===value.status.fields[x.step.id]![f.id])?.name??(value.status.fields[x.step.id]![f.id]||'（空）')}`))),notice('逐步更新并回读到“修复中”后才创建聊天。状态未知时停止；已成功的远端状态不因聊天启动失败回滚。'),button('开始修复并更新状态',async()=>{
+        confirmation.replaceChildren(card('确认开始修复',text(`项目：${value.projectName}`),text([value.status.task.status.name,...value.status.route.map(x=>x.step.target.name)].join(' → ')),...value.status.route.flatMap(x=>x.step.fields.map(f=>text(`${x.step.name} · ${f.name}：${f.options.find(o=>o.id===value.status.fields[x.step.id]![f.id])?.name??(value.status.fields[x.step.id]![f.id]||'（空）')}`))),notice('状态流转不提交评论。逐步更新并回读到“修复中”后才创建聊天。状态未知时停止；已成功的远端状态不因聊天启动失败回滚。'),button('开始修复并更新状态',async()=>{
           if(this.busy||this.disposed)return
           this.setBusy(true)
           this.element.replaceChildren(notice('正在执行已确认状态路径，成功后收集最新 Bug 并创建聊天。请勿重复操作。'))
@@ -81,7 +81,7 @@ export class RepairView {
       finally{this.setBusy(false);preview.disabled=!projectId}
     },!projectId||!status?.writeEnabled||!!(status?.operation&&status.operation.state!=='verified'),'primary')
     const mappingUI=mapping.kind==='mapped'?text(`目标项目：${mapping.project.name}`):select('本地项目','',[{value:'',label:'请选择本地项目'},...mapping.candidates.map(p=>({value:p.id,label:p.name}))],value=>{projectId=value;clear();preview.disabled=!value})
-    const content=card('开始修复并更新状态',mappingUI,select('修复 Agent',agent,[{value:'codex',label:'Codex'},{value:'claude',label:'Claude Code'}],value=>{agent=value;clear()}),text(status?[status.snapshot.task.status.name,...status.route.map(x=>x.step.target.name)].join(' → '):''),notice('将发送完整 Bug 正文、评论与媒体引用；不授权自动提交代码或改变其它状态。'))
+    const content=card('开始修复并更新状态',mappingUI,select('修复 Agent',agent,[{value:'codex',label:'Codex'},{value:'claude',label:'Claude Code'}],value=>{agent=value;clear()}),text(status?[status.snapshot.task.status.name,...status.route.map(x=>x.step.target.name)].join(' → '):''),notice('状态流转不提交评论。将向 Agent 发送完整 Bug 正文、已有评论与媒体引用；不授权自动提交代码或改变其它状态。'))
     if(status?.operation&&status.operation.state!=='verified'){
       content.append(notice('已有状态结果待核实，不能再次开始修复。',true),button('核对状态结果',async()=>{
         try{await request('bugs.transitionReconcile',{detailId:this.detailId,operationId:status.operation!.id});await this.open()}catch(error){confirmation.replaceChildren(notice(message(error),true))}

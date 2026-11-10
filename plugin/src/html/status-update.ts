@@ -14,7 +14,7 @@ export class StatusView {
   private error = ''
   constructor(private detailId: string, private availability: (disabled:boolean,reason:string)=>void, private updated:()=>Promise<void>,private closed:()=>void) {}
   dispose(): void {this.disposed=true;this.element.replaceChildren()}
-  /// 结构化四项填入可编辑评论；验证门槛仍由 Worker 原始报告决定。
+  /// 结构化三项填入可编辑评论；验证门槛仍由 Worker 原始报告决定。
   async load(): Promise<void> {
     this.busy=true
     this.options=undefined
@@ -23,7 +23,7 @@ export class StatusView {
       if(this.disposed) return
       this.options=options
       this.fields=Object.fromEntries(options.route.map(edge=>[edge.step.id,Object.fromEntries(edge.step.fields.map(field=>[field.id,field.value]))]))
-      this.comment=options.comment
+      this.comment=options.comment??''
       this.availability(false,'')
       this.error=''
     } catch(error) { if(!this.disposed){this.error=message(error);this.availability(false,'状态配置暂不可用，可打开查看原因。')} }
@@ -37,7 +37,7 @@ export class StatusView {
     try{await action()}catch(error){if(!this.disposed)this.error=message(error)}
     finally{if(!this.disposed){this.busy=false;this.render()}}
   }
-  /// 字段按每步真实 ID 分组，不把四项说明擅自映射到 custom 字段。
+  /// 字段按每步真实 ID 分组，不把三项说明擅自映射到 custom 字段。
   private render():void{
     this.element.replaceChildren()
     if(!this.expanded)return
@@ -54,7 +54,7 @@ export class StatusView {
       }),this.busy))
     }
     if(options.completionBlocker)content.append(notice(options.completionBlocker,true))
-    content.append(text('四项自动填入评论，可编辑；未确认 custom 字段映射，因此不自动填字段、不覆盖原始描述。',true))
+    content.append(text('三项简述自动填入评论，可编辑；不会覆盖原始描述。验证记录独立保留，未完成验收不能更新为已修复。',true))
     for(const edge of options.route){
       if(edge.step.fields.length)content.append(text(`${edge.source.name} → ${edge.step.target.name} 所需字段`))
       for(const field of edge.step.fields){
@@ -63,13 +63,15 @@ export class StatusView {
         content.append(field.type===1?select(label,this.fields[edge.step.id]![field.id]??'',[{value:'',label:'请选择'},...field.options.map(x=>({value:x.id,label:x.name}))],change,this.busy):input(label,this.fields[edge.step.id]![field.id]??'',change,{disabled:this.busy}))
       }
     }
-    content.append(input('修复说明（四项，可编辑）',this.comment,value=>{this.comment=value;this.invalidate()},{multiline:true,disabled:this.busy,maxLength:12000}))
+    const summary = input('修复说明（三项，可编辑）',this.comment,value=>{this.comment=value;this.invalidate()},{multiline:true,disabled:this.busy,maxLength:12000})
+    summary.classList.add('repair-summary')
+    content.append(summary)
     content.append(button('预览状态更新',()=>this.act(async()=>{
       this.preview=await request<BusinessPreview>('bugs.businessPreview',{detailId:this.detailId,fields:this.fields,comment:this.comment})
     }),this.busy||!!options.completionBlocker||!!(operation&&operation.state!=='verified')||!options.route.length))
     if(this.preview){
       const preview=this.preview
-      const confirmation=card('确认一次完成状态更新',text([preview.task.status.name,...preview.route.map(x=>x.step.target.name)].join(' → ')),...preview.route.flatMap(x=>x.step.fields.map(f=>text(`${x.step.name} · ${f.name}：${f.options.find(o=>o.id===f.value)?.name??(f.value||'（空）')} → ${f.options.find(o=>o.id===preview.fields[x.step.id]![f.id])?.name??(preview.fields[x.step.id]![f.id]||'（空）')}`))),text(preview.comment),notice('每步回读成功才继续；部分成功保留，未知结果停止，不回滚已成功步骤。'),button('确认更新为已修复',()=>this.act(async()=>{
+      const confirmation=card('确认一次完成状态更新',text([preview.task.status.name,...preview.route.map(x=>x.step.target.name)].join(' → ')),...preview.route.flatMap(x=>x.step.fields.map(f=>text(`${x.step.name} · ${f.name}：${f.options.find(o=>o.id===f.value)?.name??(f.value||'（空）')} → ${f.options.find(o=>o.id===preview.fields[x.step.id]![f.id])?.name??(preview.fields[x.step.id]![f.id]||'（空）')}`))),text(preview.comment??''),notice('每步回读成功才继续；部分成功保留，未知结果停止，不回滚已成功步骤。'),button('确认更新为已修复',()=>this.act(async()=>{
         this.preview=undefined
         try{
           const result=await request<BusinessResult>('bugs.businessSubmit',{previewId:preview.id,confirmed:true})

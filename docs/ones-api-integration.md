@@ -368,7 +368,7 @@ variables 只带已核实的原 key、用户确认的描述和当前团队 mode�
 1. 写前重新核对 `GET {PROJECT_API}/users/me` 与当前插件身份；读取任务详情与 `GET {TEAM_API}/task/{taskUUID}/transitions`，验证任务、项目、当前状态和目标步骤一致。
 2. 展示步骤对应的必填/可编辑字段与目标状态。2026-11-10 实测的任务及项目类型 transitions 响应仅提供步骤身份、名称、起止状态；没有 `fields` 或 `match_condition`，**不能把它们当成完整表单 schema**。完整配置读取链已由 EV-ONES-007 只读核实：项目 stamps、团队字段目录、项目类型字段配置与任务允许步骤按 project/type/scope/status 交集关联；缺项时禁用提交。
 3. 人工确认后执行 `POST {TEAM_API}/task/{taskUUID}/new_transit`，JSON 请求体见下方。不能用 `tasks/update3` 直接写 `status_uuid` 绕过工作流；不额外发送同内容评论请求。
-4. HTTP 成功只表示已接受。若返回 `async_token`，可调用 `GET {TEAM_API}/transition_async_status?token={asyncToken}`，随后回读任务状态、提交字段及本次评论；不要因前端 toast 或会话结束宣称已验证。
+4. HTTP 成功只表示已接受。若返回 `async_token`，可调用 `GET {TEAM_API}/transition_async_status?token={asyncToken}`，随后回读任务状态、提交字段及适用的本次评论；不要因前端 toast 或会话结束宣称已验证。
 
 #### 请求与字段编码
 
@@ -398,15 +398,23 @@ variables 只带已核实的原 key、用户确认的描述和当前团队 mode�
 | 评论 | 页面 `tf-comment` 映射为 `discussion`，富文本 `content_type: 1`；客户端生成已实测形状的 8 位字母数字评论 UUID 并保留用于回读（不假设服务端幂等）。文本须转义后生成受限 HTML，不执行 Agent 输出或直接拼入不可信 HTML |
 | 其它步骤字段 | 前端还支持工时、资源与 Wiki 关联。本次工时/资源为空、未传 Wiki；不代表其它步骤可以省略它们。首期插件遇到未支持的必填类型阻断，不借空数组绕过 |
 
-非必填且未改动字段省略；空值不等于省略，不能为“未填写”覆盖远端已有值。根因说明、解决方法、影响范围、验证及交付限制写入本次流转评论，不覆盖原 Bug 描述。方案未要求独立评论发布或自动流转。
+非必填且未改动字段省略；空值不等于省略，不能为“未填写”覆盖远端已有值。上述历史实写示例包含验证及交付说明。当前插件流转评论仅写根本原因、解决方法、影响范围三行简述，不覆盖原 Bug 描述；验证/交付记录独立保留，未验收门槛不变。方案未要求独立评论发布或自动流转。
 
 认证沿用 Worker 的 ONES 会话，`Authorization: Bearer <access-token>`；本次一次性操作在用户授权下复用浏览器登录态，仅以同源 `fetch` 发 HTTP 请求，没有点击网页提交。前端对非 GET 请求在存在 `ct` 时携带 `x-csrf-token`；EV-ONES-007 已确认本次成功单笔路径没有 `ct`，也未携带 CSRF 头；插件不虚构此头，复用 Bearer 与 `credentials: omit`，不把浏览器 Cookie/localStorage 读取变成正式登录入口。不同实例认证要求不外推。凭证与异步 token 不进入 UI、日志或仓库，禁止跨源重定向；HTTP 明文风险沿用 §3。
 
+#### 无评论流转（开始修复）
+
+2026-11-10 只读核对部署前端 `app.842f08a8.js`、`733.9178f7c8.js`：表单以 `e[G.a] ? {text: e[G.a], content_type: G.b} : void 0` 生成可选 discussion；action 仅在 discussion 存在时添加 UUID，API 将 `transition_uuid` 与参数合并后发送 `new_transit`。无字段且无必填评论的页面路径还直接调用无额外参数的 `doNewTransition`。由此确认前端支持省略 discussion；本次没有执行无评论真实写入，不能把静态调用链或 fixture 当服务端实测。
+
+插件开始修复的整条路径强制无评论（包含中间步骤），请求完全省略 `discussion`，不发送空对象、空正文或独立评论请求。每步仍读取 `tf-comment.required`，任一步要求评论即在预览阻断；不绕过 ONES 项目配置。更新为已修复保留三项修复说明评论及独立验收门槛。
+
+无评论账本将 `comment/commentId/html` 明确存为 null；重启沿原账本核对，无需迁移旧字符串评论记录。该意图的状态核对不请求 messages，`evidence.comment = not_applicable`，不能描述为“评论已验证”；Bug 内容采集仍正常读取已有评论以提供给 Agent。状态和每个提交字段必须匹配，未知结果仍禁止重发。若没有字段，仅能证明目标状态已达成，不能证明是谁触发或消除跨客户端竞态；不因此增加审计评论。
+
 #### 回读、未知结果与证据边界
 
-- 任务详情验证目标状态及每个提交字段；`GET {TEAM_API}/task/{taskUUID}/messages?count=20[&max={send_time}]` 按客户端评论 UUID 定位，核对 `ref_type: task`、`ref_id`、作者 `from` 与 `rich_text || text` 完整内容。必要时有界续页；首屏找不到不等于提交失败。
+- 任务详情验证目标状态及每个提交字段；有评论意图时，`GET {TEAM_API}/task/{taskUUID}/messages?count=20[&max={send_time}]` 按客户端评论 UUID 定位，核对 `ref_type: task`、`ref_id`、作者 `from` 与 `rich_text || text` 完整内容。必要时有界续页；首屏找不到不等于提交失败。
 - 本次 `new_transit` 返回 HTTP 200 和 `async_token`；异步查询实际返回 `status: "none"`，**不是 `done`**。任务状态、根因、版本及评论逐项回读匹配，因此只确认这些更新已生效，不推断全部后置动作完成；未知异步状态的通用语义仍待核实。
-- 提交前持久记录意图与评论 UUID；超时、5xx、响应丢失或重启进入待核实，禁止自动再发或补发评论。同一 Bug 的提交串行，已有待核实记录先回读；评论 UUID 未证明是服务端幂等键。仅目标状态相同不足以证明本次提交成功。
+- 提交前持久记录意图与评论 UUID；超时、5xx、响应丢失或重启进入待核实，禁止自动再发或补发评论。同一 Bug 的提交串行，已有待核实记录先回读；评论 UUID 未证明是服务端幂等键。有字段或评论意图时，仅目标状态相同不足以证明本次提交成功。
 - 用户确认绑定账号、团队、任务、步骤、原状态、详情版本与 payload 摘要；确认后发生变化须重新预览。写前重读无法消除与其它客户端的竞态，未证明服务端 CAS；状态与字段/评论部分匹配时保留差异，不自动补偿或强制覆盖。
 
 提交工时、创建 PR、Agent 结束都不触发流转；“已修复”不等于“已验收”。根因分类、解决版本、修复总结及未完成验证由用户检查后提交。

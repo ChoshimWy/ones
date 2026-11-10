@@ -4,7 +4,7 @@ import { mkdir, open, readFile, writeFile, rename, rm, lstat, mkdtemp } from 'no
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { OrcaCli, launchReceipt, type LaunchReceipt } from './adapters/orca-cli.ts'
-import { mediaIds, repairPrompt } from './domain/repair-content.ts'
+import { mediaIds, repairPrompt, repairInstructions } from './domain/repair-content.ts'
 import { resolveProjectMapping, projectMappingKey, type MappingResult, type ProjectMapping } from './domain/project-mapping.ts'
 import { AppError, requireThat, record, type Option, type Task } from './domain/model.ts'
 import type { Store, Workbench } from './service.ts'
@@ -226,7 +226,18 @@ export class RepairWorkflow {
       const revision = digest(source.bug)
       const contract = await this.cache.register(plan.scope, source.bug.task, receipt, revision, directory)
       registered = true
-      const prompt = repairPrompt(source.bug, files, contract)
+      // 协议先以独占私有文件完整落盘；失败沿原 registered cleanup 清理，绝不启动。
+      const instructionsFile = join(directory, 'receipt-instructions.md')
+      const instructions = await open(instructionsFile, 'wx', 0o600)
+      try {
+        await instructions.writeFile(repairInstructions(contract))
+        await instructions.sync()
+      } finally { await instructions.close() }
+      const directoryHandle = await open(directory, 'r')
+      try { await directoryHandle.sync() } finally { await directoryHandle.close() }
+      const instructionsStat = await lstat(instructionsFile)
+      requireThat(instructionsStat.isFile() && !instructionsStat.isSymbolicLink() && (instructionsStat.mode & 0o777) === 0o600, 'storage', '回执协议文件权限不安全，未启动。')
+      const prompt = repairPrompt(source.bug, files, instructionsFile)
       await source.validate()
       requireThat(!hook || source.bug.task.status.id === hook.targetStatus, 'stale', 'Agent 启动前 Bug 已不处于已确认的修复中状态，未启动。')
       const currentTarget = await this.cli.target(fresh)

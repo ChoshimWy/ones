@@ -19,7 +19,7 @@ export type RepairReport = StructuredRepairReport | LegacyRepairReport
 export function parseRepairReport(input: unknown): StructuredRepairReport {
   const value = record(input)
   const exact = (object: Record<string, unknown>, keys: string[]) => requireThat(Object.keys(object).sort().join(',') === keys.sort().join(','), 'receipt', '回执字段不符合协议。')
-  const string = (value: unknown) => { requireThat(typeof value === 'string' && value.trim().length > 0 && value.length <= 4000, 'receipt', '四项说明、源码身份和原因不能为空或超长。'); return value as string }
+  const string = (value: unknown) => { requireThat(typeof value === 'string' && value.trim().length > 0 && value.length <= 4000, 'receipt', '修复说明、源码身份和验证原因不能为空或超长。'); return value as string }
   const strings = (value: unknown) => { requireThat(Array.isArray(value) && value.length <= 20, 'receipt', '回执证据或未完成项超限。'); return (value as unknown[]).map(string) }
   exact(value,['reportVersion','reportSequence','rootCause','solution','impact','repair','validation','delivery','sourceIdentity'])
   requireThat(value.reportVersion === 2 && Number.isSafeInteger(value.reportSequence) && Number(value.reportSequence) > 0, 'receipt', '新回执必须包含结构化版本及正整数报告序号。')
@@ -47,9 +47,10 @@ export function repairProgress(report: RepairReport | undefined): string {
   if (report.repair.state === 'fixed') return report.repair.workspace === 'isolated_worktree' ? '已在隔离 Worktree 修复' : '代码修复已完成'
   return report.repair.state === 'blocked' ? '代码修复受阻' : '正在排查修复'
 }
-/// 四项结构化内容自动填充评论；交付和未完成项始终保留供人工编辑。
+/// 评论仅展示三项说明；只规范换行，不截断、推断或代写旧报告的简短摘要。
 export function repairComment(report: RepairReport | undefined): string {
-  if (!report || !('reportVersion' in report)) return report ? `历史回执（未结构化，不能据此证明完成）\n${report.summary}` : ''
-  const labels = {passed:'通过',failed:'失败',not_run:'未完成 / 未运行'}
-  return `说明来源：Agent 结构化回执，非插件独立验收。\n\n根本原因\n${report.rootCause}\n\n解决方法\n${report.solution}\n\n影响范围\n${report.impact}\n\n验证结果\n${labels[report.validation.status]}：${report.validation.reason}\n未完成项：${report.validation.remaining.join('；') || '无报告未完成项'}\n\n交付情况\n${report.delivery.state}：${report.delivery.note}`
+  // 无结构化字段时不能编造三项；原始历史回执仍在详情中保留。
+  if (!report || !('reportVersion' in report)) return ''
+  const line = (value: string) => value.replace(/[\r\n]+/g, ' ').trim()
+  return `根本原因：${line(report.rootCause)}\n解决方法：${line(report.solution)}\n影响范围：${line(report.impact)}`
 }

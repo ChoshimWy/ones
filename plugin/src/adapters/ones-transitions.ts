@@ -6,15 +6,20 @@ import type { OnesSession } from './ones-auth.ts'
 /// 仅支持已核实的单选与文本；其它约束阻断该步骤，不猜测字段。
 export type TransitionField = { id: string; name: string; type: 1 | 2; required: boolean; value: string; options: Option[] }
 /// 步骤与完整 schema 绑定；阻断原因仍对用户可见。
-export type TransitionStep = { id: string; name: string; target: Option; fields: TransitionField[]; blockers: string[] }
+export type TransitionStep = { id: string; name: string; target: Option; fields: TransitionField[]; commentRequired: boolean; blockers: string[] }
 /// 写前版本包含原始详情和配置摘要，防止确认后字段/步骤变化。
 export type TransitionSnapshot = { task: Task; stamp: string; steps: TransitionStep[]; graph?: { source: Option; step: TransitionStep }[]; configurationStamp?: string }
 /// 只允许已确认字段与纯文本评论输入。
-export type TransitionInput = { detailId: string; stepId: string; fields: Record<string, string>; comment: string }
+export type TransitionInput = { detailId: string; stepId: string; fields: Record<string, string>; comment: string | null }
 /// 持久化的最小请求，不包含凭证、任意 URL 或原始 Bug 正文。
-export type TransitionIntent = { taskId: string; sourceStamp: string; sourceStatus: string; stepId: string; target: Option; fields: { field_uuid: string; type: number; value: string }[]; commentId: string; comment: string; html: string }
+export type TransitionIntent = { taskId: string; sourceStamp: string; sourceStatus: string; stepId: string; target: Option; fields: { field_uuid: string; type: number; value: string }[]; } & ({ commentId: string; comment: string; html: string } | { commentId: null; comment: null; html: null })
 /// 回读结果逐项说明；异步后置状态独立，不把 none 当 done。
-export type TransitionEvidence = { status: boolean; fields: boolean; comment: boolean; asyncStatus: string; message: string }
+export type TransitionEvidence = { status: boolean; fields: boolean; comment: boolean | 'not_applicable'; asyncStatus: string; message: string }
+
+/// 仅显式通过或不适用可完成，不能把任意真值当作回读证据。
+export function transitionVerified(evidence: TransitionEvidence): boolean {
+  return evidence.status === true && evidence.fields === true && (evidence.comment === true || evidence.comment === 'not_applicable')
+}
 
 /// 转义用户输入后生成唯一的评论 HTML；不接受外部 HTML 指令。
 export function commentHTML(value: string): string {
@@ -23,7 +28,7 @@ export function commentHTML(value: string): string {
   return `<p>${escaped.replace(/\r\n?/g, '\n').replace(/\n/g, '<br>')}</p>`
 }
 /// 构造预览与提交共同使用的字段，拒绝额外字段、未知选项和超长文本。
-export function transitionIntent(snapshot: TransitionSnapshot, input: TransitionInput, commentId: string): TransitionIntent {
+export function transitionIntent(snapshot: TransitionSnapshot, input: TransitionInput, commentId: string | null): TransitionIntent {
   const step = snapshot.steps.find(step => step.id === input.stepId)
   requireThat(step && !step.blockers.length, 'schema', '该步骤不可执行，请在原单核对字段或权限。')
   const values = record(input.fields)
@@ -38,8 +43,11 @@ export function transitionIntent(snapshot: TransitionSnapshot, input: Transition
     const schema = step.fields.find(value => value.id === field.field_uuid)!
     return schema.required || field.value !== schema.value
   })
-  const comment = text(input.comment, 12000).replace(/\r\n?/g, '\n').trim()
-  const intent = { taskId: snapshot.task.id, sourceStamp: snapshot.stamp, sourceStatus: snapshot.task.status.id, stepId: step.id, target: step.target, fields, commentId: id(commentId), comment, html: commentHTML(comment) }
+  // 无评论是显式意图，仍服从远端必填配置；不能以空字符串生成评论。
+  requireThat(input.comment !== null || !step.commentRequired, 'schema', '该状态路径要求填写评论，不能无评论开始修复；请在原单处理。')
+  const comment = input.comment === null ? null : text(input.comment, 12000).replace(/\r\n?/g, '\n').trim()
+  const payload = comment === null ? { commentId: null, comment: null, html: null } : { commentId: id(commentId), comment, html: commentHTML(comment) }
+  const intent: TransitionIntent = { taskId: snapshot.task.id, sourceStamp: snapshot.stamp, sourceStatus: snapshot.task.status.id, stepId: step.id, target: step.target, fields, ...payload }
   requireThat(Buffer.byteLength(JSON.stringify(intent)) <= 60000, 'size', '状态提交超出容量，请缩短说明或在原单操作；未截断。')
   return intent
 }
@@ -85,9 +93,16 @@ export class OnesTransitions {
       if (step.condition !== null || step.trigger !== null || !Array.isArray(step.post_function) || step.post_function.length) blockers.push('该步骤含未支持的条件、触发器或后置动作，请打开原单。')
       if (permission.update_tasks !== true && step.fields.some(v => record(v).field_uuid !== 'tf-comment')) blockers.push('没有字段更新权限，请在原单核对。')
       const fields: TransitionField[] = []
+      let commentRequired = false, commentSeen = false
       for (const raw of step.fields) {
         const field = record(raw)
-        if (field.field_uuid === 'tf-comment' && field.type === -1 && typeof field.required === 'boolean') continue
+        if (field.field_uuid === 'tf-comment' && field.type === -1 && typeof field.required === 'boolean') {
+          if (commentSeen) blockers.push('评论配置重复，请在原单核对。')
+          commentSeen = true
+          commentRequired = field.required
+          continue
+        }
+
         const definition = definitions.find(v => v.uuid === field.field_uuid)
         const config = fieldConfigs.find(v => v.field_uuid === field.field_uuid && v.project_uuid === task.project.id && v.issue_type_uuid === task.issueType.id && v.issue_type_scope_uuid === info.issue_type_scope_uuid)
         if (!definition || !config || ![1, 2].includes(Number(field.type)) || definition.type !== field.type || config.type !== field.type || typeof field.required !== 'boolean' || config.option_configs !== null || definition.fixed === true) {
@@ -102,7 +117,7 @@ export class OnesTransitions {
         fields.push({ id: id(field.field_uuid), name: text(definition.name), type, required: field.required, value, options })
       }
       if (new Set(fields.map(f => f.id)).size !== fields.length || fields.length > 30) blockers.push('字段重复或超过支持容量。')
-      return { source: { id: id(source.uuid), name: text(source.name) }, step: { id: stepId, name: text(step.name), target: { id: id(target.uuid), name: text(target.name) }, fields, blockers } }
+      return { source: { id: id(source.uuid), name: text(source.name) }, step: { id: stepId, name: text(step.name), target: { id: id(target.uuid), name: text(target.name) }, fields, commentRequired, blockers } }
     })
     const steps = allowedIds.map(stepId => {
       const candidates = graph.filter(item => item.step.id === stepId && item.source.id === task.status.id)
@@ -115,16 +130,17 @@ export class OnesTransitions {
   }
   /// 单次发送已持久化意图；任何异常都交由只读核对，绝不自动重发。
   async submit(intent: TransitionIntent): Promise<string | null> {
-    const result = await this.transport.json(`${this.base}/task/${id(intent.taskId)}/new_transit`, jsonBody({ transition_uuid: intent.stepId, field_values: intent.fields, discussion: { uuid: intent.commentId, content_type: 1, text: intent.html }, manhours: [], resource_uuids: [] }, this.session.token))
+    const result = await this.transport.json(`${this.base}/task/${id(intent.taskId)}/new_transit`, jsonBody({ transition_uuid: intent.stepId, field_values: intent.fields, ...(intent.comment === null ? {} : { discussion: { uuid: intent.commentId, content_type: 1, text: intent.html } }), manhours: [], resource_uuids: [] }, this.session.token))
     return typeof result.async_token === 'string' ? text(result.async_token, 500) : null
   }
   /// 只读确认状态、字段、本客户端评论 UUID/作者/正文；找不到不等于失败。
   async reconcile(intent: TransitionIntent, token: string | null): Promise<TransitionEvidence> {
     const info = await this.get(`${this.base}/task/${id(intent.taskId)}/info`)
     requireThat(info.uuid === intent.taskId && Array.isArray(info.field_values), 'readback', '无法确认原 Bug 字段。')
-    let before: number | undefined, comment = false
-    // 1. 有界翻页寻找本操作评论；不能仅凭目标状态宣布成功。
-    for (let page = 0; page < 10; page++) {
+    let before: number | undefined
+    let comment: TransitionEvidence['comment'] = intent.comment === null ? 'not_applicable' : false
+    // 1. 仅有评论意图才读取消息；无评论不适用，不伪称评论已核验。
+    for (let page = 0; intent.comment !== null && page < 10; page++) {
       const result = await this.get(`${this.base}/task/${id(intent.taskId)}/messages?count=20${before === undefined ? '' : `&max=${before}`}`)
       requireThat(Array.isArray(result.messages) && typeof result.has_next === 'boolean', 'readback', '评论分页缺失。')
       const messages = result.messages.map(record), matches = messages.filter(m => m.uuid === intent.commentId)
@@ -145,6 +161,10 @@ export class OnesTransitions {
     }
     const fields = intent.fields.every(field => { const matches = (info.field_values as unknown[]).map(record).filter(v => v.field_uuid === field.field_uuid); return matches.length === 1 && matches[0]!.type === field.type && matches[0]!.value === field.value })
     const status = info.status_uuid === intent.target.id
-    return { status, fields, comment, asyncStatus, message: status && fields && comment ? '状态、字段及本次评论已回读一致。' : '结果待核实：未确认全部状态、字段和本次评论；禁止重发。' }
+    const evidence: TransitionEvidence = { status, fields, comment, asyncStatus, message: '' }
+    evidence.message = transitionVerified(evidence)
+      ? comment === 'not_applicable' ? '状态及字段已回读一致；本次未提交评论，评论核对不适用。' : '状态、字段及本次评论已回读一致。'
+      : comment === 'not_applicable' ? '结果待核实：未确认全部状态和字段；本次未提交评论，禁止重发。' : '结果待核实：未确认全部状态、字段和本次评论；禁止重发。'
+    return evidence
   }
 }

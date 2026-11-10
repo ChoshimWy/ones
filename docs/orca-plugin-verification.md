@@ -391,3 +391,52 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 同目录 `repair-flow-evidence.json` 为旅程证据；缓存回归证据在相邻 `repair-flow-cache-regression/browser-evidence.json`。重现使用已有工具：`ONES_TOOLING=<Orca tooling checkout> ONES_BROWSER=<Chrome executable> ONES_EVIDENCE=<证据目录> node --import <安装版 orca-test-register.mjs> plugin/tests/repair-flow.browser.mjs`。
 
 未覆盖：真实项目完整路径与字段权限现场复验、真实 Agent 按新结构化协议/序号写入、真实远端部分成功恢复、证据内容独立核验。API 没有已证明的跨客户端 CAS；写前/逐步回读不构成远端原子事务。用户批准实施不包含部署、提交、合并、推送或真实 Bug 状态操作。
+
+
+## 2026-11-10 开始修复不提交评论：定向证据
+
+范围：`agent/repair-no-comment`，基线 `9514eaf32ab99c9726a07ab8342e78e8fd5f7503`。无正式插件重载、真实 Bug 写入或历史评论删除。
+
+- 部署前端只读证据：`app.842f08a8.js` 可选 discussion、`733.9178f7c8.js` 条件 UUID 和 new_transit 参数组装；工具回执 `4db3cab9-ab71-4b8c-abd5-7d44e8c48e77`。不是服务端无评论写入证据，细节见接口 §6.3。
+- macOS / Node v26.0.0；安装版 `orca-test-register.mjs` loader，`node --import <loader> --test plugin/tests/repair-actions.test.ts plugin/tests/status-update.test.ts`：23/23，通过两步均无 discussion、状态核对不读 messages、状态/字段确认后启动、两步任一评论必填零写、注入评论丢弃、无评论 unknown 重启核对、完成评论及门槛、旧字符串意图回读与既有锁/防重保护。未运行全套。
+- 官方本地类型生成后 `tsc -p plugin --preserveSymlinks false --typeRoots <本地 Orca types>,<已有工具 @types>` 通过。首次类型检查发现 nullable 测试断言缺少收窄，修正后通过；不是运行时失败。
+- `ONES_JOURNEY=repair` 的 `repair-flow.browser.mjs`：完整 HTML + 虚构 Worker，隔离 Headless Chrome，单次确认、必填、无评论提示、技术折叠及无重复启动通过，pageErrors=[]。仅运行受影响修复旅程，没有重复完成状态/列表旅程。
+- 已实际打开检查 [360px 开始修复确认](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/repair-business-confirm.png>)：路径、字段值、无评论说明与按钮完整可见，换行自然，无遮挡或横向溢出。来源为浏览器预览，不是正式插件或真实 ONES 验收。旁侧 `repair-no-comment-evidence.json` 为旅程证据；chat-scratch 临时目录可能清理。
+
+剩余边界：真实实例无评论状态写入未执行；不保证远端原子事务/操作归因。无评论且无字段时，回读仅证明目标状态已达成；后置 async none 仍不代表 done。原有带评论历史账本仍可读，已存在评论不删除。
+
+
+### 同一任务追加：会话协议精简
+
+- 生产 formatter 保留完整原单及外部数据边界，执行摘要为四行；完整模板移动到本 run `receipt-instructions.md`。每次 launch 前完成 wx 创建、0600 权限检查、文件及目录同步。协议生成只接收插件绑定，不接收 Bug 数据。
+- `repair.test.ts` 定向 selector：`repair content: exact|repair workflow: persists|repair workflow: failed media|repair workflow: unknown process|repair receipt instructions:`，6/6 通过。覆盖完整内容、私有文件在 launch 前可读、正文无 token/run/revision/JSON、协议写失败 registered cleanup/零 launch、未知启动保留文件、重启后有效 result.json 受理及远端状态不变。
+- `repair-cache.test.ts` 的 `cache: replacement run`：1/1 通过，更新 formatter 调用后验证旧 run 不能覆盖及完整协议仍绑定正确 result 路径。首次类型检查发现该旧测试仍传 ReceiptContract，已同步新 producer 参数，随后类型检查通过。未重跑状态测试/UI，复用前述无评论证据；状态链测试仅同步了提示中协议路径断言。
+- 只渲染真实 formatter 生成的虚构消息，`repair-prompt.browser.mjs` / Headless Chrome 460px 通过无横向溢出断言；已实际打开 [精简会话文本](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/repair-prompt-short.png>)，确认正文、四行摘要及长路径完整换行，未显示 JSON/令牌，无截断遮挡。该图是文本渲染预览，不是 Orca 真实聊天，chat-scratch 可能清理。同目录 `repair-prompt-evidence.json` 保留渲染证据。
+- 未验证真实 Agent 对新增协议文件的 sandbox 读取权限；不可读/写按协议明确报告阻塞。没有重载正式插件、启动真实 Agent 或写 ONES。数据库 consumer、序号与权限合同未修改。
+
+
+### 同一任务追加：三项白话评论
+
+- 定向 selector `structured report: fixed|completion business: authoritative|repair receipt instructions: private complete`，分别位于 `repair-cache.test.ts`、`repair-actions.test.ts`、`repair.test.ts`：3/3 通过；类型检查通过。覆盖 formatter 恰好三行且无来源/验证/交付段落、旧长字段完整保留与换行规范、独立未验收 gate、发布精确三项 HTML、私有协议要求一句简短白话及独立技术字段。
+- `ONES_JOURNEY=comment` 的现有 Chrome harness 仅运行三项表单旅程：360/460px、长旧文本完整编辑与滚动、编辑评论不能解锁完成，通过且 pageErrors=[]。没有执行状态写入或重跑修复启动旅程。
+- 已实际打开 [360px 浅色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/completion-three-items-360.png>) 与 [460px 深色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/completion-three-items-460.png>)：三项标签和内容均可见，紧凑输入框、未验收红色提醒、禁用预览按钮完整，无遮挡或横向溢出。证据为完整 HTML + 虚构 Worker 渲染预览，不是正式插件或真实 ONES；chat-scratch 可能清理，同目录 `repair-three-items-evidence.json` 记录旅程。
+- 不保证已有长报告自动变成白话：未引入模型摘要或机械裁剪，仅要求后续 Agent 简述；历史原文保留。未修改内部回执验证器的字段/序号/权限规则、未重载正式插件、未操作真实 Bug。
+
+
+### 同一任务追加：Bug 正文空白归一化
+
+- `bug-content.test.ts` 7/7 通过：嵌套 div/p/br、空段与 NBSP 行、CRLF/plain、单换行/缩进、标题/列表、pre/code 空白与边界空格、显式 plain 代码围栏、图片视频顺序、受控资源及隐藏可执行内容、超限拒绝。
+- `bug-details.test.ts` 的 `content spacing: shared comment reader` 1/1 通过：共享评论解析压缩空段且作者/分页不变。
+- `repair.test.ts` 的 `content spacing: repair prompt` 1/1 通过：Agent 正文直接复用同一解析结果，保留媒体引用顺序，不引入额外格式化规则。类型检查通过；只运行上述 9 个受影响测试。
+- `ONES_JOURNEY=content` 独立虚构详情旅程通过，pageErrors=[]；fixture 使用生产解析器处理大量嵌套空段和媒体标识。已实际打开 [360px 浅色正文](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/content-spacing-360.png>) 与 [460px 深色正文](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/content-spacing-460.png>)：步骤、实际/期望结果均保留适度段落间隔，图片完整加载，图片说明/视频占位/后文顺序正确，无文字或媒体遮挡、截断和横向溢出。
+- 截图来自完整 HTML + 虚构 Worker 的隔离 Chrome 预览，不是正式插件或真实 Bug。视频只检查占位与顺序，没有重跑播放/硬件验证；未调整播放器。chat-scratch 可能清理，同目录 `content-spacing-evidence.json` 为旅程证据。
+- 行为边界：HTML pre/code 保留解析后的文本空白（HTML 本身的换行解析遵循 parse5）；纯文本有明确代码围栏时保守全文保留，未标注代码的 plain 按普通文本处理。非空行开头缩进不删除；不改写事实，不删除有文字的小标题。无部署、Git 交付或真实 ONES 写入。
+
+
+### 同一任务追加：图片限高，移除放大交互后的最终证据
+
+- 按用户最终要求移除本任务新增的 dialog、图片触发按钮、aria-haspopup、键盘入口、关闭/焦点逻辑及专属 CSS；保留 240px 图片区域、contain、小图不放大、既有资源释放与视频行为。owned 测试改为 `image-sizing.browser.mjs`。
+- 类型检查、`git diff --check` 通过；`html-media.test.ts` 3/3 通过，覆盖 Blob 撤销、恶意 MIME/尺寸拒绝、取消迟到结果。
+- 尺寸浏览器旅程通过：600×1800 纵图显示 80×240，1800×600 横图显示 420×140，80×40 小图保持 80×40；三者区域均高 240px、顺序保持。图片无 button/tabindex/aria-haspopup，点击无额外请求或弹层；dispose 后图片移除、旧 Blob 不可读；加载中/安全拒绝图片不显示，视频 controls/autoplay/未限高保持不变，pageErrors=[]。
+- 已实际打开 [460px 浅色尺寸](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/image-sizing-460.png>) 和 [360px 深色尺寸](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-no-comment/image-sizing-360.png>)：无放大入口，纵横图完整不裁剪，小图未放大，无横向溢出、遮挡或截断。旁侧 `image-sizing-evidence.json` 为本次证据；此前放大交互截图不再代表最终实现。
+- 来源为隔离 Chrome + 生产组件/虚构数据，不是正式插件现场验收；chat-scratch 可能清理。未加载外部图片、操作真实数据、增加权限或重载插件；视频只验证本次不受影响的配置，未重跑播放或硬件验收。

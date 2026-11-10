@@ -1,3 +1,5 @@
+import { bugContent } from '../../src/domain/bug-content.ts'
+import { repairComment, type StructuredRepairReport } from '../../src/domain/repair-report.ts'
 import type { OrcaWorkerApi } from 'orca/worker'
 import { readFileSync } from 'node:fs'
 const assets = JSON.parse(readFileSync(new URL('./fixture-assets.json', import.meta.url), 'utf8'))
@@ -68,12 +70,16 @@ export default function activate(orca: OrcaWorkerApi): void {
   let draft: unknown = null
   let listCount = 0
   let reportMode = 'not_run'
-  const report = () => ({reportVersion:2,reportSequence:1,rootCause:'状态刷新沿用了旧对象',solution:'修复后读取权威数据并刷新本地投影',impact:'实施列表与后续状态操作',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:reportMode,reason:reportMode==='passed'?'定向验证通过':'实体硬件尚未验收',remaining:reportMode==='passed'?[]:['实体硬件验收'],evidence:['定向测试通过 /fixture/report.json']},delivery:{state:'uncommitted',note:'未提交、未合并、未发布'},sourceIdentity:'HEAD fixture + patch fixture'})
-  const finalStep = () => ({id:'fix',name:'完成修复',target:{id:'done',name:'已修复'},blockers:[],fields:[{id:'cause',name:'根因',type:1,required:true,value:'',options:[{id:'logic',name:'代码逻辑问题'}]},{id:'version',name:'解决版本',type:2,required:false,value:'',options:[]}]})
-  const startRoute = () => [{source:task.status,step:{id:'confirm',name:'确认',target:{id:'confirmed',name:'确认'},fields:[],blockers:[]}},{source:{id:'confirmed',name:'确认'},step:{id:'start',name:'开始修复',target:{id:'repairing',name:'修复中'},fields:[{id:'classification',name:'分类说明',type:2,required:true,value:'',options:[]}],blockers:[]}}]
-  const summary = () => `说明来源：Agent 结构化回执，非插件独立验收。\n\n根本原因\n${report().rootCause}\n\n解决方法\n${report().solution}\n\n影响范围\n${report().impact}\n\n验证结果\n${report().validation.reason}\n\n交付情况\n未提交、未合并、未发布`
+  const report = () => ({reportVersion:2,reportSequence:1,rootCause:'列表还在显示旧内容。',solution:'刷新后重新读取最新内容。',impact:'影响列表和状态更新。',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:reportMode,reason:reportMode==='passed'?'定向验证通过':'实体硬件尚未验收',remaining:reportMode==='passed'?[]:['实体硬件验收'],evidence:['定向测试通过 /fixture/report.json']},delivery:{state:'uncommitted',note:'未提交、未合并、未发布'},sourceIdentity:'HEAD fixture + patch fixture'})
+  const finalStep = () => ({id:'fix',name:'完成修复',target:{id:'done',name:'已修复'},blockers:[],commentRequired:false,fields:[{id:'cause',name:'根因',type:1,required:true,value:'',options:[{id:'logic',name:'代码逻辑问题'}]},{id:'version',name:'解决版本',type:2,required:false,value:'',options:[]}]})
+  const startRoute = () => [{source:task.status,step:{id:'confirm',name:'确认',target:{id:'confirmed',name:'确认'},fields:[],commentRequired:false,blockers:[]}},{source:{id:'confirmed',name:'确认'},step:{id:'start',name:'开始修复',target:{id:'repairing',name:'修复中'},fields:[{id:'classification',name:'分类说明',type:2,required:true,value:'',options:[]}],commentRequired:false,blockers:[]}}]
+  const summary = () => repairComment(report() as StructuredRepairReport)
   const handlers: Record<string, (input: Record<string, unknown>) => unknown> = {
     status: () => status,
+    'fixture.content-spacing': () => {
+      detail.content = bugContent('<div><p>操作步骤：</p><div><p>1. 打开实施列表。<br>2. 返回详情后再次进入。</p></div><p><br><br></p><p>&nbsp;</p><div><p>实际结果：</p><p><br></p><p>列表仍显示旧状态。</p></div><p><br><br><br></p><p>期望结果：</p><p>显示最新状态，保留原有顺序。</p></div><img data-uuid="image" alt="虚构复现截图"><div><p><br><br></p><p>截图后说明：检查状态文字。</p></div><video data-uuid="video" data-mime="video/webm" alt="虚构复现视频"></video><p><br></p><p>视频后说明：此页面仅使用虚构数据。</p>', '')
+      return {}
+    },
     'fixture.transition-mode': input => { transitionMode = String(input.mode); return {} },
     'fixture.transition-release': () => { transitionRelease?.(); return {} },
     'fixture.report-mode': input => {reportMode=String(input.mode);return{}},
@@ -134,7 +140,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     'repair.previewStart': input => {
       const fields=input.fields as Record<string,Record<string,string>>
       if(input.projectId!=='local-fixture'||!fields.start?.classification)throw Error('Fixture required root cause')
-      return{id:'start-preview',projectName:'本地虚构项目',status:{id:'business-start',task,goal:'修复中',route:startRoute(),fields,comment:'开始修复',expiresAt:Date.now()+300000}}
+      return{id:'start-preview',projectName:'本地虚构项目',status:{id:'business-start',task,goal:'修复中',route:startRoute(),fields,comment:null,expiresAt:Date.now()+300000}}
     },
     'repair.prepare': () => ({ id: 'repair-plan', status:{snapshot:{task},route:startRoute(),operation:null,writeEnabled:true}, mapping: repairManual ? { kind: 'manual', reason: 'missing', candidates: [{ id: 'local-fixture', name: '本地虚构项目' }] } : { kind: 'mapped', via: 'automatic', project: { id: 'local-fixture', name: '本地虚构项目' } }, existing: repairRecord }),
     'repair.start': input => {

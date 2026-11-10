@@ -16,10 +16,10 @@ async function fixture(t:{after(fn:()=>Promise<void>):void}){
   const root=await mkdtemp(join(tmpdir(),'ones-business-'))
   t.after(()=>rm(root,{recursive:true,force:true}))
   const names:Record<string,string>={pending:'待处理',confirmed:'确认',repairing:'修复中',done:'已修复'}
-  const state={status:'pending',version:1,writes:[] as string[],messages:[] as Record<string,unknown>[],value:'',lost:'',fail:'',drift:false,driftAfterFirst:false,denied:false,unknownField:false,targetFails:false,launchFails:false,launches:0,prompt:'',externalAfterRepair:false,report:structuredClone(report)}
+  const state={status:'pending',version:1,commentRequired:'',messageReads:0,writeMessageReads:[] as number[],writes:[] as string[],messages:[] as Record<string,unknown>[],value:'',lost:'',fail:'',drift:false,driftAfterFirst:false,denied:false,unknownField:false,targetFails:false,launchFails:false,launches:0,prompt:'',externalAfterRepair:false,report:structuredClone(report)}
   const edges=[['confirm-action','pending','confirmed'],['repair-action','confirmed','repairing'],['finish-action','repairing','done']]
   const baseTask={id:'bug',number:1,name:'虚构缺陷',project:{id:'project',name:'Project'},issueType:{id:'bug-type',name:'缺陷'}}
-  const definition=()=>edges.map(([uuid,source,target])=>({uuid,name:uuid+(state.drift?' changed':''),project_uuid:'project',issue_type_uuid:'bug-type',issue_type_scope_uuid:'scope',start_status_uuid:source,end_status_uuid:target,condition:null,trigger:null,post_function:[],fields:uuid==='repair-action'?[{field_uuid:'classification',type:2,required:true,default_value:''},...(state.unknownField?[{field_uuid:'unknown',type:9,required:true}]:[])]:[]}))
+  const definition=()=>edges.map(([uuid,source,target])=>({uuid,name:uuid+(state.drift?' changed':''),project_uuid:'project',issue_type_uuid:'bug-type',issue_type_scope_uuid:'scope',start_status_uuid:source,end_status_uuid:target,condition:null,trigger:null,post_function:[],fields:[{field_uuid:'tf-comment',type:-1,required:state.commentRequired===uuid},...(uuid==='repair-action'?[{field_uuid:'classification',type:2,required:true,default_value:''},...(state.unknownField?[{field_uuid:'unknown',type:9,required:true}]:[])]:[])]}))
   const stored=new Map<string,unknown>([['session.ones',JSON.stringify({userId:'owner',token:'fixture',label:'用户',teams:[{id:'team',name:'团队'}],expiresAt:Date.now()+600000})]])
   const store={get:async(key:string)=>stored.get(key)??null,set:async(key:string,value:unknown)=>{stored.set(key,value)},delete:async(key:string)=>{stored.delete(key)}}
   const service=new Workbench({store,vault:{get:async(key)=>stored.get(key) as string??null,set:store.set,delete:store.delete},protection:async()=>true,fetcher:async(url,init)=>{
@@ -27,8 +27,8 @@ async function fixture(t:{after(fn:()=>Promise<void>):void}){
     if(path.endsWith('/users/me'))return Response.json({uuid:'owner'})
     if(path.endsWith('/items/graphql'))return Response.json({data:{tasks:[{uuid:'bug',number:1,name:baseTask.name,project:{uuid:'project',name:'Project'},issueType:{uuid:'bug-type',name:'缺陷'},status:{uuid:state.status,name:names[state.status]}}]}})
     if(path.endsWith('/issue_types'))return Response.json({issue_types:[{uuid:'bug-type',name:'缺陷',built_in:true,type:0,detail_type:3,default_configs:{default_task_status_configs:[{status_uuid:'pending'}]}}]})
-    if(path.endsWith('/info'))return Response.json({uuid:'bug',project_uuid:'project',issue_type_uuid:'bug-type',issue_type_scope_uuid:'scope',status_uuid:state.status,server_update_stamp:state.version,summary:baseTask.name,desc_rich:'<p>原始描述不可覆盖</p>',desc:'原始描述不可覆盖',field_values:[{field_uuid:'classification',type:2,value:state.value}]})
-    if(path.endsWith('/messages')){const response=Response.json({messages:state.messages,has_next:false});if(state.externalAfterRepair&&state.status==='repairing'){state.status='done';state.version++;state.externalAfterRepair=false}return response}
+    if(path.endsWith('/info')){const response=Response.json({uuid:'bug',project_uuid:'project',issue_type_uuid:'bug-type',issue_type_scope_uuid:'scope',status_uuid:state.status,server_update_stamp:state.version,summary:baseTask.name,desc_rich:'<p>原始描述不可覆盖</p>',desc:'原始描述不可覆盖',field_values:[{field_uuid:'classification',type:2,value:state.value}]});if(state.externalAfterRepair&&state.status==='repairing'){state.status='done';state.version++;state.externalAfterRepair=false}return response}
+    if(path.endsWith('/messages')){state.messageReads++;return Response.json({messages:state.messages,has_next:false})}
     if(path.endsWith('/attachments'))return Response.json({attachments:[],has_next:false})
     if(path.endsWith('/transitions'))return Response.json({transitions:state.denied?[]:definition().filter(x=>x.start_status_uuid===state.status).map(x=>({uuid:x.uuid}))})
     if(path.endsWith('/stamps/data'))return Response.json({transition:{transitions:definition()}})
@@ -40,12 +40,13 @@ async function fixture(t:{after(fn:()=>Promise<void>):void}){
       const body=JSON.parse(String(init?.body))
       const edge=edges.find(x=>x[0]===body.transition_uuid)!
       assert.equal(edge[1],state.status)
-      assert.deepEqual(Object.keys(body).sort(),['discussion','field_values','manhours','resource_uuids','transition_uuid'])
+      assert.deepEqual(Object.keys(body).sort(),[...(edge[0]==='finish-action'?['discussion']:[]),'field_values','manhours','resource_uuids','transition_uuid'])
+      state.writeMessageReads.push(state.messageReads)
       state.writes.push(edge[0]!)
       if(state.fail===edge[0])return Response.json({},{status:500})
       state.status=edge[2]!;state.version++
       for(const field of body.field_values)if(field.field_uuid==='classification')state.value=field.value
-      state.messages.push({...body.discussion,type:'discussion',ref_id:'bug',ref_type:'task',from:'owner',send_time:1000000+state.version,rich_text:body.discussion.text})
+      if(body.discussion)state.messages.push({...body.discussion,type:'discussion',ref_id:'bug',ref_type:'task',from:'owner',send_time:1000000+state.version,rich_text:body.discussion.text})
       if(state.driftAfterFirst&&state.writes.length===1)state.drift=true
       if(state.lost===edge[0])throw Error('lost response')
       return Response.json({})
@@ -74,12 +75,19 @@ test('repair business: full preflight then one confirmation executes legal steps
   const preview=await f.actions.preview(input)
   assert.deepEqual(preview.status.route.map(x=>x.step.id),['confirm-action','repair-action'])
   assert.equal(f.state.writes.length,0);assert.equal(f.state.launches,0)
+  assert.equal(preview.status.comment,null)
+  const reads=f.state.messageReads
   const result=await f.actions.start(preview.id,true)
   assert.equal(result.state,'sent')
   assert.deepEqual(f.state.writes,['confirm-action','repair-action'])
+  assert.deepEqual(f.state.writeMessageReads,[reads,reads])
+  assert.equal(f.state.messages.length,0)
+  const operation=await f.journal.read((await f.service.transitionContext(f.detail.detailId)).scope,'bug')
+  assert.equal(operation!.evidence!.comment,'not_applicable')
   assert.equal(f.state.launches,1)
   assert.ok(f.state.prompt.includes('原始描述不可覆盖'))
-  assert.ok(f.state.prompt.includes('reportVersion'))
+  assert.ok(f.state.prompt.includes('receipt-instructions.md'))
+  assert.ok(!f.state.prompt.includes('reportVersion'))
   assert.equal((await f.service.transitionContext(f.detail.detailId)).task.status.id,'repairing')
   assert.ok((await f.actions.prepare(f.detail.detailId)).existing)
   await assert.rejects(f.actions.start(preview.id,true))
@@ -98,16 +106,23 @@ test('repair business: CLI unavailable, missing later required field, unsupporte
 })
 test('repair business: unknown first step blocks launch and restart; reconcile then one remaining-path confirmation never resends first step',async t=>{
   const f=await fixture(t),p=await f.actions.preview(await f.input())
+  const reads=f.state.messageReads
   f.state.lost='confirm-action'
   await assert.rejects(f.actions.start(p.id,true),/核实/)
   assert.equal(f.state.launches,0);assert.equal(f.state.status,'confirmed')
   const scope=(await f.service.transitionContext(f.detail.detailId)).scope
   const operation=(await f.journal.read(scope,'bug'))!
   assert.equal(operation.state,'unknown');assert.equal(operation.business?.index,1)
+  assert.equal(operation.intent.comment,null)
+  assert.equal(operation.intent.commentId,null)
+  assert.equal(operation.intent.html,null)
   const restored=f.create()
   const options=await restored.businessOptions(f.detail.detailId,'修复中')
   await assert.rejects(restored.businessPreview({detailId:f.detail.detailId,goal:'修复中',fields:Object.fromEntries(options.route.map(x=>[x.step.id,{classification:'人工补齐字段'}])),comment:'继续'}),/核对/)
-  assert.equal((await restored.reconcile(f.detail.detailId,operation.id)).state,'verified')
+  const reconciled=await restored.reconcile(f.detail.detailId,operation.id)
+  assert.equal(reconciled.state,'verified')
+  assert.equal(reconciled.evidence!.comment,'not_applicable')
+  assert.equal(f.state.messageReads,reads)
   f.state.lost=''
   const next=await f.actions.preview(await f.input())
   assert.equal(next.status.route.length,1)
@@ -127,13 +142,13 @@ test('repair business: later schema drift preserves partial success; launch fail
   assert.equal((await f.actions.prepare(f.detail.detailId)).existing?.state,'unknown')
   assert.deepEqual(f.state.writes,['confirm-action','repair-action'])
 })
-test('completion business: authoritative validation gate cannot be bypassed by editable comment; four sections become one final comment',async t=>{
+test('completion business: authoritative validation gate cannot be bypassed by editable comment; three concise items become one final comment',async t=>{
   const f=await fixture(t)
-  f.state.status='repairing';f.state.version++
+  f.state.status='repairing';f.state.version++;f.state.commentRequired='finish-action'
   f.state.report.validation={status:'not_run',reason:'缺少硬件',remaining:['硬件验收'],evidence:['单测通过']}
   const options=await f.statuses.businessOptions(f.detail.detailId,'已修复')
   assert.ok(options.completionBlocker.includes('硬件'))
-  assert.ok(options.comment.includes('根因'))
+  assert.ok(options.comment?.includes('根因'))
   await assert.rejects(f.statuses.businessPreview({detailId:f.detail.detailId,goal:'已修复',fields:{'finish-action':{}},comment:'我把文字改为验证通过'}),/验收/)
   assert.equal(f.state.writes.length,0)
   f.state.report=structuredClone(report)
@@ -142,7 +157,7 @@ test('completion business: authoritative validation gate cannot be bypassed by e
   assert.equal((await f.statuses.businessSubmit(p.id,true)).state,'verified')
   assert.equal(f.state.status,'done')
   assert.ok(String(f.state.messages.at(-1)?.text).includes('影响范围'))
-  assert.ok(String(f.state.messages.at(-1)?.text).includes('未提交未合并'))
+  assert.equal(f.state.messages.at(-1)?.text,'<p>根本原因：根因<br>解决方法：解决方法<br>影响范围：影响范围</p>')
 })
 test('business path: ambiguous paths and disallowed initial step fail closed',async t=>{
   const f=await fixture(t)
@@ -208,4 +223,29 @@ test('business confirmation: completion endpoint cannot consume a start-repair p
   await assert.rejects(f.statuses.businessSubmit(p.status.id,true),/入口/)
   assert.equal(f.state.writes.length,0)
   assert.equal((await f.actions.start(p.id,true)).state,'sent')
+})
+
+/// 评论必填属于整个预览路径的约束，后续步骤要求也必须在任何写入前阻断。
+test('repair business: required comment on either step fails closed before writes or launch',async t=>{
+  for(const step of ['confirm-action','repair-action']){
+    const f=await fixture(t)
+    f.state.commentRequired=step
+    const input=await f.input()
+    await assert.rejects(f.actions.preview(input),/要求填写评论/)
+    assert.deepEqual(f.state.writes,[])
+    assert.equal(f.state.launches,0)
+  }
+})
+/// 生产目标不能被输入扩展为评论通道；两个步骤均保留无评论语义。
+test('repair business: injected comment is discarded by target contract for every step',async t=>{
+  const f=await fixture(t),input=await f.input()
+  const reads=f.state.messageReads
+  const p=await f.statuses.businessPreview({detailId:f.detail.detailId,goal:'修复中',fields:input.fields,comment:'不应发送的评论'})
+  assert.equal(p.comment,null)
+  const result=await f.statuses.businessSubmit(p.id,true,'修复中')
+  assert.equal(result.state,'verified')
+  assert.equal(result.operations.length,2)
+  assert.ok(result.operations.every(x=>x.evidence?.comment==='not_applicable'))
+  assert.equal(f.state.messageReads,reads)
+  assert.equal(f.state.messages.length,0)
 })

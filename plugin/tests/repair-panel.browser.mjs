@@ -9,6 +9,7 @@ export async function exerciseRepairPanel({evaluate,wait,screenshot}) {
   await evaluate(`(()=>{const x=document.getElementById('开始修复 · 分类说明 *（必填）');x.value='已确认需修复';x.dispatchEvent(new Event('input',{bubbles:true}))})()`)
   await click('预览开始修复')
   await wait(`[...document.querySelectorAll('button')].some(x=>x.textContent==='开始修复并更新状态')`)
+  assert.equal(await evaluate(`document.body.innerText.includes('状态流转不提交评论')`),true)
   await screenshot('repair-business-confirm','light',360)
   await click('开始修复并更新状态')
   await wait(`document.body.innerText.includes('已在隔离 Worktree 修复')`)

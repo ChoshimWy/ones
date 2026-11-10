@@ -64,6 +64,7 @@ test('status schema: permission, unknown constraints, required values, enum and 
   const f = await fixture(t), snapshot = await f.adapter.snapshot(f.task)
   assert.equal(snapshot.steps[0]!.fields[0]!.required, true)
   const intent = transitionIntent(snapshot, f.input, 'comment')
+  assert.ok(intent.html !== null)
   assert.equal(intent.html.includes('<script>'), false)
   assert.ok(intent.html.includes('&lt;script&gt;'))
   assert.equal(commentHTML('a\nb'), '<p>a<br>b</p>')
@@ -84,7 +85,7 @@ test('status success: one write, independent none evidence and immutable Bug des
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1)
   const operation = (results.find(r => r.status === 'fulfilled') as PromiseFulfilledResult<Awaited<ReturnType<StatusWorkflow['submit']>>>).value
   assert.equal(operation.state, 'verified'); assert.equal(operation.evidence?.asyncStatus, 'none'); assert.equal(f.state.writes.length, 1)
-  assert.match((await f.journal.read('scope', 'bug'))!.intent.commentId, /^[A-Za-z0-9]{8}$/)
+  assert.match((await f.journal.read('scope', 'bug'))!.intent.commentId!, /^[A-Za-z0-9]{8}$/)
   assert.equal('asyncToken' in operation, false)
   assert.equal('intent' in operation, false)
   assert.deepEqual(Object.keys(f.state.writes[0]!).sort(), ['discussion', 'field_values', 'manhours', 'resource_uuids', 'transition_uuid'])

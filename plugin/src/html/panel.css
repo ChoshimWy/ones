@@ -131,6 +131,10 @@ select {
 textarea {
   resize: vertical;
 }
+/* 三项说明保留三行、滚动与拖拽，仅收紧该输入框留白。 */
+.repair-summary textarea {
+  padding: 6px 8px;
+}
 .field {
   display: flex;
   flex-direction: column;
@@ -288,3 +292,23 @@ hr {
 .detail-actions { justify-content: space-between; }
 .detail-footer { justify-content: flex-end; }
 button.primary { background: var(--orca-primary); color: var(--orca-primary-foreground); }
+
+/* 仅受控正文/评论/附件图片限高，不添加点击预览或改变视频、其它图标。 */
+.media-image-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 240px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  background: var(--orca-muted);
+  border-radius: 6px;
+}
+.media-image-frame .media-thumbnail {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}

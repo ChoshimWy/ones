@@ -1,3 +1,4 @@
+import { bugContent } from '../src/domain/bug-content.ts'
 import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -77,7 +78,7 @@ test('repair CLI: recognizes actual chat and journaled prompt, never treats term
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ones-repair-test-'))
   let launches = 0, collected = 0, changed = false, broken = false, response: Record<string, unknown> | Error = success
-  let sent = ''
+  let sent = '', protocolCollision = false
   const data = new Map<string, unknown>()
   const store = { get: async (key: string) => data.get(key) ?? null, set: async (key: string, value: unknown) => { data.set(key, value) }, delete: async (key: string) => { data.delete(key) } }
   const check = () => { if (changed) throw Error('identity changed') }
@@ -87,6 +88,10 @@ async function fixture() {
       collected++; check()
       return { bug, read: async (resource, offset) => {
         if (broken) throw Error('media failed')
+        if (protocolCollision) {
+          const directory = (await readdir(root,{withFileTypes:true})).find(entry=>entry.isDirectory())!
+          await writeFile(join(root,directory.name,'receipt-instructions.md'),'collision',{mode:0o600})
+        }
         return { mime: resource === 'image' ? 'image/png' : 'video/mp4', total: 3, offset, data: Buffer.from('abc').toString('base64'), next: null }
       }, validate: async () => check(), check, dispose() {} }
     }
@@ -95,6 +100,10 @@ async function fixture() {
     async projects() { return [project] }
     async target() { return target }
     async launch(_target: typeof target, _agent: string, prompt: string) {
+      const path = JSON.parse(prompt.split('开始前读取插件协议：')[1]!.split('。\n')[0]!)
+      const instructions = await readFile(path,'utf8')
+      assert.ok(instructions.startsWith('# 执行与回执协议'))
+      assert.equal((await stat(path)).mode & 0o777,0o600)
       launches++; sent = prompt
       if (response instanceof Error) throw response
       return response
@@ -104,7 +113,7 @@ async function fixture() {
   const create = () => new RepairWorkflow(service, store, cli, root)
   const flow = create()
   const start = (id: string) => flow.start({ preparationId: id, projectId: project.id, agent: 'codex', confirmed: true })
-  return { root, flow, create, start, store, data, get launches() { return launches }, get collected() { return collected }, get sent() { return sent }, setChanged: () => { changed = true }, setBroken: (value: boolean) => { broken = value }, setResponse: (value: typeof response) => { response = value } }
+  return { root, flow, create, start, store, data, get launches() { return launches }, get collected() { return collected }, get sent() { return sent }, setProtocolCollision: () => { protocolCollision = true }, setChanged: () => { changed = true }, setBroken: (value: boolean) => { broken = value }, setResponse: (value: typeof response) => { response = value } }
 }
 test('repair workflow: persists scoped mapping, readable private media and session; repeated/restarted requests never launch twice', async () => {
   const f = await fixture()
@@ -135,7 +144,9 @@ test('repair workflow: unknown process result stays blocked after restart', asyn
   const f = await fixture()
   try {
     f.setResponse(Error('timeout'))
-    assert.equal((await f.start((await f.flow.prepare('detail')).id)).state, 'unknown')
+    const result = await f.start((await f.flow.prepare('detail')).id)
+    assert.equal(result.state, 'unknown')
+    assert.ok((await readFile(join(result.directory!, 'receipt-instructions.md'), 'utf8')).includes('reportSequence'))
     assert.equal((await f.create().prepare('detail')).existing?.state, 'unknown')
     await f.start((await f.flow.prepare('detail')).id)
     assert.equal(f.launches, 1)
@@ -277,3 +288,56 @@ test('repair sync: cached first read needs no API, initial reconcile then target
     assert.equal(f.launches,1)
   } finally { await rm(f.root,{recursive:true,force:true}); await rm(f.root+'-cache',{recursive:true,force:true}) }
 })
+
+/// 真实 start 生成文件，回写仍经过原缓存身份与序号校验；正文不展开敏感绑定。
+test('repair receipt instructions: private complete contract, short prompt and completion after restart',async()=>{
+  const f=await fixture()
+  try{
+    const result=await f.start((await f.flow.prepare('detail')).id)
+    const path=join(result.directory!,'receipt-instructions.md')
+    const protocol=await readFile(path,'utf8')
+    const template=JSON.parse(protocol.split('字段须严格为：')[1]!.split('\n')[0]!)
+    assert.equal((await stat(path)).mode & 0o777,0o600)
+    assert.equal(template.reportVersion,2)
+    assert.equal(template.reportSequence,1)
+    for(const rule of ['每项一句简短白话','30–60 字','不加入代码符号、路径或测试命令','技术身份放 sourceIdentity','验证详情与命令放 validation.reason/evidence'])assert.ok(protocol.includes(rule))
+    for(const key of ['rootCause','solution','impact'])assert.ok(template[key].includes('一句简短白话'))
+    for(const field of ['runId','revision','token','rootCause','solution','impact','repair','validation','delivery','sourceIdentity'])assert.ok(field in template)
+    for(const rule of ['同序号内容不可变','旧序号不覆盖','remaining 为空','不修改或删除本协议与媒体','读取','reportSequence']){
+      if(rule==='读取')assert.ok(protocol.includes('协议不可读'))
+      else assert.ok(protocol.includes(rule))
+    }
+    assert.ok(!protocol.includes('完整描述'))
+    assert.ok(!protocol.includes('完整评论'))
+    assert.ok(!protocol.includes(bug.task.name))
+    assert.ok(f.sent.includes(JSON.stringify(path)))
+    for(const value of [template.token,template.runId,template.revision,'reportVersion','reportSequence'])assert.ok(!f.sent.includes(value))
+    const brief=f.sent.split('\n\n执行与回执：')[1]!
+    assert.equal(brief.split('\n').length,4)
+    const report={...template,rootCause:'根因',solution:'解决方法',impact:'影响范围',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向验证通过',remaining:[],evidence:['fixture test passed']},delivery:{state:'uncommitted',note:'未提交'},sourceIdentity:'fixture HEAD patch'}
+    await writeFile(join(result.directory!,'result.json'),JSON.stringify(report),{flag:'wx',mode:0o600})
+    const imported=await f.create().result('detail')
+    assert.equal(imported?.report?.sourceIdentity,'fixture HEAD patch')
+    assert.equal(imported?.task.status.id,'pending')
+    assert.equal(f.launches,1)
+  }finally{await rm(f.root,{recursive:true,force:true})}
+})
+/// 模拟已注册后协议独占写入失败，必须清除注册与预启动预约，不能启动 Agent。
+test('repair receipt instructions: write failure abandons registration and never launches',async()=>{
+  const f=await fixture()
+  try{
+    f.setProtocolCollision()
+    await assert.rejects(f.start((await f.flow.prepare('detail')).id),{code:'EEXIST'})
+    assert.equal(f.launches,0)
+    assert.deepEqual(await readdir(f.root),[])
+    assert.equal(await f.create().result('detail'),null)
+  }finally{await rm(f.root,{recursive:true,force:true})}
+})
+
+/// Agent 不另做空白规则；直接复用与面板相同的解析文本和媒体顺序。
+test('content spacing: repair prompt reuses normalized content without a second formatting rule',()=>{
+  const content=bugContent('<div><p>步骤</p><p><br><br></p><p>结果</p></div><img data-uuid="image"><p>期望</p>','');
+  const prompt=repairPrompt({...bug,content,comments:[],attachments:[]},new Map([['image','/fixture/image.png']]));
+  assert.ok(prompt.includes('步骤\n\n结果\n图片：Bug 图片\n本地文件："/fixture/image.png"\n期望'));
+  assert.ok(!prompt.includes('\n\n\n'));
+});

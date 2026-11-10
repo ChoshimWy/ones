@@ -97,3 +97,13 @@ test("TC-PLUGIN-008-read: mismatched identities, unknown message types and malfo
   const empty = new BugDetailsReader("/team/fixture", async () => ({ ...info, desc_rich: null }));
   await assert.rejects(() => empty.content(task), /内容缺失/);
 });
+
+/// 正文与评论共享唯一解析真源；评论空段压缩不改变作者或分页事实。
+test('content spacing: shared comment reader retains author and normalizes redundant blank paragraphs',async()=>{
+  const source=message('spacing',100);
+  const client=new BugDetailsReader('/team/fixture',async()=>({messages:[{...source,rich_text:'<div><p>评论步骤</p><p>&nbsp;</p><p><br><br></p><p>评论结果</p></div>'}],has_next:false}));
+  const result=await client.comments(task.id);
+  assert.equal(result.items[0].author,'虚构评论者');
+  assert.deepEqual(result.items[0].content,[{kind:'text',text:'评论步骤\n\n评论结果'}]);
+  assert.equal(result.nextMax,null);
+});

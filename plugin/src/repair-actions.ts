@@ -15,7 +15,7 @@ export class RepairActions {
   /// 先预检项目 CLI，再验证整条状态路径；此阶段不写 ONES。
   async preview(input: {preparationId:string;projectId:string;agent:string;fields:Record<string,Record<string,string>>}) {
     const context = await this.repair.preflight(input)
-    const status = await this.statuses.businessPreview({detailId:context.detailId,goal:'修复中',fields:input.fields,comment:'用户确认开始修复并更新状态。到达修复中后创建 Agent 会话；不代表代码已修复或验收完成。'})
+    const status = await this.statuses.businessPreview({detailId:context.detailId,goal:'修复中',fields:input.fields,comment:null})
     requireThat(status.task.id===context.task.id,'identity','修复与状态目标不一致。')
     for (const [key,plan] of this.plans) if (plan.status.expiresAt <= Date.now()) this.plans.delete(key)
     requireThat(this.plans.size<50,'busy','待确认修复过多。')

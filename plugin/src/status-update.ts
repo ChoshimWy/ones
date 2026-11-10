@@ -5,10 +5,10 @@ import { mkdir, lstat, readFile, open, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { id, record, requireThat, type Task } from './domain/model.ts'
-import { transitionIntent, type OnesTransitions, type TransitionInput, type TransitionIntent, type TransitionSnapshot, type TransitionEvidence } from './adapters/ones-transitions.ts'
+import { transitionIntent, transitionVerified, type OnesTransitions, type TransitionInput, type TransitionIntent, type TransitionSnapshot, type TransitionEvidence } from './adapters/ones-transitions.ts'
 
 /// 确认摘要只暴露必要差异，评论为纯文本。
-export type StatusPreview = { id: string; task: Task; stepName: string; targetName: string; changes: { name: string; before: string; after: string }[]; comment: string; expiresAt: number }
+export type StatusPreview = { id: string; task: Task; stepName: string; targetName: string; changes: { name: string; before: string; after: string }[]; comment: string | null; expiresAt: number }
 /// 独立账本记录，不复用工时或修复启动记录。
 export type StatusOperation = { id: string; scope: string; taskId: string; createdAt: number; state: 'submitting' | 'unknown' | 'verified'; intent: TransitionIntent; asyncToken: string | null; evidence?: TransitionEvidence; business?: { id: string; goal: StatusGoal; index: number; total: number } }
 /// 面板只接收脱敏回执；异步 token、身份摘要和内部 HTML 不跨桥。
@@ -22,9 +22,9 @@ export type StatusContext = { scope: string; task: Task; adapter: OnesTransition
 /// 预览绑定当前详情、身份和完整 schema，不接受 UI 替换目标。
 type Plan = { detailId: string; scope: string; snapshot: TransitionSnapshot; intent: TransitionIntent; view: StatusPreview }
 
-/// 一次确认覆盖完整路径和各步骤字段，评论只在最终一步使用用户四项总结。
-export type BusinessInput = { detailId: string; goal: StatusGoal; fields: Record<string,Record<string,string>>; comment: string }
-export type BusinessPreview = { id: string; task: Task; goal: StatusGoal; route: StatusRoute; fields: Record<string,Record<string,string>>; comment: string; expiresAt: number }
+/// 一次确认覆盖完整路径和各步骤字段；开始修复不评论，完成修复保留三项简述与独立验收门槛。
+export type BusinessInput = { detailId: string; goal: StatusGoal; fields: Record<string,Record<string,string>>; comment: string | null }
+export type BusinessPreview = { id: string; task: Task; goal: StatusGoal; route: StatusRoute; fields: Record<string,Record<string,string>>; comment: string | null; expiresAt: number }
 export type BusinessResult = { state: 'verified' | 'unknown'; operations: StatusResult[]; target: StatusGoal }
 type BusinessPlan = { view: BusinessPreview; detailId: string; scope: string; snapshot: TransitionSnapshot; reportStamp: string }
 
@@ -50,7 +50,8 @@ export class StatusJournal {
       requireThat(value.scope === scope && value.taskId === taskId && ['submitting', 'unknown', 'verified'].includes(String(value.state)), 'storage', '状态操作记录损坏。')
       id(value.id)
       const intent = record(value.intent)
-      requireThat(intent.taskId === taskId && Array.isArray(intent.fields) && typeof intent.html === 'string' && typeof intent.comment === 'string' && typeof intent.sourceStamp === 'string', 'storage', '状态操作意图损坏。')
+      const validComment = intent.comment === null ? intent.html === null && intent.commentId === null : typeof intent.comment === 'string' && typeof intent.html === 'string' && typeof intent.commentId === 'string'
+      requireThat(intent.taskId === taskId && Array.isArray(intent.fields) && validComment && typeof intent.sourceStamp === 'string', 'storage', '状态操作意图损坏。')
       return value as StatusOperation
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -110,7 +111,7 @@ export class StatusWorkflow {
     const route = statusPath(options.snapshot, goal)
     const context = await this.context(detailId)
     context.check()
-    return { ...options, goal, route, comment: repairComment(report), completionBlocker: goal === '已修复' ? repairCompletionBlocker(report) : '' }
+    return { ...options, goal, route, comment: goal === '修复中' ? null : repairComment(report), completionBlocker: goal === '已修复' ? repairCompletionBlocker(report) : '' }
   }
   /// 全部未来步骤必填项先校验；没有完整预览不得开始任何状态写入。
   async businessPreview(input: BusinessInput): Promise<BusinessPreview> {
@@ -119,8 +120,11 @@ export class StatusWorkflow {
     requireThat(!options.operation || options.operation.state === 'verified', 'pending', '已有未知状态操作，必须先核对，不能重发。')
     requireThat(!options.completionBlocker, 'validation', options.completionBlocker)
     requireThat(Object.keys(input.fields).length === options.route.length && Object.keys(input.fields).every(key=>options.route.some(x=>x.step.id===key)), 'input', '业务字段与完整路径不一致。')
-    for (const edge of options.route) transitionIntent({...options.snapshot,task:{...options.snapshot.task,status:edge.source},steps:[edge.step]}, {detailId:input.detailId,stepId:edge.step.id,fields:input.fields[edge.step.id]!,comment:input.comment}, 'preview1')
-    const view: BusinessPreview = {id:randomUUID(),task:options.snapshot.task,goal:input.goal,route:options.route,fields:input.fields,comment:input.comment,expiresAt:Date.now()+300000}
+    // 业务目标决定评论意图，调用者不能向开始修复流程注入评论。
+    const comment = input.goal === '修复中' ? null : input.comment
+    requireThat(input.goal !== '已修复' || typeof comment === 'string', 'input', '请填写修复说明。')
+    for (const edge of options.route) transitionIntent({...options.snapshot,task:{...options.snapshot.task,status:edge.source},steps:[edge.step]}, {detailId:input.detailId,stepId:edge.step.id,fields:input.fields[edge.step.id]!,comment}, 'preview1')
+    const view: BusinessPreview = {id:randomUUID(),task:options.snapshot.task,goal:input.goal,route:options.route,fields:input.fields,comment,expiresAt:Date.now()+300000}
     for (const [key,plan] of this.businessPlans) if (plan.view.expiresAt <= Date.now()) this.businessPlans.delete(key)
     requireThat(this.businessPlans.size < 50, 'busy', '业务预览过多。')
     context.check()
@@ -161,8 +165,8 @@ export class StatusWorkflow {
         const step = snapshot.steps.find(x=>x.id===edge.step.id)
         requireThat(step && !step.blockers.length && step.target.id === edge.step.target.id, 'forbidden', '下一步不再允许，停止后续操作。')
         requireThat(step.fields.every(field=>field.value===(expectedValues.has(field.id) ? expectedValues.get(field.id) : edge.step.fields.find(x=>x.id===field.id)?.value)), 'stale', '字段值在步骤间被修改，请重新预览剩余路径。')
-        const comment = index === plan.view.route.length-1 ? plan.view.comment : `用户已确认业务操作：更新为${plan.view.goal}。中间步骤 ${index+1}/${plan.view.route.length}，不代表修复或验收完成。`
-        const intent = transitionIntent(snapshot,{detailId:plan.detailId,stepId:step.id,fields:plan.view.fields[step.id]!,comment},Array.from({length:8},()=> 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[randomInt(62)]).join(''))
+        const comment = plan.view.goal === '修复中' ? null : index === plan.view.route.length-1 ? plan.view.comment : `用户已确认业务操作：更新为${plan.view.goal}。中间步骤 ${index+1}/${plan.view.route.length}，不代表修复或验收完成。`
+        const intent = transitionIntent(snapshot,{detailId:plan.detailId,stepId:step.id,fields:plan.view.fields[step.id]!,comment},comment === null ? null : Array.from({length:8},()=> 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[randomInt(62)]).join(''))
         if (plan.view.goal === '已修复') {
           const latestReport = await this.report(plan.detailId)
           requireThat(!repairCompletionBlocker(latestReport) && (JSON.stringify(latestReport) ?? '') === plan.reportStamp, 'stale', '回执版本或验证结论已变化，请重新预览。')
@@ -175,7 +179,7 @@ export class StatusWorkflow {
         try {
           operation.asyncToken = await live.adapter.submit(intent)
           operation.evidence = await live.adapter.reconcile(intent,operation.asyncToken)
-          operation.state = operation.evidence.status && operation.evidence.fields && operation.evidence.comment ? 'verified' : 'unknown'
+          operation.state = transitionVerified(operation.evidence) ? 'verified' : 'unknown'
         } catch { operation.state = 'unknown' }
         await this.journal.save(operation)
         operations.push(publicResult(operation))
@@ -231,7 +235,7 @@ export class StatusWorkflow {
       try {
         operation.asyncToken = await context.adapter.submit(operation.intent)
         operation.evidence = await context.adapter.reconcile(operation.intent, operation.asyncToken)
-        operation.state = operation.evidence.status && operation.evidence.fields && operation.evidence.comment ? 'verified' : 'unknown'
+        operation.state = transitionVerified(operation.evidence) ? 'verified' : 'unknown'
       } catch { operation.state = 'unknown' }
       await this.journal.save(operation)
       context.check()
@@ -244,7 +248,7 @@ export class StatusWorkflow {
     requireThat(operation && operation.id === id(operationId), 'identity', '操作不属于当前 Bug 或账号。')
     const evidence = await context.adapter.reconcile(operation.intent, operation.asyncToken)
     context.check()
-    const result = { ...operation, evidence, state: evidence.status && evidence.fields && evidence.comment ? 'verified' as const : 'unknown' as const }
+    const result = { ...operation, evidence, state: transitionVerified(evidence) ? 'verified' as const : 'unknown' as const }
     // 锁存在时只返回核对证据，不覆盖仍执行中的账本，也不清理崩溃残留锁。
     let unlock: (() => Promise<void>) | undefined
     try { unlock = await this.journal.lock(context.scope, context.task.id) } catch { return publicResult(result) }

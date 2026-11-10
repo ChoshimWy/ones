@@ -154,7 +154,10 @@ export class MediaView {
       }
       this.loaded = loaded
       const media = this.kind === 'image' ? el('img') : el('video')
-      if (media instanceof HTMLImageElement) media.alt = label
+      if (media instanceof HTMLImageElement) {
+        media.alt = label
+        media.className = 'media-thumbnail'
+      }
       else {
         media.controls = true
         media.preload = 'metadata'
@@ -169,7 +172,7 @@ export class MediaView {
         }
       })
       media.src = loaded.url
-      this.body.className = ''
+      this.body.className = media instanceof HTMLImageElement ? 'media-image-frame' : ''
       this.body.replaceChildren(media)
     } catch {
       if (!this.closed) this.placeholder(true)
