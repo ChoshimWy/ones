@@ -54,7 +54,8 @@ export class DetailView {
   constructor(
     private team: string,
     private taskId: string,
-    backLabel = '返回我的 Bug'
+    backLabel = '返回我的 Bug',
+    private showStatus = false
   ) {
     this.element.append(
       row(
@@ -131,11 +132,15 @@ export class DetailView {
         await this.updated?.()
       }, () => this.statusTop.focus())
       this.statusArea.replaceChildren(this.statusView.element)
-      void this.statusView.load()
+      void this.statusView.load().then(() => { if (this.showStatus && generation === this.generation) { this.showStatus = false; this.statusView?.open() } })
       this.repair = new RepairView(detail.detailId, (busy, hasRecord) => {
         this.repairTop.disabled = busy
         this.repairBottom.disabled = busy
         this.repairTop.textContent = this.repairBottom.textContent = hasRecord ? '查看执行记录' : '执行修复'
+      }, async warning => {
+        await this.open()
+        if (warning) this.error.replaceChildren(notice(warning,true))
+        await this.updated?.()
       })
       this.repairArea.replaceChildren(this.repair.element)
       this.repairTop.disabled = false

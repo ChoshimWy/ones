@@ -1,140 +1,87 @@
-import type { StatusWorkflow, StatusPreview, StatusResult } from '../status-update.ts'
+import type { StatusWorkflow, BusinessPreview, BusinessResult, StatusResult } from '../status-update.ts'
 import { button, card, el, input, message, notice, request, row, select, text } from './dom.ts'
 
-/// 在详情内手动编辑和确认状态，不读取会话、不覆盖原描述。
+/// 面向“更新为已修复”的单次业务确认，不要求用户逐步提交工作流。
 export class StatusView {
-  /// 独立区域，复用现有 card 与主题样式。
   readonly element = el('div', 'stack')
-  /// 当前详情取得的权威步骤；读取失败立即清除。
-  private options?: Awaited<ReturnType<StatusWorkflow['options']>>
-  /// 用户明确选择的步骤，不从状态筛选猜测。
-  private selected = ''
-  /// 按当前 schema 保存用户输入的字段值。
-  private values: Record<string, string> = {}
-  /// 手动总结各段，不自动推断版本或验证结果。
-  private summary = { cause: '', solution: '', impact: '', validation: '', delivery: '' }
-  /// 有时限确认，任何本地编辑即撤销。
-  private preview?: StatusPreview
-  /// 从独立账本恢复的公开回执。
-  private operation?: StatusResult
-  /// 是否显示当前详情内的状态表单。
+  private options?: Awaited<ReturnType<StatusWorkflow['businessOptions']>>
+  private fields: Record<string,Record<string,string>> = {}
+  private comment = ''
+  private preview?: BusinessPreview
   private expanded = false
-  /// 互斥 UI 动作，不能代替 Worker 防重。
   private busy = false
-  /// 阻止离页后的迟到结果发布。
   private disposed = false
-  /// 经过桥接错误裁剪后的可见错误。
   private error = ''
-  /// 刷新由父详情统一执行，保证后续修复操作使用新的 detailId。
-  constructor(private detailId: string, private availability: (disabled: boolean, reason: string) => void, private updated: () => Promise<void>, private closed: () => void) {}
-  /// 失效后迟到响应不再更新其它 Bug。
-  dispose(): void { this.disposed = true; this.element.replaceChildren() }
-  /// 读取步骤及账本；失败保留可见重试，不展示过期可提交选项。
+  constructor(private detailId: string, private availability: (disabled:boolean,reason:string)=>void, private updated:()=>Promise<void>,private closed:()=>void) {}
+  dispose(): void {this.disposed=true;this.element.replaceChildren()}
+  /// 结构化四项填入可编辑评论；验证门槛仍由 Worker 原始报告决定。
   async load(): Promise<void> {
-    this.busy = true
-    this.options = undefined
-    this.availability(true, '正在读取状态步骤…')
+    this.busy=true
+    this.options=undefined
     try {
-      const options = await request<Awaited<ReturnType<StatusWorkflow['options']>>>('bugs.transitionOptions', { detailId: this.detailId })
-      if (this.disposed) return
-      this.options = options
-      this.operation = options.operation ?? undefined
-      const supported = options.snapshot.steps.filter(s => !s.blockers.length)
-      this.availability(!supported.length && !this.operation, supported.length ? '' : options.snapshot.steps.flatMap(s => s.blockers).join('；') || '当前无可用状态步骤。')
-      if (this.operation) this.expanded = true
-      this.error = ''
-    } catch (error) {
-      if (this.disposed) return
-      this.error = message(error)
-      this.availability(true, '状态配置读取失败。')
-    } finally {
-      if (!this.disposed) { this.busy = false; this.render() }
-    }
+      const options = await request<Awaited<ReturnType<StatusWorkflow['businessOptions']>>>('bugs.businessOptions',{detailId:this.detailId})
+      if(this.disposed) return
+      this.options=options
+      this.fields=Object.fromEntries(options.route.map(edge=>[edge.step.id,Object.fromEntries(edge.step.fields.map(field=>[field.id,field.value]))]))
+      this.comment=options.comment
+      this.availability(false,'')
+      this.error=''
+    } catch(error) { if(!this.disposed){this.error=message(error);this.availability(false,'状态配置暂不可用，可打开查看原因。')} }
+    finally {if(!this.disposed){this.busy=false;this.render()}}
   }
-  /// 入口与修复记录无关；展开后需用户明确选择步骤。
-  open(): void { this.expanded = true; this.render(); this.element.querySelector<HTMLElement>('select,button')?.focus() }
-  /// 修改任何输入即撤销本地预览，Worker 仍会独立核实。
-  private invalidate(): void { this.preview = undefined; this.element.querySelector('[data-status-preview]')?.remove() }
-  /// 保留未提交/未发布等说明，以纯文本生成评论供人工复核。
-  private comment(): string {
-    return `说明来源：用户手动填写/粘贴；非插件独立验证。\n\n根本原因\n${this.summary.cause}\n\n解决方法\n${this.summary.solution}\n\n影响范围\n${this.summary.impact}\n\n验证结果 / 未完成项\n${this.summary.validation}\n\n交付情况\n${this.summary.delivery}`
+  open(): void {this.expanded=true;this.render();this.element.querySelector<HTMLElement>('select,textarea,button')?.focus()}
+  private invalidate(): void {this.preview=undefined;this.element.querySelector('[data-status-preview]')?.remove()}
+  private async act(action:()=>Promise<void>):Promise<void>{
+    if(this.busy||this.disposed)return
+    this.busy=true;this.error='';this.render()
+    try{await action()}catch(error){if(!this.disposed)this.error=message(error)}
+    finally{if(!this.disposed){this.busy=false;this.render()}}
   }
-  /// 所有异步动作互斥；发送失败只允许读取账本，不重新发送同一预览。
-  private async act(action: () => Promise<void>): Promise<void> {
-    if (this.busy || this.disposed) return
-    this.busy = true
-    this.error = ''
-    this.render()
-    try { await action() } catch (error) { if (!this.disposed) this.error = message(error) }
-    finally { if (!this.disposed) { this.busy = false; this.render() } }
-  }
-  /// 展示权威核对各项和后置状态，不能把仅 HTTP 成功当更新成功。
-  private result(operation: StatusResult): HTMLElement {
-    const evidence = operation.evidence
-    return card(operation.state === 'verified' ? '更新成功' : '结果待核实',
-      text(`操作：${operation.id}`),
-      notice(evidence?.message ?? '请求可能已发送。请核对结果，不要重发。', operation.state !== 'verified'),
-      evidence ? text(`状态：${evidence.status ? '一致' : '未确认'} · 字段：${evidence.fields ? '一致' : '未确认'} · 本次评论：${evidence.comment ? '一致' : '未确认'}`) : null,
-      text(`后置动作：${evidence?.asyncStatus ?? '未确认'}${evidence?.asyncStatus === 'done' ? '' : '（未证明完成）'}`, true),
-      button('核对结果', () => this.act(async () => {
-        const result = await request<StatusResult>('bugs.transitionReconcile', { detailId: this.detailId, operationId: operation.id })
-        if (this.disposed) return
-        this.operation = result
-        if (result.state === 'verified') await this.updated()
-      }), this.busy))
-  }
-  /// 原生控件保障键盘与禁用语义，长文本换行依赖共享 CSS。
-  private render(): void {
+  /// 字段按每步真实 ID 分组，不把四项说明擅自映射到 custom 字段。
+  private render():void{
     this.element.replaceChildren()
-    if (this.error) this.element.append(notice(this.error, true), button('重试读取状态配置', () => this.load(), this.busy))
-    if (!this.expanded || !this.options) return
-    const options = this.options, step = options.snapshot.steps.find(s => s.id === this.selected)
-    const content = card('更新状态', text(`当前状态：${options.snapshot.task.status.name}`), notice('手动检查总结、根因分类及解决版本；不会修改 Bug 原始描述，也不会自动监控修复会话。'))
-    if (this.operation) content.append(this.result(this.operation))
-    if (!this.operation || this.operation.state === 'verified') {
-      content.append(select('流转步骤', this.selected, [{ value: '', label: '请选择步骤' }, ...options.snapshot.steps.map(s => ({ value: s.id, label: `${s.name} → ${s.target.name}${s.blockers.length ? '（不可用）' : ''}` }))], value => {
-        this.selected = value
-        this.values = Object.fromEntries(options.snapshot.steps.find(s => s.id === value)?.fields.map(f => [f.id, f.value]) ?? [])
-        this.invalidate()
-        this.render()
-      }, this.busy))
-      if (step) {
-        content.append(text(`${options.snapshot.task.status.name} → ${step.target.name}`))
-        for (const blocker of step.blockers) content.append(notice(blocker, true))
-        for (const field of step.fields) {
-          const label = `${field.name}${field.required ? ' *（必填）' : ''}`
-          content.append(field.type === 1 ? select(label, this.values[field.id] ?? '', [{ value: '', label: '请选择' }, ...field.options.map(o => ({ value: o.id, label: o.name }))], value => { this.values[field.id] = value; this.invalidate() }, this.busy)
-            : input(label, this.values[field.id] ?? '', value => { this.values[field.id] = value; this.invalidate() }, { disabled: this.busy }))
-        }
-        for (const [key, label] of [['cause', '根本原因说明'], ['solution', '解决方法（可粘贴修复总结）'], ['impact', '影响范围'], ['validation', '验证结果 / 未完成项'], ['delivery', '交付情况（未提交 / 未合并 / 未发布请保留）']] as const)
-          content.append(input(label, this.summary[key], value => { this.summary[key] = value; this.invalidate() }, { multiline: true, disabled: this.busy }))
-        content.append(button('预览状态更新', () => this.act(async () => {
-          if (!Object.values(this.summary).some(v => v.trim())) { this.error = '请填写或粘贴修复说明，再人工检查未完成项。'; return }
-          const preview = await request<StatusPreview>('bugs.transitionPreview', { detailId: this.detailId, stepId: this.selected, fields: this.values, comment: this.comment() })
-          if (!this.disposed) this.preview = preview
-        }), this.busy || !!step.blockers.length))
+    if(!this.expanded)return
+    if(this.error)this.element.append(notice(this.error,true),button('重新读取',()=>this.load(),this.busy))
+    if(!this.options)return
+    const options=this.options, operation=options.operation
+    const content=card('更新为已修复',text(`当前：${options.snapshot.task.status.name}`),text(options.route.length ? [options.snapshot.task.status.name,...options.route.map(x=>x.step.target.name)].join(' → ') : '已处于目标状态，无需流转'))
+    if(operation){
+      content.append(notice(operation.state==='verified' ? `已核实${operation.business ? `第 ${operation.business.index}/${operation.business.total} 步` : '上次状态操作'}` : '上次状态操作结果待核实，不会自动重发。',operation.state!=='verified'))
+      if(operation.state!=='verified')content.append(button('核对结果',()=>this.act(async()=>{
+        const result=await request<StatusResult>('bugs.transitionReconcile',{detailId:this.detailId,operationId:operation.id})
+        if(result.state==='verified')await this.updated()
+        else this.error=result.evidence?.message??'结果仍待核实，禁止重发。'
+      }),this.busy))
+    }
+    if(options.completionBlocker)content.append(notice(options.completionBlocker,true))
+    content.append(text('四项自动填入评论，可编辑；未确认 custom 字段映射，因此不自动填字段、不覆盖原始描述。',true))
+    for(const edge of options.route){
+      if(edge.step.fields.length)content.append(text(`${edge.source.name} → ${edge.step.target.name} 所需字段`))
+      for(const field of edge.step.fields){
+        const label=`${edge.step.name} · ${field.name}${field.required?' *（必填）':''}`
+        const change=(value:string)=>{this.fields[edge.step.id]![field.id]=value;this.invalidate()}
+        content.append(field.type===1?select(label,this.fields[edge.step.id]![field.id]??'',[{value:'',label:'请选择'},...field.options.map(x=>({value:x.id,label:x.name}))],change,this.busy):input(label,this.fields[edge.step.id]![field.id]??'',change,{disabled:this.busy}))
       }
     }
-    if (!options.writeEnabled) content.append(notice(options.blockedReason))
-    if (this.busy) content.append(notice('正在处理。离开详情不会撤销已发送请求；未知结果不得重发。'))
-    if (this.preview) {
-      const preview = this.preview
-      const confirmation = card('确认预览', text(`#${preview.task.number} ${preview.task.name}`), text(`${preview.task.status.name} → ${preview.targetName} · ${preview.stepName}`), ...preview.changes.map(c => text(`${c.name}：${c.before} → ${c.after}`)), text(preview.comment), button('确认更新状态', () => this.act(async () => {
-        this.preview = undefined
-        try {
-          const operation = await request<StatusResult>('bugs.transitionSubmit', { previewId: preview.id, confirmed: true })
-          if (this.disposed) return
-          this.operation = operation
-          if (operation.state === 'verified') await this.updated()
-        } catch (error) {
-          if (!this.disposed) await this.load()
-          throw error
-        }
-      }), this.busy || !options.writeEnabled, 'primary'))
-      confirmation.dataset.statusPreview = 'true'
+    content.append(input('修复说明（四项，可编辑）',this.comment,value=>{this.comment=value;this.invalidate()},{multiline:true,disabled:this.busy,maxLength:12000}))
+    content.append(button('预览状态更新',()=>this.act(async()=>{
+      this.preview=await request<BusinessPreview>('bugs.businessPreview',{detailId:this.detailId,fields:this.fields,comment:this.comment})
+    }),this.busy||!!options.completionBlocker||!!(operation&&operation.state!=='verified')||!options.route.length))
+    if(this.preview){
+      const preview=this.preview
+      const confirmation=card('确认一次完成状态更新',text([preview.task.status.name,...preview.route.map(x=>x.step.target.name)].join(' → ')),...preview.route.flatMap(x=>x.step.fields.map(f=>text(`${x.step.name} · ${f.name}：${f.options.find(o=>o.id===f.value)?.name??(f.value||'（空）')} → ${f.options.find(o=>o.id===preview.fields[x.step.id]![f.id])?.name??(preview.fields[x.step.id]![f.id]||'（空）')}`))),text(preview.comment),notice('每步回读成功才继续；部分成功保留，未知结果停止，不回滚已成功步骤。'),button('确认更新为已修复',()=>this.act(async()=>{
+        this.preview=undefined
+        try{
+          const result=await request<BusinessResult>('bugs.businessSubmit',{previewId:preview.id,confirmed:true})
+          if(result.state==='verified')await this.updated()
+          else {await this.load();this.error='状态结果待核实，已停止后续步骤。'}
+        }catch(error){await this.load();throw error}
+      }),this.busy||!options.writeEnabled,'primary'))
+      confirmation.dataset.statusPreview='true'
       content.append(confirmation)
     }
-    content.append(row(button('收起状态表单', () => { this.expanded = false; this.render(); this.closed() }, this.busy)))
+    if(this.busy)content.append(notice('正在处理；离页不会撤销已发送步骤。'))
+    content.append(row(button('收起状态表单',()=>{this.expanded=false;this.render();this.closed()},this.busy)))
     this.element.append(content)
   }
 }

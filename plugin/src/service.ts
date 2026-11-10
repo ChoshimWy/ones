@@ -244,8 +244,11 @@ export class Workbench {
     const detail = this.currentDetail(detailId), client = this.ones(detail.team)
     await client.assertIdentity()
     const check = () => { requireThat(this.currentDetail(detailId) === detail, 'stale', '详情或身份已变化，请重新打开。') }
+    const task = await client.task(detail.taskId)
     check()
-    return { scope: this.scope(client), task: detail.view.task, adapter: new OnesTransitions(this.onesTransport, client.session, detail.team), check }
+    requireThat(task.project.id === detail.view.task.project.id && task.issueType.id === detail.view.task.issueType.id, 'stale', 'Bug 项目或类型已变化，请重新打开。')
+    detail.view = { ...detail.view, task }
+    return { scope: this.scope(client), task, adapter: new OnesTransitions(this.onesTransport, client.session, detail.team), check }
   }
   async repairContext(detailId: string) {
     await this.ready

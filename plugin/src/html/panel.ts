@@ -251,10 +251,10 @@ export class WorkbenchUI {
     this.tab = 'implementation'
     this.error = ''
     this.info = ''
-    this.implementation = new ImplementationView(this.status?.ones.connected ? this.team : '', task => this.openDetail(task, true))
+    this.implementation = new ImplementationView(this.status?.ones.connected ? this.team : '', (task, updateStatus) => this.openDetail(task, true, updateStatus))
     this.render()
   }
-  private openDetail(task: Task, fromImplementation = false): void {
+  private openDetail(task: Task, fromImplementation = false, updateStatus = false): void {
     this.implementation?.dispose()
     this.implementation = undefined
     this.cancelBugs()
@@ -262,7 +262,7 @@ export class WorkbenchUI {
     this.tab = 'implementation'
     this.error = ''
     this.info = ''
-    this.detail = new DetailView(this.team, task.id, fromImplementation ? '返回执行记录' : '返回我的 Bug')
+    this.detail = new DetailView(this.team, task.id, fromImplementation ? '返回执行记录' : '返回我的 Bug', updateStatus)
     this.detail.updated = () => this.loadBugs()
     this.detail.back = () => fromImplementation ? this.showImplementation() : this.changeTab('bugs')
     this.render()

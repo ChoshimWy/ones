@@ -1,3 +1,4 @@
+import { RepairActions } from './repair-actions.ts'
 import { StatusWorkflow } from './status-update.ts'
 import { FocusedProject } from './adapters/focused-project.ts'
 import type { OrcaWorkerApi } from 'orca/worker'
@@ -24,10 +25,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     delete: key => orca.storage.delete(key)
   })
   // 2026-11-10 正式 Worker 两步状态流转及独立回读已验证；仅开放 Adapter 支持的步骤，工时闸保持关闭。
-  const transitions = new StatusWorkflow(detailId => service.transitionContext(detailId), undefined, true)
-  orca.panels.handle('bugs.transitionOptions', input => answer(() => transitions.options(input.detailId)))
-  orca.panels.handle('bugs.transitionPreview', input => answer(() => transitions.preview(input)))
-  orca.panels.handle('bugs.transitionSubmit', input => answer(() => transitions.submit(input.previewId, input.confirmed)))
+  const transitions = new StatusWorkflow(detailId => service.transitionContext(detailId), undefined, true, async detailId => (await repair.result(detailId))?.report)
+  const repairActions = new RepairActions(repair,transitions)
+  orca.panels.handle('bugs.businessOptions', input => answer(() => transitions.businessOptions(input.detailId,'已修复')))
+  orca.panels.handle('bugs.businessPreview', input => answer(() => transitions.businessPreview({...input,goal:'已修复'})))
+  orca.panels.handle('bugs.businessSubmit', input => answer(() => transitions.businessSubmit(input.previewId,input.confirmed)))
+  orca.panels.handle('repair.result', input => answer(() => repair.result(input.detailId)))
+  orca.panels.handle('repair.previewStart', input => answer(() => repairActions.preview(input)))
   orca.panels.handle('bugs.transitionReconcile', input => answer(() => transitions.reconcile(input.detailId, input.operationId)))
   const focusedProject = new FocusedProject({
     context: () => orca.host.call('workspace.readContext'),
@@ -38,8 +42,8 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('repair.cache', (input, context) => answer(async () => repair.cached(await service.repairCacheContext(input.team, context.signal))))
   orca.panels.handle('repair.sync', (input, context) => answer(async () => repair.sync(await service.repairCacheContext(input.team, context.signal), () => service.repairListContext(input.team))))
   orca.panels.handle('repair.read', input => answer(() => repair.read(input.detailId)))
-  orca.panels.handle('repair.prepare', input => answer(() => repair.prepare(input.detailId)))
-  orca.panels.handle('repair.start', input => answer(() => repair.start(input)))
+  orca.panels.handle('repair.prepare', input => answer(() => repairActions.prepare(input.detailId)))
+  orca.panels.handle('repair.start', input => answer(() => repairActions.start(input.previewId,input.confirmed)))
   orca.panels.handle('status', () => answer(() => service.status()))
   orca.panels.handle('auth.login', (input, context) => answer(() => service.login(input, context.signal)))
   orca.panels.handle('auth.logout', input => answer(() => service.logout(input.site)))

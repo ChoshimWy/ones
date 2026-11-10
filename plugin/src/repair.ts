@@ -140,7 +140,29 @@ export class RepairWorkflow {
     this.plans.set(id, { detailId, scope: context.scope, taskId: context.task.id, source: context.task.project, projects, mapping, expires: Date.now() + 600000 })
     return { id, mapping, existing }
   }
-  async start(input: { preparationId: string; projectId: string; agent: string; confirmed: boolean }): Promise<RepairRecord> {
+  /// 详情读取完整执行结果，技术信息只在详情展示；不解析历史摘要猜状态。
+  async result(detailId: string): Promise<RepairListItem | null> {
+    const context = await this.service.repairContext(detailId)
+    await this.cache.consume(context.scope, () => {})
+    const item = (await this.cache.read(context.scope)).items.find(x=>x.task.id===context.task.id)
+    const fresh = await this.service.repairContext(detailId)
+    requireThat(fresh.scope === context.scope && fresh.task.id === context.task.id, 'identity', '读取回执期间身份已变化。')
+    return item ?? null
+  }
+  /// 开始修复的只读预检，冻结可执行 CLI 目标；实际启动仍重复检查。
+  async preflight(input: { preparationId: string; projectId: string; agent: string }) {
+    requireThat(input.agent === 'codex' || input.agent === 'claude', 'input', '不支持的 Agent。')
+    const plan = this.plans.get(input.preparationId)
+    requireThat(plan && plan.expires > Date.now(), 'stale', '修复准备已过期。')
+    const context = await this.service.repairContext(plan.detailId)
+    requireThat(context.scope === plan.scope && context.task.id === plan.taskId && context.task.project.id === plan.source.id, 'identity', '修复目标已变化。')
+    requireThat(plan.projects.some(p=>p.id===input.projectId) && (plan.mapping.kind !== 'mapped' || plan.mapping.project.id===input.projectId), 'scope', '项目不属于已确认映射。')
+    const fresh = (await this.cli.projects()).find(p=>p.id===input.projectId)
+    requireThat(fresh, 'stale', '目标项目已移除。')
+    const target = await this.cli.target(fresh)
+    return {detailId:plan.detailId,task:context.task,scope:context.scope,target}
+  }
+  async start(input: { preparationId: string; projectId: string; agent: string; confirmed: boolean }, hook?: { target: Awaited<ReturnType<OrcaCli['target']>>; targetStatus: string; beforeCollect(): Promise<void> }): Promise<RepairRecord> {
     requireThat(input.confirmed === true, 'confirm', '请确认创建聊天并发送 Bug 内容。')
     requireThat(input.agent === 'codex' || input.agent === 'claude', 'input', '不支持的 Agent。')
     const plan = this.plans.get(input.preparationId)
@@ -155,6 +177,7 @@ export class RepairWorkflow {
     const fresh = (await this.cli.projects()).find(p => p.id === project.id)
     requireThat(fresh, 'stale', '本地项目已移除，请重新映射。')
     const target = await this.cli.target(fresh)
+    requireThat(!hook || JSON.stringify(hook.target) === JSON.stringify(target), 'stale', '确认后 CLI 目标目录已变化。')
     const receipt: RepairRecord = { state: 'unknown', projectName: fresh.name, projectId: fresh.id, createdAt: Date.now() }
     const journal = join(this.root, key + '.json')
     let reservation
@@ -174,6 +197,8 @@ export class RepairWorkflow {
     let registered = false
     let attempted = false, directory: string | undefined, source: Awaited<ReturnType<Workbench['collectRepair']>> | undefined
     try {
+      // 状态达到修复中且逐步回读后，才收集最新正文，避免旧状态快照失效。
+      await hook?.beforeCollect()
       source = await this.service.collectRepair(plan.detailId)
       directory = await mkdtemp(join(this.root, key + '-'))
       const files = new Map<string, string>()
@@ -203,6 +228,7 @@ export class RepairWorkflow {
       registered = true
       const prompt = repairPrompt(source.bug, files, contract)
       await source.validate()
+      requireThat(!hook || source.bug.task.status.id === hook.targetStatus, 'stale', 'Agent 启动前 Bug 已不处于已确认的修复中状态，未启动。')
       const currentTarget = await this.cli.target(fresh)
       requireThat(JSON.stringify(currentTarget) === JSON.stringify(target), 'stale', '项目执行目录已变化。')
       await this.store.set(projectMappingKey(plan.scope, plan.source.id), { sourceProjectId: plan.source.id, targetProjectId: fresh.id })

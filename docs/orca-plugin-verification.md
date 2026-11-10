@@ -364,3 +364,30 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 同目录 `browser-evidence.json` 保存旅程判据。
 
 复现：`ONES_TOOLING=<已安装 Orca tooling checkout> ONES_BROWSER=<现有 Chrome executable> ONES_EVIDENCE=<证据目录> node plugin/tests/cache-panel.browser.mjs`。真实部署、真实接口更新/时延、Agent 沙箱对 result.json 的实际写权限，以及证据内容的独立核验尚未覆盖。
+
+
+## 2026-11-10 修复流程调整：定向证据
+
+源码范围为 `agent/repair-flow` 隔离 worktree，基线 `09ce73a5b280970cb444a6123671f74fac0bcd83`。本节不复用旧真实状态写入来冒充新多步业务操作已上线。
+
+- `repair-actions.test.ts`：11/11。使用真实 Workbench、OnesTransitions、StatusWorkflow、StatusJournal、RepairWorkflow 与虚构 fetch/CLI，覆盖完整路径先预检、单次确认两步后 launch、确认入口与目标绑定、后续必填/CLI/未知 schema 零写、第一/第二步 unknown、重启 reconcile 后剩余路径不重发、配置漂移保留部分成功、最后回读后外部状态变化零启动、launch unknown 保留修复中、注销、四项自动评论、未验收门槛及报告/源码版本变化废止确认。
+- `repair-cache.test.ts`：7/7。保留账户、CAS、文件权限/大小、旧 run 与重启保护；新增结构化代码 fixed + 硬件 not_run、旧报告只读不猜测、序号递增 not_run→passed、逆序/同序号篡改拒绝、相同报告幂等及审计。
+- 受影响既有 `status-update.test.ts` 10/10、`repair.test.ts` 15/15；仍覆盖防重、账本失败、回读字段/本人评论、跨 Worker 锁、崩溃只读核对及描述不变。不运行全量测试。
+- 严格 TypeScript、插件静态校验与 diff 检查作为收尾检查；真实账号不写入、不安装或重载正式插件。
+- `repair-flow.browser.mjs`：完整 HTML 组件 + 虚构 Worker 的隔离 Chrome 旅程，单次开始确认、详情折叠技术信息、列表直达状态表单、四项填充、编辑文字不能解锁验收、未知结果核对不重发、键盘焦点回退通过，pageErrors=[]。`cache-panel.browser.mjs` 的缓存先显、快速重入、失败保留、认证隐藏与迟到响应保护通过。
+
+预览最初在 about:blank 环境缺少 secure-context `crypto.randomUUID` 而超时；改为只绑定 127.0.0.1 的临时服务器，不修改产品代码或注入 crypto polyfill，旅程通过。首轮业务测试仅因“核对/核实”的断言文案不一致失败，修正断言后通过。
+
+### 视觉检查
+
+已实际打开最终代表性截图，检查 360px/460px 深浅色列表、详情技术折叠/展开、开始修复整路径确认、未完成验收禁用和已修复预览：文字、长路径、按钮正常换行，无遮挡、截断或横向溢出。以下为 Chrome 虚构数据渲染预览，不是正式 Orca/ONES 或真实硬件验证；scratch 可能被清理。
+
+- [精简实施列表](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-flow/implementation-clean-list.png>)
+- [详情技术信息](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-flow/repair-detail-technical.png>)
+- [一次开始修复确认](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-flow/repair-business-confirm.png>)
+- [未完成验收保护](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-flow/completion-validation-blocked.png>)
+- [一次完成状态预览](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-flow/completion-business-preview.png>)
+
+同目录 `repair-flow-evidence.json` 为旅程证据；缓存回归证据在相邻 `repair-flow-cache-regression/browser-evidence.json`。重现使用已有工具：`ONES_TOOLING=<Orca tooling checkout> ONES_BROWSER=<Chrome executable> ONES_EVIDENCE=<证据目录> node --import <安装版 orca-test-register.mjs> plugin/tests/repair-flow.browser.mjs`。
+
+未覆盖：真实项目完整路径与字段权限现场复验、真实 Agent 按新结构化协议/序号写入、真实远端部分成功恢复、证据内容独立核验。API 没有已证明的跨客户端 CAS；写前/逐步回读不构成远端原子事务。用户批准实施不包含部署、提交、合并、推送或真实 Bug 状态操作。

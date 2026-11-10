@@ -67,7 +67,7 @@ export function input(
   label: string,
   value: string,
   change: (value: string) => void,
-  options: { type?: string; disabled?: boolean; multiline?: boolean } = {}
+  options: { type?: string; disabled?: boolean; multiline?: boolean; maxLength?: number } = {}
 ): HTMLElement {
   const field = options.multiline ? el('textarea') : el('input')
   field.id = label
@@ -78,7 +78,7 @@ export function input(
   if (field instanceof HTMLInputElement) field.type = options.type ?? 'text'
   else {
     field.rows = 3
-    field.maxLength = 2000
+    field.maxLength = options.maxLength ?? 2000
   }
   field.addEventListener('input', () => change(field.value))
   const caption = el('label', '', label)

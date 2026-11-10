@@ -67,29 +67,32 @@ export default function activate(orca: OrcaWorkerApi): void {
   let implementationDelay = 0
   let draft: unknown = null
   let listCount = 0
+  let reportMode = 'not_run'
+  const report = () => ({reportVersion:2,reportSequence:1,rootCause:'状态刷新沿用了旧对象',solution:'修复后读取权威数据并刷新本地投影',impact:'实施列表与后续状态操作',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:reportMode,reason:reportMode==='passed'?'定向验证通过':'实体硬件尚未验收',remaining:reportMode==='passed'?[]:['实体硬件验收'],evidence:['定向测试通过 /fixture/report.json']},delivery:{state:'uncommitted',note:'未提交、未合并、未发布'},sourceIdentity:'HEAD fixture + patch fixture'})
+  const finalStep = () => ({id:'fix',name:'完成修复',target:{id:'done',name:'已修复'},blockers:[],fields:[{id:'cause',name:'根因',type:1,required:true,value:'',options:[{id:'logic',name:'代码逻辑问题'}]},{id:'version',name:'解决版本',type:2,required:false,value:'',options:[]}]})
+  const startRoute = () => [{source:task.status,step:{id:'confirm',name:'确认',target:{id:'confirmed',name:'确认'},fields:[],blockers:[]}},{source:{id:'confirmed',name:'确认'},step:{id:'start',name:'开始修复',target:{id:'repairing',name:'修复中'},fields:[{id:'classification',name:'分类说明',type:2,required:true,value:'',options:[]}],blockers:[]}}]
+  const summary = () => `说明来源：Agent 结构化回执，非插件独立验收。\n\n根本原因\n${report().rootCause}\n\n解决方法\n${report().solution}\n\n影响范围\n${report().impact}\n\n验证结果\n${report().validation.reason}\n\n交付情况\n未提交、未合并、未发布`
   const handlers: Record<string, (input: Record<string, unknown>) => unknown> = {
     status: () => status,
     'fixture.transition-mode': input => { transitionMode = String(input.mode); return {} },
     'fixture.transition-release': () => { transitionRelease?.(); return {} },
-    'bugs.transitionOptions': () => ({ snapshot: { task, stamp: 'fixture-stamp', steps: [{ id: 'fix', name: '完成修复', target: { id: 'done', name: '已修复' }, blockers: [], fields: [
-      { id: 'cause', name: '根因', type: 1, required: true, value: '', options: [{ id: 'logic', name: '代码逻辑问题' }] },
-      { id: 'version', name: '解决版本', type: 2, required: false, value: '', options: [] }
-    ] }] }, operation: transitionOperation, writeEnabled: true, blockedReason: '' }),
-    'bugs.transitionPreview': input => {
-      const fields = input.fields as Record<string, string>
-      if (!fields.cause) throw Error('Fixture required root cause')
-      transitionInput = input
-      return { id: 'preview-fixture', task, stepName: '完成修复', targetName: '已修复', changes: [{ name: '根因', before: '（空）', after: '代码逻辑问题' }, { name: '解决版本', before: '（空）', after: fields.version }], comment: input.comment, expiresAt: Date.now() + 300000 }
+    'fixture.report-mode': input => {reportMode=String(input.mode);return{}},
+    'bugs.businessOptions': () => ({snapshot:{task,stamp:'fixture-stamp',steps:[finalStep()]},goal:'已修复',route:task.status.id==='done'?[]:[{source:task.status,step:finalStep()}],comment:summary(),completionBlocker:reportMode==='passed'?'':'验收尚未完成：实体硬件尚未验收',operation:transitionOperation,writeEnabled:true,blockedReason:''}),
+    'bugs.businessPreview': input => {
+      const fields=input.fields as Record<string,Record<string,string>>
+      if(reportMode!=='passed')throw Error('验收未完成')
+      if(!fields.fix?.cause)throw Error('Fixture required root cause')
+      transitionInput=input
+      return{id:'preview-fixture',task,goal:'已修复',route:[{source:task.status,step:finalStep()}],fields,comment:input.comment,expiresAt:Date.now()+300000}
     },
-    'bugs.transitionSubmit': async () => {
-      transitionOperation = { id: 'operation-fixture', state: 'unknown', createdAt: Date.now(), evidence: { status: false, fields: false, comment: false, asyncStatus: 'none', message: '结果待核实；禁止重发。' } }
-      if (transitionMode === 'hold') await new Promise<void>(resolve => { transitionRelease = resolve })
-      if (transitionMode === 'unknown') return transitionOperation
-      task.status = { id: 'done', name: '已修复' }
-      detail.comments.items.unshift({ id: 'new-comment', author: '虚构用户', sentAt: 1794000000000000, content: [{ kind: 'text', text: String(transitionInput?.comment) }] })
-      transitionOperation.state = 'verified'
-      transitionOperation.evidence = { status: true, fields: true, comment: true, asyncStatus: 'none', message: '状态、字段及本次评论已回读一致。' }
-      return transitionOperation
+    'bugs.businessSubmit': async()=>{
+      transitionOperation={id:'operation-fixture',state:'unknown',createdAt:Date.now(),evidence:{status:false,fields:false,comment:false,asyncStatus:'none',message:'结果待核实；禁止重发。'}}
+      if(transitionMode==='hold')await new Promise<void>(resolve=>{transitionRelease=resolve})
+      if(transitionMode==='unknown')return{state:'unknown',operations:[transitionOperation],target:'已修复'}
+      task.status={id:'done',name:'已修复'}
+      detail.comments.items.unshift({id:'new-comment',author:'虚构用户',sentAt:1794000000000000,content:[{kind:'text',text:String(transitionInput?.comment)}]})
+      transitionOperation.state='verified'
+      return{state:'verified',operations:[transitionOperation],target:'已修复'}
     },
     'bugs.transitionReconcile': () => {
       task.status = { id: 'done', name: '已修复' }
@@ -108,17 +111,17 @@ export default function activate(orca: OrcaWorkerApi): void {
     },
     'repair.cache': () => {
       const rows = implementationSeeded ? [
-        { task, record: repairRecord },
+        { task, record: repairRecord, report: report() },
         { task: { ...task, id: 'closed-bug', number: 90, name: '虚构已关闭缺陷', status: { id: 'closed', name: '已关闭' } }, record: { state: 'unknown', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794185000000 } }
-      ] : repairRecord ? [{ task, record: repairRecord }] : []
+      ] : repairRecord ? [{ task, record: repairRecord, report: report() }] : []
       return { items: rows, syncedAt: 1794186000000, reconciledAt: 1794186000000, version: 1 }
     },
     'repair.sync': async () => {
       const failed = repairReadFails
       const rows = implementationSeeded ? [
-        { task, record: repairRecord },
+        { task, record: repairRecord, report: report() },
         { task: { ...task, id: 'closed-bug', number: 90, name: '虚构已关闭缺陷', status: { id: 'closed', name: '已关闭' } }, record: { state: 'unknown', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794185000000 } }
-      ] : repairRecord ? [{ task, record: repairRecord }] : []
+      ] : repairRecord ? [{ task, record: repairRecord, report: report() }] : []
       if (implementationDelay) await new Promise(resolve => setTimeout(resolve, implementationDelay))
       if (failed) throw Error('Fixture record list failed')
       return { items: rows, syncedAt: Date.now(), reconciledAt: Date.now(), version: 2 }
@@ -127,9 +130,16 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (repairReadFails) return Promise.reject(Error('Fixture record read failed'))
       return repairRecord
     },
-    'repair.prepare': () => ({ id: 'repair-plan', mapping: repairManual ? { kind: 'manual', reason: 'missing', candidates: [{ id: 'local-fixture', name: '本地虚构项目' }] } : { kind: 'mapped', via: 'automatic', project: { id: 'local-fixture', name: '本地虚构项目' } }, existing: repairRecord }),
+    'repair.result': () => repairRecord ? {task,record:repairRecord,report:report()} : null,
+    'repair.previewStart': input => {
+      const fields=input.fields as Record<string,Record<string,string>>
+      if(input.projectId!=='local-fixture'||!fields.start?.classification)throw Error('Fixture required root cause')
+      return{id:'start-preview',projectName:'本地虚构项目',status:{id:'business-start',task,goal:'修复中',route:startRoute(),fields,comment:'开始修复',expiresAt:Date.now()+300000}}
+    },
+    'repair.prepare': () => ({ id: 'repair-plan', status:{snapshot:{task},route:startRoute(),operation:null,writeEnabled:true}, mapping: repairManual ? { kind: 'manual', reason: 'missing', candidates: [{ id: 'local-fixture', name: '本地虚构项目' }] } : { kind: 'mapped', via: 'automatic', project: { id: 'local-fixture', name: '本地虚构项目' } }, existing: repairRecord }),
     'repair.start': input => {
-      if (input.projectId !== 'local-fixture' || input.confirmed !== true) throw Error('Invalid fixture repair')
+      if (input.previewId !== 'start-preview' || input.confirmed !== true) throw Error('Invalid fixture repair')
+      task.status = {id:'repairing',name:'修复中'}
       repairRecord = { state: 'sent', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794186000000, sessionId: 'session-fixture-only' }
       return repairRecord
     },

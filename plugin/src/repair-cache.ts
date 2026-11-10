@@ -1,3 +1,5 @@
+import { parseRepairReport, type RepairReport } from './domain/repair-report.ts'
+export type { RepairReport } from './domain/repair-report.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
@@ -7,7 +9,6 @@ import { requireThat, record, type Task } from './domain/model.ts'
 import type { RepairListItem, RepairRecord } from './repair.ts'
 
 /// Agent 回执只是报告，不等价于独立验证证据通过。
-export type RepairReport = { outcome: 'passed' | 'failed' | 'blocked'; summary: string; sourceIdentity: string; evidence: string[] }
 /// scope 包含站点、团队与账号；远端快照与本地修复状态分离。
 export type CachedRepairs = { items: RepairListItem[]; syncedAt: number | null; reconciledAt: number | null; version: number }
 /// 单次回执能力只授权指定 run，不能访问 ONES 或任意数据库字段。
@@ -38,6 +39,7 @@ export class RepairCache {
       if (version !== 0 && version !== 1) { db.close(); throw Error('Unsupported repair cache schema') }
       db.exec(`CREATE TABLE IF NOT EXISTS repairs(scope TEXT NOT NULL, task_id TEXT NOT NULL, task TEXT NOT NULL, receipt TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, run_id TEXT, revision TEXT, token_hash TEXT, result_file TEXT, report TEXT, report_error TEXT, PRIMARY KEY(scope,task_id));
         CREATE TABLE IF NOT EXISTS sync(scope TEXT PRIMARY KEY, synced_at INTEGER, reconciled_at INTEGER, version INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS report_history(scope TEXT NOT NULL, task_id TEXT NOT NULL, run_id TEXT NOT NULL, sequence INTEGER NOT NULL, report TEXT NOT NULL, received_at INTEGER NOT NULL, PRIMARY KEY(scope,task_id,run_id,sequence));
         PRAGMA user_version=1;`)
       this.database = db
       return db
@@ -114,11 +116,13 @@ export class RepairCache {
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); throw error }
   }
-  /// 私有结果文件支持插件关闭后写入；同一 run 只接收一次，重复读取幂等。
+  /// 私有结果文件支持插件关闭后写入；同 run 序号单调更新，同序号同内容幂等，保留最近二十条审计。
   async consume(scope: string, check: () => void): Promise<void> {
     const db = await this.db()
-    const rows = db.prepare('SELECT task_id,run_id,revision,token_hash,result_file FROM repairs WHERE scope=? AND run_id IS NOT NULL AND report IS NULL').all(scope)
+    const rows = db.prepare('SELECT task_id,run_id,revision,token_hash,result_file,report FROM repairs WHERE scope=? AND run_id IS NOT NULL').all(scope)
     for (const row of rows) {
+      // 已接受旧协议只读保留，不尝试升级或推断历史四项。
+      if (row.report && !('reportSequence' in JSON.parse(String(row.report)))) continue
       check()
       let handle
       try {
@@ -126,16 +130,28 @@ export class RepairCache {
         const st = await handle.stat()
         requireThat(st.isFile() && st.nlink === 1 && st.uid === process.getuid?.() && (st.mode & 0o077) === 0 && st.size <= 64000, 'receipt', '回执文件类型、权限或大小不符合要求。')
         const value = record(JSON.parse(await handle.readFile('utf8')))
-        requireThat(Object.keys(value).sort().join(',') === 'evidence,outcome,revision,runId,sourceIdentity,summary,token', 'receipt', '回执字段不符合协议。')
         requireThat(value.runId === row.run_id && value.revision === row.revision && typeof value.token === 'string' && hash(value.token) === row.token_hash, 'receipt', '回执不属于本次任务或输入版本。')
-        requireThat(['passed','failed','blocked'].includes(String(value.outcome)) && typeof value.summary === 'string' && value.summary.length > 0 && value.summary.length <= 4000 && typeof value.sourceIdentity === 'string' && value.sourceIdentity.length > 0 && value.sourceIdentity.length <= 2000 && Array.isArray(value.evidence) && value.evidence.length <= 20 && value.evidence.every(x => typeof x === 'string' && x.length > 0 && x.length <= 2000) && (value.outcome !== 'passed' || value.evidence.length > 0), 'receipt', '回执缺少修复摘要、源码身份或验证证据。')
-        const report: RepairReport = { outcome: value.outcome as RepairReport['outcome'], summary: value.summary as string, sourceIdentity: value.sourceIdentity as string, evidence: value.evidence as string[] }
+        const {runId, revision, token, ...payload} = value
+        const report = parseRepairReport(payload)
         check()
-        db.prepare('UPDATE repairs SET report=?,report_error=NULL WHERE scope=? AND task_id=? AND run_id=? AND report IS NULL').run(JSON.stringify(report),scope,String(row.task_id),String(row.run_id))
+        // 同一事务重读最新序号，跨 Worker 的迟到旧报告也不能覆盖新报告。
+        db.exec('BEGIN IMMEDIATE')
+        try {
+          const current = db.prepare('SELECT run_id,report FROM repairs WHERE scope=? AND task_id=?').get(scope,String(row.task_id))
+          requireThat(current?.run_id === row.run_id, 'receipt', '执行轮次已变化，未接收旧回执。')
+          const previous = current.report ? JSON.parse(String(current.report)) : undefined
+          requireThat(!previous || ('reportSequence' in previous && report.reportSequence >= previous.reportSequence), 'receipt', '旧报告序号不能覆盖最新结果。')
+          requireThat(!previous || report.reportSequence !== previous.reportSequence || JSON.stringify(report) === JSON.stringify(previous), 'receipt', '同一报告序号的内容不可变更。')
+          const encoded = JSON.stringify(report)
+          db.prepare('INSERT OR IGNORE INTO report_history(scope,task_id,run_id,sequence,report,received_at) VALUES(?,?,?,?,?,?)').run(scope,String(row.task_id),String(row.run_id),report.reportSequence,encoded,Date.now())
+          db.prepare('UPDATE repairs SET report=?,report_error=NULL WHERE scope=? AND task_id=? AND run_id=?').run(encoded,scope,String(row.task_id),String(row.run_id))
+          db.prepare('DELETE FROM report_history WHERE scope=? AND task_id=? AND run_id=? AND sequence NOT IN (SELECT sequence FROM report_history WHERE scope=? AND task_id=? AND run_id=? ORDER BY sequence DESC LIMIT 20)').run(scope,String(row.task_id),String(row.run_id),scope,String(row.task_id),String(row.run_id))
+          db.exec('COMMIT')
+        } catch (error) { db.exec('ROLLBACK'); throw error }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           check()
-          db.prepare('UPDATE repairs SET report_error=? WHERE scope=? AND task_id=? AND run_id=? AND report IS NULL').run('回执未接收：格式、身份、权限或证据不符合协议；可修正结果文件后重试。',scope,String(row.task_id),String(row.run_id))
+          db.prepare('UPDATE repairs SET report_error=? WHERE scope=? AND task_id=? AND run_id=? ').run('回执未接收：格式、身份、权限或证据不符合协议；可修正结果文件后重试。',scope,String(row.task_id),String(row.run_id))
         }
       } finally { await handle?.close() }
     }

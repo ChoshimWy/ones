@@ -1,3 +1,4 @@
+import { repairProgress, repairCompletionBlocker } from '../domain/repair-report.ts'
 import type { CachedRepairs } from '../repair-cache.ts'
 import type { Task } from '../domain/model.ts'
 import { button, card, el, message, notice, request, row, text, UIError } from './dom.ts'
@@ -14,7 +15,7 @@ export class ImplementationView {
   private busy = false
   private timer?: ReturnType<typeof setInterval>
   private ticks = 0
-  constructor(private team: string, private openDetail: (task: Task) => void) {
+  constructor(private team: string, private openDetail: (task: Task, updateStatus?: boolean) => void) {
     void this.load()
     this.timer = setInterval(() => {
       if (!this.busy && !this.disposed) void this.poll(++this.ticks % 12 === 0)
@@ -32,20 +33,13 @@ export class ImplementationView {
     const data = this.data
     this.element.replaceChildren(
       row(el('h2', '', '执行记录'), button('刷新执行记录', () => this.load(true), this.busy)),
-      text('当前团队本人负责 Bug 的本地执行记录；缓存可能过期，远端状态在后台同步。', true),
-      notice(this.status, this.failed),
-      text(data?.syncedAt ? `上次同步：${new Date(data.syncedAt).toLocaleString()} · 缓存快照，非实时授权` : '尚未完成远端同步', true),
-      notice('Agent 回执属于自报结果；验证证据待核验，不会自动更改 ONES 状态。'),
+      this.failed ? notice(this.status, true) : text(`${this.busy ? '正在同步' : '本地记录'}${data?.syncedAt ? ` · 上次更新 ${new Date(data.syncedAt).toLocaleTimeString()}` : ' · 首次同步中'}`, true),
       ...((data?.items.length ?? 0) ? data!.items.map(({ task, record, report, reportError }) => card(
         `#${task.number} ${task.name}`,
-        notice(report ? report.outcome === 'passed' ? 'Agent 报告修复与验证通过 · 证据待核验' : report.outcome === 'failed' ? 'Agent 报告验证失败' : 'Agent 报告受阻' : record.state === 'sent' ? '已发起 · 等待 Agent 回执' : '待核实 · 启动或发送结果不明', report ? report.outcome !== 'passed' : record.state !== 'sent'),
-        text(`ONES 状态（快照）：${task.status.name} · ${task.project.name}`, true),
-        text(`执行时间：${new Date(record.createdAt).toLocaleString()}`),
-        text(`目标项目：${record.projectName}`),
-        ...(record.sessionId ? [text(`Session：${record.sessionId}`, true)] : []),
-        ...(report ? [text(report.summary), text(`源码身份：${report.sourceIdentity}`, true), ...report.evidence.map(item => text(item, true))] : []),
-        ...(reportError ? [notice(reportError, true)] : []),
-        button('查看 Bug 详情', () => this.openDetail(task))
+        text(report ? repairProgress(report) : record.state === 'sent' ? '已发起 · 等待修复回执' : '启动结果待核实，不会重复发送'),
+        ...(report && repairCompletionBlocker(report) ? [notice(repairCompletionBlocker(report))] : report ? [text('Agent 报告验收通过，证据待人工核验', true)] : []),
+        ...(reportError ? [notice('修复回执更新未接收，请在详情查看。', true)] : []),
+        row(button('查看详情', () => this.openDetail(task)), button('更新状态', () => this.openDetail(task,true)))
       )) : data ? [notice(data.syncedAt ? '暂无匹配的执行记录。' : '暂无本地缓存，首次同步可能需要等待。')] : [])
     )
   }

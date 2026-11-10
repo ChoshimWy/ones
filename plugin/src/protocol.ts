@@ -1,5 +1,7 @@
+import type { RepairActions } from './repair-actions.ts'
+import type { RepairListItem } from './repair.ts'
 import type { CachedRepairs } from './repair-cache.ts'
-import type { StatusWorkflow, StatusPreview, StatusResult } from './status-update.ts'
+import type { StatusWorkflow, StatusPreview, StatusResult, BusinessInput, BusinessPreview, BusinessResult } from './status-update.ts'
 import type { TransitionInput } from './adapters/ones-transitions.ts'
 import type { RepairPreparation, RepairRecord } from './repair.ts'
 import type { BugDetail, Discussion, Attachment, DetailPage } from './adapters/bug-details.ts'
@@ -16,17 +18,19 @@ export type RecoveryPreview = { id: string | null; receiptId: string; matchCount
 export type ImplementationBrief = { task: Task; text: string; blockedReason: string }
 declare module 'orca' {
   interface PluginRequests {
-    'bugs.transitionOptions': { input: { detailId: string }; output: Answer<Awaited<ReturnType<StatusWorkflow['options']>>> }
-    'bugs.transitionPreview': { input: TransitionInput; output: Answer<StatusPreview> }
-    'bugs.transitionSubmit': { input: { previewId: string; confirmed: boolean }; output: Answer<StatusResult> }
     'bugs.transitionReconcile': { input: { detailId: string; operationId: string }; output: Answer<StatusResult> }
 
     'bugs.projectFilter': { input: { team: string; projects: Option[] }; output: Answer<{ localProject: Option | null; project: Option | null }> }
     'repair.cache': { input: { team: string }; output: Answer<CachedRepairs> }
     'repair.sync': { input: { team: string }; output: Answer<CachedRepairs> }
     'repair.read': { input: { detailId: string }; output: Answer<RepairRecord | null> }
-    'repair.prepare': { input: { detailId: string }; output: Answer<RepairPreparation> }
-    'repair.start': { input: { preparationId: string; projectId: string; agent: string; confirmed: boolean }; output: Answer<RepairRecord> }
+    'repair.prepare': { input: { detailId: string }; output: Answer<Awaited<ReturnType<RepairActions['prepare']>>> }
+    'repair.start': { input: { previewId: string; confirmed: boolean }; output: Answer<RepairRecord> }
+    'repair.previewStart': { input: Parameters<RepairActions['preview']>[0]; output: Answer<Awaited<ReturnType<RepairActions['preview']>>> }
+    'repair.result': { input: { detailId: string }; output: Answer<RepairListItem | null> }
+    'bugs.businessOptions': { input: { detailId: string }; output: Answer<Awaited<ReturnType<StatusWorkflow['businessOptions']>>> }
+    'bugs.businessPreview': { input: Omit<BusinessInput,'goal'>; output: Answer<BusinessPreview> }
+    'bugs.businessSubmit': { input: { previewId:string;confirmed:boolean }; output: Answer<BusinessResult> }
     'status': { output: Answer<Status> }
     'auth.login': { input: LoginInput; output: Answer<Status> }
     'auth.logout': { input: { site: Site }; output: Answer<Status> }

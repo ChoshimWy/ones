@@ -8,7 +8,7 @@ export type TransitionField = { id: string; name: string; type: 1 | 2; required:
 /// 步骤与完整 schema 绑定；阻断原因仍对用户可见。
 export type TransitionStep = { id: string; name: string; target: Option; fields: TransitionField[]; blockers: string[] }
 /// 写前版本包含原始详情和配置摘要，防止确认后字段/步骤变化。
-export type TransitionSnapshot = { task: Task; stamp: string; steps: TransitionStep[] }
+export type TransitionSnapshot = { task: Task; stamp: string; steps: TransitionStep[]; graph?: { source: Option; step: TransitionStep }[]; configurationStamp?: string }
 /// 只允许已确认字段与纯文本评论输入。
 export type TransitionInput = { detailId: string; stepId: string; fields: Record<string, string>; comment: string }
 /// 持久化的最小请求，不包含凭证、任意 URL 或原始 Bug 正文。
@@ -74,10 +74,12 @@ export class OnesTransitions {
     const allowedIds = allowed.transitions.map(v => id(record(v).uuid))
     const definitions = catalog.fields.map(record), fieldConfigs = configs.field_configs.map(record), current = info.field_values.map(record)
     // 2. 每个允许步骤都必须唯一关联配置；未知约束保留为可见阻断。
-    const steps = allowedIds.map(stepId => {
-      const candidates = transitions.map(record).filter(s => s.uuid === stepId && s.project_uuid === task.project.id && s.issue_type_uuid === task.issueType.id && s.issue_type_scope_uuid === info.issue_type_scope_uuid && s.start_status_uuid === task.status.id)
-      requireThat(candidates.length === 1, 'schema', '允许步骤无法唯一关联完整字段配置。')
-      const step = candidates[0]!, blockers: string[] = []
+    const scoped = transitions.map(record).filter(s => s.project_uuid === task.project.id && s.issue_type_uuid === task.issueType.id && s.issue_type_scope_uuid === info.issue_type_scope_uuid)
+    requireThat(scoped.length <= 100 && new Set(scoped.map(s => s.uuid)).size === scoped.length, 'schema', '完整流程配置重复或超出容量。')
+    const graph = scoped.map(step => {
+      const stepId = id(step.uuid), blockers: string[] = []
+      const source = statusCatalog.find(s => s.uuid === step.start_status_uuid)
+      requireThat(source, 'schema', '流程来源状态不存在。')
       const target = statusCatalog.find(s => s.uuid === step.end_status_uuid)
       requireThat(target && Array.isArray(step.fields), 'schema', '步骤目标或字段配置缺失。')
       if (step.condition !== null || step.trigger !== null || !Array.isArray(step.post_function) || step.post_function.length) blockers.push('该步骤含未支持的条件、触发器或后置动作，请打开原单。')
@@ -100,11 +102,16 @@ export class OnesTransitions {
         fields.push({ id: id(field.field_uuid), name: text(definition.name), type, required: field.required, value, options })
       }
       if (new Set(fields.map(f => f.id)).size !== fields.length || fields.length > 30) blockers.push('字段重复或超过支持容量。')
-      return { id: stepId, name: text(step.name), target: { id: id(target.uuid), name: text(target.name) }, fields, blockers }
+      return { source: { id: id(source.uuid), name: text(source.name) }, step: { id: stepId, name: text(step.name), target: { id: id(target.uuid), name: text(target.name) }, fields, blockers } }
+    })
+    const steps = allowedIds.map(stepId => {
+      const candidates = graph.filter(item => item.step.id === stepId && item.source.id === task.status.id)
+      requireThat(candidates.length === 1, 'schema', '允许步骤无法唯一关联完整字段配置。')
+      return candidates[0]!.step
     })
     requireThat(steps.length <= 30 && new Set(allowedIds).size === allowedIds.length, 'schema', '步骤重复或超出容量。')
     requireThat(Buffer.byteLength(JSON.stringify(steps)) <= 160000, 'size', '状态字段与选项超出面板容量，未截断；请打开原单。')
-    return { task, steps, stamp: createHash('sha256').update(JSON.stringify([info, stamps, catalog, configs, allowed, permissions])).digest('hex') }
+    return { task, steps, graph, configurationStamp: createHash('sha256').update(JSON.stringify([stamps,catalog,configs,statuses])).digest('hex'), stamp: createHash('sha256').update(JSON.stringify([info, stamps, catalog, configs, allowed, permissions])).digest('hex') }
   }
   /// 单次发送已持久化意图；任何异常都交由只读核对，绝不自动重发。
   async submit(intent: TransitionIntent): Promise<string | null> {
