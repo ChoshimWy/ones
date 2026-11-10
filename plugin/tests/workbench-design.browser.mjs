@@ -1,0 +1,102 @@
+import assert from 'node:assert/strict'
+
+// 复用生产面板与分页 fixture，所有文本和记录均为虚构。
+export async function exerciseWorkbenchDesign({ page, screenshot }) {
+  const names = ['调整设备面板的布局与交互', '跨项目配置的提示需要更清晰', '自定义配置弹窗适配窄屏', '清空页面前增加二次确认', '区分主控开关的状态图标', '优化场景切换后的状态显示', '空场景回退时显示明确提示', '指定场景的触发方式说明', '连续切换时保留正确选择']
+  const items = names.map((name, index) => ({
+    id: 'design-' + index, number: 10001 + index, name: '[UI] ' + name,
+    project: { id: 'project', name: '示例照明项目' },
+    issueType: { id: 'bug', name: '缺陷' }, status: { id: 'pending', name: '待处理' }
+  }))
+  await page.evaluate(items => orca.host.call('plugin.request', { name: 'fixture.pagination', input: { pages: [{ items }] } }), items)
+  await page.getByRole('button', { name: '刷新缺陷', exact: true }).click()
+  await page.getByText('当前显示 9 / 已读取 9 项；本次分页结束', { exact: true }).waitFor()
+  assert.equal(await page.locator('.tag[data-status="待处理"] .status-count').innerText(), '9')
+  assert.equal(await page.locator('.tag[data-status="修复中"] .status-count').innerText(), '0')
+  assert.equal(await page.getByText('实时更新', { exact: true }).count(), 0)
+  await page.locator('.bug-item').first().focus()
+  await screenshot('workbench-desktop', 'dark', 885)
+  const darkSurface = await page.locator('.workbench').evaluate(node => getComputedStyle(node).backgroundColor)
+  await screenshot('workbench-light-desktop', 'light', 885)
+  const lightSurface = await page.locator('.workbench').evaluate(node => getComputedStyle(node).backgroundColor)
+  assert.notEqual(lightSurface, darkSurface)
+  assert.equal(lightSurface, 'rgb(255, 255, 255)')
+  await screenshot('workbench-panel', 'dark', 460)
+  await screenshot('workbench-narrow', 'light', 360)
+  // 删除状态与恢复默认仍可用，数量和空态来自实际筛选。
+  await page.getByLabel('移除状态：待处理', { exact: true }).click()
+  assert.equal(await page.locator('.bug-item').count(), 0)
+  await page.getByLabel('展开状态选项', { exact: true }).click()
+  await page.getByRole('button', { name: '恢复默认状态', exact: true }).click()
+  assert.equal(await page.locator('.bug-item').count(), 9)
+  await page.getByLabel('收起状态选项', { exact: true }).click()
+  await page.getByRole('button', { name: '刷新', exact: true }).click()
+  await page.getByText('当前显示 9 / 已读取 9 项；本次分页结束', { exact: true }).waitFor()
+  await page.locator('.bug-item').first().focus()
+  await page.keyboard.press('Enter')
+  await page.getByRole('button', { name: '返回我的 Bug', exact: true }).waitFor()
+  await screenshot('workbench-detail', 'dark', 460)
+  await page.getByRole('button', { name: '返回我的 Bug', exact: true }).click()
+  await page.getByRole('tab', { name: '登录', exact: true }).click()
+  await screenshot('workbench-login', 'dark', 360)
+  await page.getByRole('tab', { name: '我的 Bug', exact: true }).click()
+  await exercisePaginationAppearance(page, screenshot, items[0])
+  return { environment: 'Headless Chrome, production HTML with fictional Worker', checks: ['desktop 885 / panel 460 / narrow 360 without page overflow', 'accurate loaded status counts', 'remove and restore filters', 'footer refresh', 'keyboard detail navigation and return', 'login form narrow layout', 'host light/dark tokens change actual surface', 'paging first/loading/middle/last/error and keyboard focus'], liveOrcaVerified: false }
+}
+
+
+async function exercisePaginationAppearance(page, screenshot, task) {
+  const call = (name, input = {}) => page.evaluate(async ({ name, input }) =>
+    (await orca.host.call('plugin.request', { name, input })).output.value, { name, input })
+  const tasks = (start, count) => Array.from({ length: count }, (_, i) => ({
+    ...task, id: 'appearance-' + (start + i), number: start + i,
+    name: '分页交互验证 · 虚构缺陷 ' + (start + i)
+  }))
+  const previous = page.getByRole('button', { name: '上一页', exact: true })
+  const next = page.getByRole('button', { name: '下一页', exact: true })
+  const settled = () => page.waitForFunction(() => document.querySelector('.pagination-controls')?.getAttribute('aria-busy') === 'false')
+  await call('fixture.pagination', { pages: [{ items: tasks(1, 10) }, { items: tasks(11, 10), hold: true }, { items: tasks(21, 3) }] })
+  await page.getByRole('button', { name: '刷新缺陷', exact: true }).click()
+  await settled()
+  assert.equal(await previous.isDisabled(), true)
+  assert.equal(await next.isEnabled(), true)
+  await screenshot('pagination-first-light', 'light', 460)
+  await next.focus()
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(async () => (await orca.host.call('plugin.request', { name: 'fixture.paginationStats' })).output.value.held === 1)
+  assert.equal(await previous.isDisabled(), true)
+  assert.equal(await next.isDisabled(), true)
+  assert.equal(await page.locator('.pagination-hint').innerText(), '正在读取…')
+  await screenshot('pagination-loading-light', 'light', 360)
+  await call('fixture.paginationRelease')
+  await settled()
+  assert.equal(await page.locator('#bug-page-position p').innerText(), '第 2 页')
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'bug-page-next')
+  assert.equal(await previous.isEnabled(), true)
+  assert.equal(await next.isEnabled(), true)
+  await screenshot('pagination-middle-light', 'light', 460)
+  await screenshot('pagination-middle-dark', 'dark', 460)
+  await next.focus()
+  await page.keyboard.press('Enter')
+  await settled()
+  assert.equal(await page.locator('#bug-page-position p').innerText(), '第 3 页')
+  assert.equal(await next.isDisabled(), true)
+  assert.equal(await page.locator('.pagination-hint').innerText(), '已到末页')
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'bug-page-position')
+  await screenshot('pagination-last-light', 'light', 360)
+  await previous.click()
+  await settled()
+  assert.equal(await page.locator('#bug-page-position p').innerText(), '第 2 页')
+  assert.equal(await page.locator('.bug-item').count(), 10)
+  await call('fixture.pagination', { pages: [{ items: tasks(1, 10) }, { items: tasks(11, 2), fail: true }] })
+  await page.getByRole('button', { name: '刷新缺陷', exact: true }).click()
+  await settled()
+  await next.click()
+  await settled()
+  assert.equal(await page.locator('#bug-page-position p').innerText(), '第 1 页')
+  assert.equal(await page.locator('.pagination-hint').innerText(), '读取失败 · 保留当前页')
+  await screenshot('pagination-error-light', 'light', 360)
+  await page.getByRole('button', { name: '重试读取', exact: true }).click()
+  await settled()
+  assert.equal(await page.locator('#bug-page-position p').innerText(), '第 2 页')
+}

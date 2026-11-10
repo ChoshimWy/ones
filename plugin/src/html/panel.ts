@@ -14,6 +14,7 @@ import {
   stack,
   text
 } from './dom.ts'
+import { icon } from './icons.ts'
 import { ImplementationView } from './implementation.ts'
 import { DetailView } from './detail.ts'
 import { HoursView } from './hours.ts'
@@ -44,6 +45,7 @@ export class WorkbenchUI {
   private bugPage = 1
   /// 失败后重试原目标页，而不是丢弃已读取的缓存。
   private bugRetryPage = 1
+  private paginationFocus = ''
   /// 每页最多显示十条匹配的缺陷。
   private readonly bugPageSize = 10
   private next: string | null = null
@@ -150,7 +152,10 @@ export class WorkbenchUI {
   }
   /// 使旧读取失效；导航时同时取消项目跟随，筛选和翻页保留最新跟随请求。
   private cancelBugs(cancelProject = true): void {
-    if (cancelProject) this.projectGeneration++
+    if (cancelProject) {
+      this.projectGeneration++
+      this.paginationFocus = ''
+    }
     this.bugGeneration++
     this.bugController?.abort()
     this.bugController = undefined
@@ -487,7 +492,14 @@ export class WorkbenchUI {
         this.resetBugPage()
       })
       remove.setAttribute('aria-label', '移除状态：' + name)
-      selectedTags.append(el('span', 'tag', name, remove))
+      const count = this.bugs.filter(task =>
+        (this.project === 'all' || task.project.id === this.project) &&
+        (this.statuses === null || task.status.name === name)
+      ).length
+      const tag = el('span', 'tag', el('span', 'status-dot'), name, el('span', 'status-count', count), remove)
+      tag.dataset.status = name
+      tag.title = '当前项目已读取的缺陷数量'
+      selectedTags.append(tag)
     }
     if (this.statuses?.length === 0) selectedTags.append(text('请选择状态', true))
     const toggle = button(
@@ -508,7 +520,7 @@ export class WorkbenchUI {
       // Nested buttons keep their own action; the rest of the field toggles the picker.
       if (event.target instanceof Element && !event.target.closest('button')) toggle.click()
     })
-    const picker = stack(text('状态筛选'), tags)
+    const picker = stack(el('p', 'filter-label', icon('filter'), '状态筛选'), tags)
     if (this.expanded) {
       const options = [...new Set((this.catalog ?? []).map((s) => s.name))]
       const choices = el(
@@ -564,7 +576,9 @@ export class WorkbenchUI {
         const item = button('', () => this.openDetail(task), this.busy, 'card bug-item')
         item.setAttribute('aria-label', `查看 Bug #${task.number} ${task.name} 的详情`)
         const arrow = arrowIcon('bug-item-arrow')
+        item.dataset.status = task.status.name
         item.append(
+          el('span', 'status-dot'),
           el(
             'span',
             'bug-item-main',
@@ -576,14 +590,19 @@ export class WorkbenchUI {
         return item
       })
     )
-    return stack(
-      row(
-        text('仅本人缺陷 · 每页 10 条', true),
+    items.classList.add('bug-items')
+    const filters = el('section', 'stack filter-card',
+      el('div', 'row bug-actions',
+        el('span', 'auto-refresh', '进入时自动刷新'),
+        el('span', 'personal-only', '仅本人缺陷'),
         button(
           '刷新缺陷',
           () => this.loadBugs(),
-          this.busy || this.bugLoading || !this.status?.ones.connected || !this.team
-        )
+          this.busy || this.bugLoading || !this.status?.ones.connected || !this.team,
+          'refresh-bugs'
+        ),
+        el('span', 'read-state', el('span', 'connection-dot'),
+          this.bugLoading ? '正在读取' : this.bugError ? '读取异常' : this.bugLoaded ? '已读取' : '未读取')
       ),
       this.status?.ones.connected && !this.team
         ? notice('请在登录页选择 ONES 团队；多团队账号不默选。')
@@ -612,7 +631,47 @@ export class WorkbenchUI {
             `当前显示 ${list.length} / 已读取 ${this.bugs.length} 项；${this.bugError ? '结果不完整' : this.next ? '仍有下一页' : '本次分页结束'}`,
             true
           )
-        : null,
+        : null
+    )
+    const projectLabel = filters.querySelector('label[for="项目筛选"]')
+    projectLabel?.prepend(icon('folder'))
+    projectLabel?.classList.add('filter-label')
+    const refresh = filters.querySelector('.refresh-bugs')
+    refresh?.prepend(icon('refresh'))
+    const pageButton = (label: string, direction: number, disabled: boolean) => {
+      const id = direction < 0 ? 'bug-page-previous' : 'bug-page-next'
+      const control = button('', () => {
+        if (document.activeElement === control) this.paginationFocus = id
+        void this.showBugPage(this.bugPage + direction)
+      }, disabled, direction < 0 ? 'pagination-previous' : 'pagination-next')
+      control.id = id
+      control.setAttribute('aria-label', label)
+      control.title = label
+      control.append(arrowIcon('filter-arrow'))
+      return control
+    }
+    const position = el('div', 'pagination-position',
+      text(`第 ${this.bugPage} 页`, true),
+      el('span', 'pagination-hint', this.bugLoading ? '正在读取…'
+        : this.bugError ? '读取失败 · 保留当前页'
+        : !this.bugLoaded ? '尚未读取'
+        : filtered.length === 0 ? '无匹配结果'
+        : !hasNext ? '已到末页' : '还有下一页'))
+    position.id = 'bug-page-position'
+    position.tabIndex = -1
+    position.setAttribute('role', 'status')
+    position.setAttribute('aria-live', 'polite')
+    const pagination = el('div', 'pagination-controls', position,
+      el('div', 'pagination-arrows',
+        pageButton('上一页', -1, this.busy || this.bugLoading || this.bugPage === 1),
+        pageButton('下一页', 1, this.busy || this.bugLoading || !hasNext || !this.bugLoaded)))
+    pagination.setAttribute('aria-label', '缺陷分页')
+    pagination.setAttribute('aria-busy', String(this.bugLoading))
+    const footerRefresh = button('刷新', () => this.loadBugs(),
+      this.busy || this.bugLoading || !this.status?.ones.connected || !this.team, 'footer-refresh')
+    footerRefresh.prepend(icon('refresh'))
+    return el('div', 'stack bug-workspace',
+      filters,
       list.length
         ? items
         : text(
@@ -625,10 +684,10 @@ export class WorkbenchUI {
                   : '已读取数据中无匹配缺陷',
             true
           ),
-      row(
-        button('上一页', () => this.showBugPage(this.bugPage - 1), this.busy || this.bugLoading || this.bugPage === 1),
-        text(`第 ${this.bugPage} 页`, true),
-        button('下一页', () => this.showBugPage(this.bugPage + 1), this.busy || this.bugLoading || !hasNext || !this.bugLoaded)
+      el('footer', 'row bug-footer',
+        footerRefresh,
+        el('p', 'muted pagination-total', '已筛选 ' + filtered.length + ' 条 · 每页 10 条'),
+        pagination
       ),
       this.bugError && this.next !== null
         ? button('重试读取', () => this.showBugPage(this.bugRetryPage), this.busy || this.bugLoading)
@@ -655,6 +714,7 @@ export class WorkbenchUI {
       ['settings', '登录']
     ]) {
       const tab = button(label, () => this.changeTab(value), this.busy)
+      tab.prepend(icon(value))
       tab.setAttribute('role', 'tab')
       tab.setAttribute('aria-selected', String(value === this.tab))
       nav.append(tab)
@@ -669,14 +729,23 @@ export class WorkbenchUI {
             : this.tab === 'recovery'
               ? this.records.render()
               : (this.detail?.element ?? this.implementation?.element ?? text('请选择团队后点击“实施”查看执行记录。', true))
+    this.root.classList.add('workbench')
+    const connection = (site: Site, label: string) => el('span',
+      'connection-badge' + (this.status?.[site].connected ? ' connected' : ''),
+      icon('shield'), label + (this.status?.[site].connected ? ' 已认证' : ' 未登录'))
     this.root.replaceChildren(
-      row(el('h1', '', 'ONES 工作台'), el('span', 'badge', '开发预览')),
-      text('从问题到实施，从考勤到工时', true),
-      row(
-        el('span', 'badge', `ONES ${this.status?.ones.connected ? '已认证' : '未登录'}`),
-        el('span', 'badge', `Coho ${this.status?.coho.connected ? '已认证' : '未登录'}`)
+      el('header', 'workbench-header',
+        el('div', 'planet-scene', el('span', 'planet'), el('span', 'orbit')),
+        el('div', 'brand-row',
+          el('div', 'brand-mark', icon('implementation')),
+          stack(
+            row(el('h1', '', 'ONES 工作台'), el('span', 'preview-badge', '开发预览')),
+            text('从问题到实施，从考勤到工时', true)
+          )
+        ),
+        el('div', 'row connections', connection('ones', 'ONES'), connection('coho', 'Coho')),
+        nav
       ),
-      nav,
       ...(this.busy
         ? [
             row(
@@ -700,6 +769,16 @@ export class WorkbenchUI {
         try {
           field.setSelectionRange(selection[0], selection[1])
         } catch {}
+    }
+    if (this.tab === 'bugs' && !this.bugLoading && this.paginationFocus) {
+      const control = document.getElementById(this.paginationFocus)
+      // 请求期间若用户已移到其它控件，不抢回焦点。
+      if (document.activeElement === document.body || document.activeElement === control) {
+        const target = control instanceof HTMLButtonElement && !control.disabled
+          ? control : document.getElementById('bug-page-position')
+        target?.focus({ preventScroll: true })
+      }
+      this.paginationFocus = ''
     }
     window.scrollTo(0, scroll)
   }

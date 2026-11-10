@@ -5,6 +5,7 @@ import { resolve,join } from 'node:path'
 import { fileURLToPath,pathToFileURL } from 'node:url'
 import { installImplementationPaginationFixture, exerciseImplementationPagination } from './implementation-pagination.browser.mjs'
 import { installBugPaginationFixture, exerciseBugPagination } from './bug-pagination.browser.mjs'
+import { exerciseWorkbenchDesign } from './workbench-design.browser.mjs'
 import { exerciseRepairPanel } from './repair-panel.browser.mjs'
 import { exerciseStatusUpdate,exerciseStatusKeyboard } from './status-update.browser.mjs'
 
@@ -17,7 +18,7 @@ const root=resolve(fileURLToPath(new URL('..',import.meta.url)))
 const activate=(await import(pathToFileURL(join(root,'tests/fixtures/html-worker.ts')).href)).default
 const handlers=new Map()
 activate({panels:{handle:(name,callback)=>handlers.set(name,callback)}})
-if(process.env.ONES_JOURNEY==='bug-pagination')installBugPaginationFixture(handlers)
+if(['bug-pagination','ui-design'].includes(process.env.ONES_JOURNEY))installBugPaginationFixture(handlers)
 if(process.env.ONES_JOURNEY==='implementation-pagination')installImplementationPaginationFixture(handlers)
 const bundle=await build({entryPoints:[join(root,'src/html/panel.ts')],bundle:true,platform:'browser',format:'iife',write:false})
 await mkdir(output,{recursive:true})
@@ -54,7 +55,12 @@ try{
     else await page.screenshot({path:join(output,name+'.png'),fullPage:true})
   }
   const api={evaluate:expression=>page.evaluate(expression),wait:async expression=>{try{return await page.waitForFunction(expression)}catch(error){console.log(JSON.stringify({waiting:expression,body:await page.locator('body').innerText(),errors}));throw error}},screenshot,press:key=>page.keyboard.press(key)}
-  if(process.env.ONES_JOURNEY==='list-status'){
+  if(process.env.ONES_JOURNEY==='ui-design'){
+    const evidence=await exerciseWorkbenchDesign({page,screenshot})
+    assert.deepEqual(errors,[])
+    await writeFile(join(output,'ui-design-evidence.json'),JSON.stringify({...evidence,pageErrors:errors},null,2))
+    console.log(JSON.stringify(evidence,null,2))
+  }else if(process.env.ONES_JOURNEY==='list-status'){
     const statuses=['待处理','确认','修复中','已修复','已关闭','重新打开','自定义状态']
     await page.evaluate(statuses=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true,statuses}}),statuses)
     await page.getByRole('tab',{name:'实施',exact:true}).click()
