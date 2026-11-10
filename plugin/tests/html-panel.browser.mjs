@@ -237,7 +237,7 @@ export async function exerciseBugRows({ evaluate, wait, screenshot }) {
   await back()
   const calls = await evaluate(`orca.plugin.request('fixture.calls').then(r=>r.value)`)
   assert.equal(calls.calls.filter((name) => name === 'bugs.detail').length, 3)
-  assert.ok(calls.listCount >= 4)
+  assert.equal(calls.listCount, 1)
   assert.equal(
     calls.calls.some(
       (name) =>

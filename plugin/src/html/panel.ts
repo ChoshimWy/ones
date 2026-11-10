@@ -32,11 +32,20 @@ export class WorkbenchUI {
   private controller?: AbortController
   private disposed = false
   private implementation?: ImplementationView
+  /// 实施列表在详情往返时保留页码；身份变化清除，不写入持久存储。
+  private implementationPage = 1
   private detail?: DetailView
   private accounts: Record<Site, string> = { ones: '', coho: '' }
   private passwords: Record<Site, string> = { ones: '', coho: '' }
   private httpConsent = false
+  /// 已读取的游标缓存；筛选后再按固定大小分页。
   private bugs: Task[] = []
+  /// 已确认显示的页码，翻页读取失败时保持不变。
+  private bugPage = 1
+  /// 失败后重试原目标页，而不是丢弃已读取的缓存。
+  private bugRetryPage = 1
+  /// 每页最多显示十条匹配的缺陷。
+  private readonly bugPageSize = 10
   private next: string | null = null
   private cursors = new Set<string>()
   private bugController?: AbortController
@@ -70,10 +79,11 @@ export class WorkbenchUI {
     await this.refresh()
     if (!this.disposed && this.tab === 'bugs') void this.loadBugs()
   }
+  /// 同步项目跟随；项目改变时统一重置分页并使旧目标页失效。
   private async followProject(focusChanged = false): Promise<void> {
     const generation = ++this.projectGeneration, epoch = this.epoch
     if ((!this.projectFollowing && !focusChanged) || this.disposed || !this.status?.ones.connected || !this.team) return
-    const team = this.team
+    const team = this.team, previousProject = this.project
     const projects = [...new Map(this.bugs.map(task => [task.project.id, task.project])).values()]
     this.render()
     const current = () => generation === this.projectGeneration && epoch === this.epoch && team === this.team && !this.disposed
@@ -96,7 +106,12 @@ export class WorkbenchUI {
       this.localProjectId = null
       this.projectFollowing = true
       this.projectFollowNote = '项目跟随不可用，显示全部已读取项目。'
-    } finally { if (current()) this.render() }
+    } finally {
+      if (current()) {
+        if (this.project !== previousProject) this.resetBugPage()
+        else this.render()
+      }
+    }
   }
   async run<T>(
     action: (signal: AbortSignal) => Promise<T>,
@@ -133,13 +148,17 @@ export class WorkbenchUI {
     this.hours.clearDay()
     this.records.clear()
   }
-  private cancelBugs(): void {
+  /// 使旧读取失效；导航时同时取消项目跟随，筛选和翻页保留最新跟随请求。
+  private cancelBugs(cancelProject = true): void {
+    if (cancelProject) this.projectGeneration++
     this.bugGeneration++
     this.bugController?.abort()
     this.bugController = undefined
     this.bugLoading = false
   }
+  /// 身份或团队变化时清除业务缓存与页码，禁止沿用上一账号的列表。
   private clearBusiness(): void {
+    this.implementationPage = 1
     this.implementation?.dispose()
     this.implementation = undefined
     this.detail?.dispose()
@@ -148,6 +167,8 @@ export class WorkbenchUI {
     this.invalidateDay()
     this.hours.clear()
     this.bugs = []
+    this.bugPage = 1
+    this.bugRetryPage = 1
     this.next = null
     this.cursors.clear()
     this.bugLoaded = false
@@ -224,10 +245,12 @@ export class WorkbenchUI {
     this.error = '操作已取消；若刚提交登录，请刷新连接状态。'
     this.render()
   }
+  /// 切换页面；从缺陷详情返回时保留筛选和当前页。
   changeTab(value: string): void {
     if (this.busy) return
     if (value === 'implementation') { this.showImplementation(); return }
     if (value === this.tab) return
+    const returningToBugs = value === 'bugs' && !!this.detail
     if (this.tab === 'bugs') this.cancelBugs()
     if (this.tab === 'implementation') {
       this.implementation?.dispose()
@@ -240,8 +263,12 @@ export class WorkbenchUI {
     this.error = ''
     this.info = ''
     this.render()
-    if (value === 'bugs') void this.loadBugs()
+    if (value === 'bugs') {
+      if (returningToBugs && this.bugLoaded) void this.showBugPage(this.bugPage)
+      else void this.loadBugs()
+    }
   }
+  /// 重建实施列表时恢复本生命周期页码，由新缓存约束有效范围。
   private showImplementation(): void {
     this.passwords = { ones: '', coho: '' }
     this.cancelBugs()
@@ -251,7 +278,12 @@ export class WorkbenchUI {
     this.tab = 'implementation'
     this.error = ''
     this.info = ''
-    this.implementation = new ImplementationView(this.status?.ones.connected ? this.team : '', (task, updateStatus) => this.openDetail(task, true, updateStatus))
+    this.implementation = new ImplementationView(
+      this.status?.ones.connected ? this.team : '',
+      (task, updateStatus) => this.openDetail(task, true, updateStatus),
+      this.implementationPage,
+      page => { this.implementationPage = page }
+    )
     this.render()
   }
   private openDetail(task: Task, fromImplementation = false, updateStatus = false): void {
@@ -267,55 +299,80 @@ export class WorkbenchUI {
     this.detail.back = () => fromImplementation ? this.showImplementation() : this.changeTab('bugs')
     this.render()
   }
-  async loadBugs(more = false): Promise<void> {
-    if (more && this.bugLoading) return
-    const after = more ? this.next : ''
-    if (after === null) return
+  /// 显式刷新重新读取第一页；普通前后翻页复用游标缓存。
+  async loadBugs(): Promise<void> {
     this.cancelBugs()
+    this.bugs = []
+    this.bugPage = 1
+    this.bugRetryPage = 1
+    this.next = ''
+    this.cursors.clear()
+    this.bugLoaded = false
     this.bugError = ''
-    this.projectGeneration++
-    if (!more) {
-      this.bugs = []
-      this.next = null
-      this.cursors.clear()
-      this.bugLoaded = false
-      this.catalog = null
-      this.expanded = false
-    }
-    if (!this.status?.ones.connected || !this.team) {
+    this.catalog = null
+    this.expanded = false
+    await this.showBugPage(1)
+  }
+  /// 权威缓存上的筛选结果；禁止先截取远端页再筛选。
+  private filteredBugs(): Task[] {
+    return this.bugs.filter(task =>
+      (this.project === 'all' || task.project.id === this.project) &&
+      (this.statuses === null || this.statuses.includes(task.status.name))
+    )
+  }
+  /// 筛选变化立即回到第一页，并取消旧目标页的读取。
+  private resetBugPage(): void {
+    this.bugPage = 1
+    void this.showBugPage(1)
+  }
+  /// 按需填满目标页或读至末尾；失败保留当前页及可重试游标。
+  private async showBugPage(target: number): Promise<void> {
+    // 1. 隔离本次分页读取，缓存命中时不发远端请求。
+    this.cancelBugs(false)
+    this.bugRetryPage = target
+    if (!this.status?.ones.connected || !this.team || this.disposed) {
+      // 未连接或已销毁时不能读取账号数据。
       this.render()
       return
     }
+
     const generation = this.bugGeneration,
       epoch = this.epoch,
       team = this.team,
       controller = new AbortController()
+    const current = () => generation === this.bugGeneration && epoch === this.epoch && team === this.team && !this.disposed
     this.bugController = controller
     this.bugLoading = true
+    if (this.next !== null) this.bugError = ''
     this.render()
-    const current = () =>
-      generation === this.bugGeneration &&
-      epoch === this.epoch &&
-      team === this.team &&
-      !this.disposed
     try {
-      const page = await request<TaskPage>('bugs.list', { team, after }, controller.signal)
-      if (!current()) return
-      const previous = more ? this.bugs : []
-      if (
-        new Set(page.items.map((t) => t.id)).size !== page.items.length ||
-        page.items.some((t) => previous.some((old) => old.id === t.id)) ||
-        (page.nextCursor !== null && this.cursors.has(page.nextCursor))
-      ) {
-        this.next = null
-        this.bugError = '缺陷分页重复或未推进，列表不完整，请重新刷新。'
-        return
+      // 2. 空远端页仍可继续；只读取满足当前目标所需的数据。
+      while (this.statuses?.length !== 0 && this.filteredBugs().length < target * this.bugPageSize && this.next !== null) {
+        const page = await request<TaskPage>('bugs.list', { team, after: this.next }, controller.signal)
+        if (!current()) return // 旧账号、导航或筛选的响应不得回写。
+
+        if (
+          new Set(page.items.map(task => task.id)).size !== page.items.length ||
+          page.items.some(task => this.bugs.some(old => old.id === task.id)) ||
+          (page.nextCursor !== null && (page.nextCursor === '' || this.cursors.has(page.nextCursor)))
+        ) {
+          this.next = null
+          this.bugError = '缺陷分页重复或未推进，列表不完整，请重新刷新。'
+          return
+        }
+
+        this.bugs = [...this.bugs, ...page.items]
+        this.next = page.nextCursor
+        this.bugLoaded = true
+        if (this.next !== null) this.cursors.add(this.next)
+        if (this.projectFollowing) {
+          await this.followProject()
+          if (!current()) return // 项目匹配改变筛选时，新第一页请求已接管。
+
+        }
       }
-      this.bugs = [...previous, ...page.items]
-      this.next = page.nextCursor
-      this.bugLoaded = true
-      if (this.next) this.cursors.add(this.next)
-      if (this.projectFollowing) void this.followProject()
+      // 3. 下一页无匹配结果时留在原页，末页允许不足十条。
+      if (target === 1 || this.filteredBugs().length > (target - 1) * this.bugPageSize) this.bugPage = target
     } catch (error) {
       if (current()) this.bugError = message(error)
     } finally {
@@ -409,6 +466,7 @@ export class WorkbenchUI {
       button('刷新连接状态', () => this.refresh(), this.busy)
     )
   }
+  /// 渲染当前筛选页及稳定的上一页、下一页入口。
   private bugList(): HTMLElement {
     const projects = new Map(
       this.bugs.map((t) => [t.project.id, { value: t.project.id, label: t.project.name }])
@@ -418,17 +476,15 @@ export class WorkbenchUI {
         value: this.project,
         label: this.projectName || '已选项目（本次尚未读取）'
       })
-    const list = this.bugs.filter(
-      (t) =>
-        (this.project === 'all' || t.project.id === this.project) &&
-        (this.statuses === null || this.statuses.includes(t.status.name))
-    )
+    const filtered = this.filteredBugs()
+    const list = filtered.slice((this.bugPage - 1) * this.bugPageSize, this.bugPage * this.bugPageSize)
+    const hasNext = filtered.length > this.bugPage * this.bugPageSize || (this.next !== null && this.statuses?.length !== 0)
     const selectedTags = el('div', 'selected-tags')
     const tags = el('div', 'tags', selectedTags)
     for (const name of this.statuses ?? ['全部状态']) {
       const remove = button('×', () => {
         this.statuses = this.statuses === null ? [] : this.statuses.filter((s) => s !== name)
-        this.render()
+        this.resetBugPage()
       })
       remove.setAttribute('aria-label', '移除状态：' + name)
       selectedTags.append(el('span', 'tag', name, remove))
@@ -467,7 +523,7 @@ export class WorkbenchUI {
               this.statuses = checked
                 ? [...new Set([...current, name])]
                 : current.filter((s) => s !== name)
-              this.render()
+              this.resetBugPage()
             }
           )
         )
@@ -486,18 +542,18 @@ export class WorkbenchUI {
             : stack(
                 check('全部状态', this.statuses === null, (v) => {
                   this.statuses = v ? null : ['待处理', '重新打开', '修复中']
-                  this.render()
+                  this.resetBugPage()
                 }),
                 choices
               ),
           row(
             button('恢复默认状态', () => {
               this.statuses = ['待处理', '重新打开', '修复中']
-              this.render()
+              this.resetBugPage()
             }),
             button('清空状态', () => {
               this.statuses = []
-              this.render()
+              this.resetBugPage()
             })
           )
         )
@@ -522,7 +578,7 @@ export class WorkbenchUI {
     )
     return stack(
       row(
-        text('进入时自动刷新 · 仅本人缺陷', true),
+        text('仅本人缺陷 · 每页 10 条', true),
         button(
           '刷新缺陷',
           () => this.loadBugs(),
@@ -544,7 +600,7 @@ export class WorkbenchUI {
           this.projectFollowNote = '手动筛选；下次切换 Orca 项目后恢复自动匹配。'
           this.project = v
           this.projectName = projects.get(v)?.label ?? ''
-          this.render()
+          this.resetBugPage()
         },
         false,
         true
@@ -569,14 +625,14 @@ export class WorkbenchUI {
                   : '已读取数据中无匹配缺陷',
             true
           ),
-      this.next
-        ? button(
-            '加载更多缺陷（列表尚未完整）',
-            () => this.loadBugs(true),
-            this.busy || this.bugLoading
-          )
-        : null,
-      notice('Bug 创建、修改、状态流转尚未开放。读取不改变原 Bug。')
+      row(
+        button('上一页', () => this.showBugPage(this.bugPage - 1), this.busy || this.bugLoading || this.bugPage === 1),
+        text(`第 ${this.bugPage} 页`, true),
+        button('下一页', () => this.showBugPage(this.bugPage + 1), this.busy || this.bugLoading || !hasNext || !this.bugLoaded)
+      ),
+      this.bugError && this.next !== null
+        ? button('重试读取', () => this.showBugPage(this.bugRetryPage), this.busy || this.bugLoading)
+        : null
     )
   }
   render(): void {

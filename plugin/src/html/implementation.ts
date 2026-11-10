@@ -30,7 +30,18 @@ export class ImplementationView {
   private busy = false
   private timer?: ReturnType<typeof setInterval>
   private ticks = 0
-  constructor(private team: string, private openDetail: (task: Task, updateStatus?: boolean) => void) {
+  /// 当前显示页，仅保存在本页面及其父级的内存生命周期中。
+  private page: number
+  /// 本地完整记录按每页十条展示，不新增远端分页请求。
+  private readonly pageSize = 10
+  /// 接收父级保留的页码；回调仅更新内存状态，不持久化或发起业务写入。
+  constructor(
+    private team: string,
+    private openDetail: (task: Task, updateStatus?: boolean) => void,
+    initialPage = 1,
+    private pageChanged: (page: number) => void = () => {}
+  ) {
+    this.page = initialPage
     void this.load()
     this.timer = setInterval(() => {
       if (!this.busy && !this.disposed) void this.poll(++this.ticks % 12 === 0)
@@ -43,20 +54,39 @@ export class ImplementationView {
     this.controller.abort()
     clearInterval(this.timer)
   }
-  /// 所有远端业务动作仍由详情重新鉴权，缓存不是写入授权。
+  /// 本地切页不读取网络；刷新和轮询由既有读取流程独立负责。
+  private changePage(page: number): void {
+    this.page = page
+    this.render()
+  }
+  /// 先约束有效页再切片；远端业务动作仍由详情重新鉴权，缓存不是写入授权。
   private render() {
     const data = this.data
+    const pageCount = Math.max(1, Math.ceil((data?.items.length ?? 0) / this.pageSize))
+    // 1. 首次缓存未返回时保留父级页码；真实空列表或鉴权失败则回到第一页。
+    if (data || this.failed) {
+      this.page = Math.max(1, Math.min(this.page, pageCount))
+      this.pageChanged(this.page)
+    }
+
+    const items = data?.items.slice((this.page - 1) * this.pageSize, this.page * this.pageSize) ?? []
+    // 2. 仅渲染当前页，后台同步不重置仍然有效的页码。
     this.element.replaceChildren(
       row(el('h2', '', '执行记录'), button('刷新执行记录', () => this.load(true), this.busy)),
       this.failed ? notice(this.status, true) : text(`${this.busy ? '正在同步' : '本地记录'}${data?.syncedAt ? ` · 上次更新 ${new Date(data.syncedAt).toLocaleTimeString()}` : ' · 首次同步中'}`, true),
-      ...((data?.items.length ?? 0) ? data!.items.map(({ task, record, report, reportError }) => card(
+      ...(items.length ? items.map(({ task, record, report, reportError }) => card(
         `#${task.number} ${task.name}`,
         bugStatus(task),
         text(report ? repairProgress(report) : record.state === 'sent' ? '已发起 · 等待修复回执' : '启动结果待核实，不会重复发送'),
         text(repairValidationSummary(report), true),
         ...(reportError ? [notice('修复回执更新未接收，请在详情查看。', true)] : []),
         row(button('查看详情', () => this.openDetail(task)), button('更新状态', () => this.openDetail(task,true)))
-      )) : data ? [notice(data.syncedAt ? '暂无匹配的执行记录。' : '暂无本地缓存，首次同步可能需要等待。')] : [])
+      )) : data ? [notice(data.syncedAt ? '暂无匹配的执行记录。' : '暂无本地缓存，首次同步可能需要等待。')] : []),
+      row(
+        button('上一页', () => this.changePage(this.page - 1), !data || this.page === 1),
+        text(`第 ${this.page} 页`, true),
+        button('下一页', () => this.changePage(this.page + 1), !data || this.page >= pageCount)
+      )
     )
   }
   /// 先显示缓存，再按过期时间同步；刷新失败不抹去缓存且明确标识。

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { readFile,mkdir,writeFile } from 'node:fs/promises'
 import { resolve,join } from 'node:path'
 import { fileURLToPath,pathToFileURL } from 'node:url'
+import { installImplementationPaginationFixture, exerciseImplementationPagination } from './implementation-pagination.browser.mjs'
+import { installBugPaginationFixture, exerciseBugPagination } from './bug-pagination.browser.mjs'
 import { exerciseRepairPanel } from './repair-panel.browser.mjs'
 import { exerciseStatusUpdate,exerciseStatusKeyboard } from './status-update.browser.mjs'
 
@@ -15,6 +17,8 @@ const root=resolve(fileURLToPath(new URL('..',import.meta.url)))
 const activate=(await import(pathToFileURL(join(root,'tests/fixtures/html-worker.ts')).href)).default
 const handlers=new Map()
 activate({panels:{handle:(name,callback)=>handlers.set(name,callback)}})
+if(process.env.ONES_JOURNEY==='bug-pagination')installBugPaginationFixture(handlers)
+if(process.env.ONES_JOURNEY==='implementation-pagination')installImplementationPaginationFixture(handlers)
 const bundle=await build({entryPoints:[join(root,'src/html/panel.ts')],bundle:true,platform:'browser',format:'iife',write:false})
 await mkdir(output,{recursive:true})
 const browser=await chromium.launch({headless:true,executablePath:process.env.ONES_BROWSER})
@@ -32,13 +36,14 @@ try{
   server=createServer((_request,response)=>{response.setHeader('Content-Type','text/html; charset=utf-8');response.end(`<html><head><meta charset="utf-8"><style>${css}</style></head><body><main id="app" class="stack"></main></body></html>`)})
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
   await page.goto(`http://127.0.0.1:${server.address().port}`)
-  await page.evaluate(()=>{globalThis.orca={host:{call:(_method,input)=>globalThis.fixtureRequest(input)},on:()=>({dispose(){}}),shell:{openExternal:async()=>{throw Error('External navigation forbidden')}}}})
+  await page.evaluate(()=>{globalThis.orca={host:{call:(_method,input)=>globalThis.fixtureRequest(input)},on:(_event,callback)=>{globalThis.fixtureWorkspaceChanged=callback;return{dispose(){}}},shell:{openExternal:async()=>{throw Error('External navigation forbidden')}}}})
   const theme=async dark=>page.evaluate(dark=>{
     const colors=dark?['#16181d','#eceef4','#aeb5c3','#22252d','#383e4b','#80aaff','#d66']:['#fff','#18202b','#627083','#f3f5f8','#d8dee8','#356bdd','#c33']
     const vars={'background':colors[0],'foreground':colors[1],'muted-foreground':colors[2],'card':colors[0],'card-foreground':colors[1],'muted':colors[3],'border':colors[4],'input':colors[4],'primary':colors[5],'secondary':colors[3],'secondary-foreground':colors[1],'destructive':colors[6]}
     for(const[k,v]of Object.entries(vars))document.documentElement.style.setProperty('--orca-'+k,v)
   },dark)
   await theme(false)
+  if(process.env.ONES_JOURNEY==='implementation-pagination')await page.clock.install()
   await page.addScriptTag({content:bundle.outputFiles[0].text})
   await page.locator('button.bug-item').first().waitFor()
   const screenshot=async(name,mode,width)=>{
@@ -78,6 +83,16 @@ try{
     assert.deepEqual(errors,[])
     const evidence={environment:'Chrome production HTML + fictional Worker, no live ONES writes',checks:['seven state labels; six distinct semantic colors','unknown state neutral','light 360px / dark 460px without overflow','repair report cannot override Bug status','refresh updates state; sync failure preserves marked cache','no business writes'],pageErrors:errors}
     await writeFile(join(output,'list-status-evidence.json'),JSON.stringify(evidence,null,2))
+    console.log(JSON.stringify(evidence,null,2))
+  }else if(process.env.ONES_JOURNEY==='implementation-pagination'){
+    const evidence=await exerciseImplementationPagination({page,screenshot})
+    assert.deepEqual(errors,[])
+    await writeFile(join(output,'implementation-pagination-evidence.json'),JSON.stringify({...evidence,pageErrors:errors},null,2))
+    console.log(JSON.stringify(evidence,null,2))
+  }else if(process.env.ONES_JOURNEY==='bug-pagination'){
+    const evidence=await exerciseBugPagination({page,screenshot})
+    assert.deepEqual(errors,[])
+    await writeFile(join(output,'bug-pagination-evidence.json'),JSON.stringify({...evidence,pageErrors:errors},null,2))
     console.log(JSON.stringify(evidence,null,2))
   }else if(process.env.ONES_JOURNEY==='acceptance'){
     for(const mode of ['legacy','na-pending','na-passed']){
