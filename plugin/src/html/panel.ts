@@ -14,6 +14,7 @@ import {
   stack,
   text
 } from './dom.ts'
+import { ImplementationView } from './implementation.ts'
 import { DetailView } from './detail.ts'
 import { HoursView } from './hours.ts'
 import { RecordsView } from './records.ts'
@@ -30,6 +31,7 @@ export class WorkbenchUI {
   private epoch = 0
   private controller?: AbortController
   private disposed = false
+  private implementation?: ImplementationView
   private detail?: DetailView
   private accounts: Record<Site, string> = { ones: '', coho: '' }
   private passwords: Record<Site, string> = { ones: '', coho: '' }
@@ -138,6 +140,8 @@ export class WorkbenchUI {
     this.bugLoading = false
   }
   private clearBusiness(): void {
+    this.implementation?.dispose()
+    this.implementation = undefined
     this.detail?.dispose()
     this.detail = undefined
     this.cancelBugs()
@@ -221,9 +225,13 @@ export class WorkbenchUI {
     this.render()
   }
   changeTab(value: string): void {
-    if (this.busy || value === this.tab) return
+    if (this.busy) return
+    if (value === 'implementation') { this.showImplementation(); return }
+    if (value === this.tab) return
     if (this.tab === 'bugs') this.cancelBugs()
     if (this.tab === 'implementation') {
+      this.implementation?.dispose()
+      this.implementation = undefined
       this.detail?.dispose()
       this.detail = undefined
     }
@@ -234,14 +242,28 @@ export class WorkbenchUI {
     this.render()
     if (value === 'bugs') void this.loadBugs()
   }
-  private openDetail(task: Task): void {
+  private showImplementation(): void {
+    this.passwords = { ones: '', coho: '' }
+    this.cancelBugs()
+    this.detail?.dispose()
+    this.detail = undefined
+    this.implementation?.dispose()
+    this.tab = 'implementation'
+    this.error = ''
+    this.info = ''
+    this.implementation = new ImplementationView(this.status?.ones.connected ? this.team : '', task => this.openDetail(task, true))
+    this.render()
+  }
+  private openDetail(task: Task, fromImplementation = false): void {
+    this.implementation?.dispose()
+    this.implementation = undefined
     this.cancelBugs()
     this.detail?.dispose()
     this.tab = 'implementation'
     this.error = ''
     this.info = ''
-    this.detail = new DetailView(this.team, task.id)
-    this.detail.back = () => this.changeTab('bugs')
+    this.detail = new DetailView(this.team, task.id, fromImplementation ? '返回执行记录' : '返回我的 Bug')
+    this.detail.back = () => fromImplementation ? this.showImplementation() : this.changeTab('bugs')
     this.render()
   }
   async loadBugs(more = false): Promise<void> {
@@ -589,7 +611,7 @@ export class WorkbenchUI {
             ? this.hours.render()
             : this.tab === 'recovery'
               ? this.records.render()
-              : (this.detail?.element ?? text('点击“我的 Bug”中的列表条目查看完整详情。', true))
+              : (this.detail?.element ?? this.implementation?.element ?? text('请选择团队后点击“实施”查看执行记录。', true))
     this.root.replaceChildren(
       row(el('h1', '', 'ONES 工作台'), el('span', 'badge', '开发预览')),
       text('从问题到实施，从考勤到工时', true),
@@ -625,6 +647,7 @@ export class WorkbenchUI {
     window.scrollTo(0, scroll)
   }
   dispose(): void {
+    this.implementation?.dispose()
     this.disposed = true
     this.projectGeneration++
     this.workspaceSubscription?.dispose()

@@ -42,11 +42,12 @@ export class DetailView {
   private repairBottom = button('执行修复', () => this.repair?.open(), true, 'primary')
   constructor(
     private team: string,
-    private taskId: string
+    private taskId: string,
+    backLabel = '返回我的 Bug'
   ) {
     this.element.append(
       row(
-        button('返回我的 Bug', () => this.back?.()),
+        button(backLabel, () => this.back?.()),
         button('刷新详情', () => this.open())
       ),
       el('div', 'row detail-actions', button('打开原单', () => openOriginal(team, taskId)), this.repairTop),

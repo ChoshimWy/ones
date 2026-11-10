@@ -48,6 +48,11 @@ function fixture(body = '<p>正文</p><img data-uuid="image">') {
       if (path.endsWith("/users/me")) return Response.json({ uuid: "owner" });
       if (path.endsWith("/items/graphql")) {
         assert.ok(!String(init?.body).includes("mutation"));
+        if (String(init?.body).includes('PluginTaskPage')) {
+          const payload = JSON.parse(String(init?.body));
+          assert.deepEqual(payload.variables.filter, { assign_in: ['owner'], issueType_in: ['bug-type'] });
+          return Response.json({ data: { buckets: [{ tasks: [task], pageInfo: { hasNextPage: false, unstable: false, endCursor: '' } }] } });
+        }
         return Response.json({ data: { tasks: [task] } });
       }
       if (path.endsWith("/issue_types"))
@@ -188,4 +193,22 @@ test('project follow service: authenticated candidates select by current project
   assert.equal(result.project?.id, 'project');
   await f.service.logout('ones');
   await assert.rejects(f.service.projectFilter('team', { id: 'local', name: '项目' }, [{ id: 'project', name: '项目' }]));
+});
+
+test('repair list service: scopes all-status bugs without detail, revokes on logout and cancellation', async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  const context = await f.service.repairListContext('team', controller.signal);
+  const page = await context.readPage('');
+  assert.equal(page.items[0]?.id, 'bug');
+  assert.equal(page.nextCursor, null);
+  await assert.rejects(f.service.repairListContext('other-team'));
+  controller.abort();
+  assert.throws(context.check);
+  await assert.rejects(context.readPage(''));
+  const current = await f.service.repairListContext('team');
+  await f.service.logout('ones');
+  assert.throws(current.check);
+  await assert.rejects(current.readPage(''));
+  await assert.rejects(f.service.repairListContext('team'));
 });

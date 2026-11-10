@@ -5,10 +5,11 @@ import { join } from 'node:path'
 import { OrcaCli, launchReceipt, type LaunchReceipt } from './adapters/orca-cli.ts'
 import { mediaIds, repairPrompt } from './domain/repair-content.ts'
 import { resolveProjectMapping, projectMappingKey, type MappingResult, type ProjectMapping } from './domain/project-mapping.ts'
-import { requireThat, record, type Option } from './domain/model.ts'
+import { requireThat, record, type Option, type Task } from './domain/model.ts'
 import type { Store, Workbench } from './service.ts'
 
 export type RepairRecord = LaunchReceipt & { projectName: string; projectId: string; createdAt: number; directory?: string }
+export type RepairListItem = { task: Task; record: RepairRecord }
 export type RepairPreparation = { id: string; mapping: MappingResult; existing: RepairRecord | null }
 type Plan = { detailId: string; scope: string; taskId: string; source: Option; mapping: MappingResult; projects: Option[]; expires: number }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -41,16 +42,45 @@ export class RepairWorkflow {
       throw error
     }
   }
-  async read(detailId: string): Promise<RepairRecord | null> {
-    const context = await this.service.repairContext(detailId)
+  private async hasRoot(): Promise<boolean> {
     try {
       const st = await lstat(this.root)
       requireThat(st.isDirectory() && !st.isSymbolicLink() && (st.mode & 0o077) === 0 && st.uid === process.getuid?.(), 'storage', '修复资料目录权限不安全。')
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
       throw error
     }
+    return true
+  }
+  async read(detailId: string): Promise<RepairRecord | null> {
+    const context = await this.service.repairContext(detailId)
+    if (!await this.hasRoot()) return null
     return this.existing(this.key(context.scope, context.task.id))
+  }
+  async list(context: Awaited<ReturnType<Workbench['repairListContext']>>): Promise<RepairListItem[]> {
+    context.check()
+    if (!await this.hasRoot()) { context.check(); return [] }
+    const items: RepairListItem[] = [], cursors = new Set<string>(), tasks = new Set<string>()
+    let after = '', bytes = 0
+    for (let count = 0; ; count++) {
+      context.check()
+      requireThat(count < 100, 'size', '缺陷分页超出执行记录查询上限，未展示不完整列表。')
+      const page = await context.readPage(after)
+      bytes += Buffer.byteLength(JSON.stringify(page))
+      requireThat(tasks.size + page.items.length <= 5000 && bytes <= 8 * 1024 * 1024, 'size', '缺陷数量超出执行记录查询上限，未展示不完整列表。')
+      for (const task of page.items) {
+        context.check()
+        if (tasks.has(task.id)) continue
+        tasks.add(task.id)
+        const receipt = await this.existing(this.key(context.scope, task.id))
+        if (receipt) items.push({ task, record: receipt })
+      }
+      context.check()
+      if (page.nextCursor === null) return items.sort((a, b) => b.record.createdAt - a.record.createdAt)
+      requireThat(page.nextCursor !== after && !cursors.has(page.nextCursor), 'partial', '执行记录查询分页未推进，请重试。')
+      cursors.add(page.nextCursor)
+      after = page.nextCursor
+    }
   }
   async prepare(detailId: string): Promise<RepairPreparation> {
     const context = await this.service.repairContext(detailId)

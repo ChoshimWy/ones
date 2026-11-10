@@ -200,6 +200,25 @@ export class Workbench {
     requireThat(identity === this.identity(), 'stale', '账号已变化，请重新读取项目筛选。')
     return { localProject, project: filterProject(localProject, candidates, bindings) }
   }
+  async repairListContext(team: string, signal?: AbortSignal) {
+    await this.ready
+    const identity = this.identity(), client = this.ones(team)
+    const check = () => {
+      signal?.throwIfAborted()
+      requireThat(identity === this.identity(), 'stale', '账号已变化，请重新读取执行记录。')
+    }
+    await client.assertIdentity(signal)
+    check()
+    return {
+      scope: this.scope(client), check,
+      readPage: async (after: string) => {
+        check()
+        const page = await client.bugs(after, signal)
+        check()
+        return page
+      }
+    }
+  }
   async repairContext(detailId: string) {
     await this.ready
     const detail = this.currentDetail(detailId)

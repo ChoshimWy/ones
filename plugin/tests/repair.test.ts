@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
@@ -192,5 +193,47 @@ test('repair read: restores persisted receipt without CLI or preparation and pre
     }
     await writeFile(join(f.root, journal), '{broken')
     await assert.rejects(restored.read('detail'))
+  } finally { await rm(f.root, { recursive: true, force: true }) }
+})
+
+test('repair list: restores old journals across pages, sorts records, isolates scope and never launches', async () => {
+  const f = await fixture()
+  try {
+    const plan = await f.flow.prepare('detail')
+    const receipt = await f.start(plan.id)
+    const closed = { ...bug.task, id: 'closed', status: { id: 'closed', name: '已关闭' } }
+    const key = createHash('sha256').update(JSON.stringify(['scope', closed.id])).digest('hex')
+    await writeFile(join(f.root, key + '.json'), JSON.stringify({ ...receipt, createdAt: receipt.createdAt + 1, state: 'unknown' }))
+    const cursors: string[] = []
+    const context = { scope: 'scope', check() {}, readPage: async (after: string) => {
+      cursors.push(after)
+      return after === '' ? { items: [bug.task], nextCursor: 'next' } : { items: [bug.task, closed, { ...bug.task, id: 'not-executed' }], nextCursor: null }
+    } }
+    const rows = await f.create().list(context)
+    assert.deepEqual(rows.map(row => row.task.id), ['closed', bug.task.id])
+    assert.equal(rows[0].record.state, 'unknown')
+    assert.deepEqual(cursors, ['', 'next'])
+    assert.deepEqual(await f.flow.list({ ...context, scope: 'different-account-or-team' }), [])
+    assert.equal(f.launches, 1)
+    assert.equal(f.collected, 1)
+    assert.deepEqual((await f.flow.prepare('detail')).existing, receipt)
+  } finally { await rm(f.root, { recursive: true, force: true }) }
+})
+test('repair list: fails closed on corrupt journal, stalled pagination and invalidated identity', async () => {
+  const f = await fixture()
+  try {
+    const plan = await f.flow.prepare('detail')
+    await f.start(plan.id)
+    const context = { scope: 'scope', check() {}, readPage: async () => ({ items: [bug.task], nextCursor: null as string | null }) }
+    await assert.rejects(f.flow.list({ ...context, readPage: async () => ({ items: [], nextCursor: 'loop' }) }))
+    let stale = false
+    await assert.rejects(f.flow.list({ ...context, check() { if (stale) throw Error('identity changed') }, readPage: async () => {
+      stale = true
+      return { items: [], nextCursor: null }
+    } }))
+    const journal = (await readdir(f.root)).find(name => name.endsWith('.json'))!
+    await writeFile(join(f.root, journal), '{broken')
+    await assert.rejects(f.flow.list(context))
+    assert.equal(f.launches, 1)
   } finally { await rm(f.root, { recursive: true, force: true }) }
 })
