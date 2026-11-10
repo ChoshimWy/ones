@@ -1,4 +1,4 @@
-import { repairProgress, repairCompletionBlocker } from '../domain/repair-report.ts'
+import { repairProgress, repairValidationSummary } from '../domain/repair-report.ts'
 import type { CachedRepairs } from '../repair-cache.ts'
 import type { Task } from '../domain/model.ts'
 import { button, card, el, message, notice, request, row, text, UIError } from './dom.ts'
@@ -37,7 +37,7 @@ export class ImplementationView {
       ...((data?.items.length ?? 0) ? data!.items.map(({ task, record, report, reportError }) => card(
         `#${task.number} ${task.name}`,
         text(report ? repairProgress(report) : record.state === 'sent' ? '已发起 · 等待修复回执' : '启动结果待核实，不会重复发送'),
-        ...(report && repairCompletionBlocker(report) ? [notice(repairCompletionBlocker(report))] : report ? [text('Agent 报告验收通过，证据待人工核验', true)] : []),
+        text(repairValidationSummary(report), true),
         ...(reportError ? [notice('修复回执更新未接收，请在详情查看。', true)] : []),
         row(button('查看详情', () => this.openDetail(task)), button('更新状态', () => this.openDetail(task,true)))
       )) : data ? [notice(data.syncedAt ? '暂无匹配的执行记录。' : '暂无本地缓存，首次同步可能需要等待。')] : [])

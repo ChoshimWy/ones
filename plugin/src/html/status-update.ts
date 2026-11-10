@@ -53,8 +53,9 @@ export class StatusView {
         else this.error=result.evidence?.message??'结果仍待核实，禁止重发。'
       }),this.busy))
     }
-    if(options.completionBlocker)content.append(notice(options.completionBlocker,true))
-    content.append(text('三项简述自动填入评论，可编辑；不会覆盖原始描述。验证记录独立保留，未完成验收不能更新为已修复。',true))
+    content.append(notice(options.validationSummary,!!options.completionBlocker))
+    if(options.completionBlocker.startsWith('代码修复'))content.append(notice(options.completionBlocker,true))
+    content.append(text('三项简述自动填入评论，可编辑；不会覆盖原始描述。单元测试结果独立保留，全部通过后才可更新为已修复。',true))
     for(const edge of options.route){
       if(edge.step.fields.length)content.append(text(`${edge.source.name} → ${edge.step.target.name} 所需字段`))
       for(const field of edge.step.fields){

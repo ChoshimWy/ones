@@ -1,4 +1,4 @@
-import { parseRepairReport, repairProgress, repairCompletionBlocker, repairComment, type StructuredRepairReport } from '../src/domain/repair-report.ts'
+import { parseRepairReport, repairProgress, repairValidationSummary, repairCompletionBlocker, repairComment, type StructuredRepairReport } from '../src/domain/repair-report.ts'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -9,7 +9,7 @@ import { RepairCache } from '../src/repair-cache.ts'
 import { repairPrompt, repairInstructions } from '../src/domain/repair-content.ts'
 const task = { id: 'task', number: 1, name: '虚构缺陷', project: { id: 'project', name: '项目' }, issueType: { id: 'bug', name: '缺陷' }, status: { id: 'open', name: '待处理' } }
 const receipt = { state: 'sent' as const, projectName: '项目', projectId: 'local', createdAt: 1 }
-const reportFixture: StructuredRepairReport = {reportVersion:2,reportSequence:1,rootCause:'根本原因',solution:'修复完成',impact:'影响列表',sourceIdentity:'HEAD abc + patch xyz',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向测试通过',remaining:[],evidence:['定向测试通过 /fixture/report.json']},delivery:{state:'uncommitted',note:'尚未提交'}}
+const reportFixture: StructuredRepairReport = {reportVersion:3,reportSequence:1,rootCause:'根本原因',solution:'修复完成',impact:'影响列表',sourceIdentity:'HEAD abc + patch xyz',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向测试通过',remaining:[],evidence:['定向测试通过 /fixture/report.json'],unitTests:{status:'passed',passed:3,failed:0,skipped:0,notRun:0,total:3}},delivery:{state:'uncommitted',note:'尚未提交'}}
 const check = () => {}
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ones-cache-test-'))
@@ -65,7 +65,7 @@ test('cache: wrong run/token/revision, missing evidence and unknown fields fail 
       assert.equal(item.report,undefined)
       assert.ok(item.reportError)
     }
-    await writeFile(resultFile,JSON.stringify({...valid,validation:{status:'not_run',reason:'实体硬件未验收',remaining:['实体硬件验收'],evidence:[]}}),{mode:0o600})
+    await writeFile(resultFile,JSON.stringify({...valid,validation:{status:'not_run',reason:'实体硬件未验收',remaining:['实体硬件验收'],evidence:[],unitTests:{status:'not_run',passed:0,failed:0,skipped:0,notRun:0,total:0}}}),{mode:0o600})
     await f.cache.consume('owner',check)
     assert.equal(((await f.cache.read('owner')).items[0].report as StructuredRepairReport)?.validation.status,'not_run')
     assert.equal((await f.cache.read('owner')).items[0].reportError,undefined)
@@ -113,9 +113,9 @@ test('cache: replacement run cannot import old completion; prompt binds one resu
 
 
 test('structured report: fixed worktree remains fixed with hardware not run; legacy data is readable but cannot unlock completion', async()=>{
-  const pending=parseRepairReport({...reportFixture,validation:{status:'not_run',reason:'缺少实体硬件',remaining:['硬件验收'],evidence:['单测通过']}})
+  const pending=parseRepairReport({...reportFixture,validation:{status:'not_run',reason:'缺少实体硬件',remaining:['硬件验收'],evidence:['单测通过'],unitTests:{status:'passed',passed:3,failed:0,skipped:0,notRun:0,total:3}}})
   assert.equal(repairProgress(pending),'已在隔离 Worktree 修复')
-  assert.ok(repairCompletionBlocker(pending).includes('硬件'))
+  assert.equal(repairCompletionBlocker(pending),'')
   assert.ok(repairComment(pending).includes('根本原因'))
   assert.equal(repairComment(pending),'根本原因：\n根本原因\n\n解决方法：\n修复完成\n\n影响范围：\n影响列表')
   for(const removed of ['说明来源','验证结果','交付情况','尚未提交'])assert.ok(!repairComment(pending).includes(removed))
@@ -143,7 +143,7 @@ test('report sequence: not_run to passed, replay, reordered and tampered reports
   try{
     const {resultFile,...binding}=await f.cache.register('owner',task,receipt,'revision',f.directory)
     const write=async(value:unknown)=>{await writeFile(resultFile,JSON.stringify({...binding,...value as object}),{mode:0o600});await f.cache.consume('owner',check)}
-    const pending={...reportFixture,validation:{status:'not_run',reason:'硬件尚未验证',remaining:['硬件'],evidence:['单测通过']}}
+    const pending={...reportFixture,validation:{status:'not_run',reason:'硬件尚未验证',remaining:['硬件'],evidence:['单测通过'],unitTests:{status:'not_run',passed:2,failed:0,skipped:0,notRun:1,total:3}}}
     await write(pending)
     assert.ok(repairCompletionBlocker((await f.cache.read('owner')).items[0].report))
     const complete={...reportFixture,reportSequence:2}
@@ -156,11 +156,67 @@ test('report sequence: not_run to passed, replay, reordered and tampered reports
     assert.equal(((await f.cache.read('owner')).items[0].report as StructuredRepairReport).solution,reportFixture.solution)
     await write(complete)
     assert.equal((await f.cache.read('owner')).items[0].reportError,undefined)
-    await write({...complete,reportSequence:3,validation:{status:'failed',reason:'后续硬件复验失败',remaining:['修复并复测'],evidence:['失败报告']}})
+    await write({...complete,reportSequence:3,validation:{status:'failed',reason:'后续单元测试失败',remaining:['修复并复测'],evidence:['失败报告'],unitTests:{status:'failed',passed:2,failed:1,skipped:0,notRun:0,total:3}}})
     assert.ok(repairCompletionBlocker((await f.cache.read('owner')).items[0].report))
     f.cache.close()
     const db=new DatabaseSync(join(f.root,'db','cache.sqlite'))
     assert.deepEqual(db.prepare('SELECT sequence FROM report_history ORDER BY sequence').all().map(x=>x.sequence),[1,2,3])
     db.close()
+  }finally{await f.close()}
+})
+
+/// 计数是明确合同，不能用整体状态、自然语言、空集或跳过伪装测试通过。
+test('unit-test contract: rejects inconsistent counts and status; zero skipped failed and legacy remain blocked',()=>{
+  const make=(unitTests:unknown)=>({...reportFixture,validation:{...reportFixture.validation,unitTests}})
+  for(const unitTests of [
+    {status:'passed',passed:2,failed:0,skipped:0,notRun:1,total:3},
+    {status:'passed',passed:3,failed:1,skipped:0,notRun:0,total:3},
+    {status:'passed',passed:0,failed:0,skipped:0,notRun:0,total:0},
+    {status:'passed',passed:2,failed:0,skipped:1,notRun:0,total:3},
+    {status:'not_run',passed:3,failed:0,skipped:0,notRun:0,total:3},
+    {status:'failed',passed:2,failed:0,skipped:0,notRun:1,total:3},
+    {status:'passed',passed:3.5,failed:0,skipped:0,notRun:0,total:3.5},
+    {status:'passed',passed:3,failed:0,skipped:0,notRun:-1,total:2},
+    {status:'passed',passed:3,failed:0,skipped:0,total:3},
+  ]) assert.throws(()=>parseRepairReport(make(unitTests)))
+  for(const unitTests of [
+    {status:'not_run',passed:0,failed:0,skipped:0,notRun:0,total:0},
+    {status:'not_run',passed:2,failed:0,skipped:1,notRun:0,total:3},
+    {status:'failed',passed:2,failed:1,skipped:0,notRun:0,total:3},
+    {status:'not_run',passed:2,failed:0,skipped:0,notRun:1,total:3},
+  ]) assert.ok(repairCompletionBlocker(parseRepairReport(make(unitTests))))
+  assert.equal(repairValidationSummary(parseRepairReport(make({status:'not_run',passed:0,failed:0,skipped:0,notRun:0,total:0}))),'验收状态：暂无单元测试结果')
+  assert.equal(repairValidationSummary(reportFixture),'验收状态：3/3项验证已通过')
+  const {unitTests,...oldValidation}=reportFixture.validation
+  const previous={...reportFixture,reportVersion:2 as const,validation:oldValidation}
+  assert.equal(repairValidationSummary(previous),'验收状态：暂无单元测试结果')
+  assert.ok(repairCompletionBlocker(previous))
+  assert.throws(()=>parseRepairReport(previous))
+  assert.ok(repairCompletionBlocker({...reportFixture,repair:{...reportFixture.repair,state:'investigating'}}))
+})
+/// 已接纳的旧报告不重新解释；原绑定下明确升级完整新报告后才更新本地权威结果。
+test('unit-test contract: accepted v2 survives restart and unchanged file; explicit higher sequence v3 unlocks',async()=>{
+  const f=await fixture()
+  try{
+    const {resultFile,...binding}=await f.cache.register('owner',task,receipt,'revision',f.directory)
+    const {unitTests,...validation}=reportFixture.validation
+    const previous={...reportFixture,reportVersion:2,validation}
+    f.cache.close()
+    const db=new DatabaseSync(join(f.root,'db','cache.sqlite'))
+    db.prepare('UPDATE repairs SET report=?').run(JSON.stringify(previous));db.close()
+    await writeFile(resultFile,JSON.stringify({...binding,...previous}),{mode:0o600})
+    await f.cache.consume('owner',check)
+    const old=(await f.cache.read('owner')).items[0]
+    assert.deepEqual(old.report,previous)
+    assert.equal(old.reportError,undefined)
+    assert.ok(repairCompletionBlocker(old.report))
+    await writeFile(resultFile,JSON.stringify({...binding,...reportFixture,reportSequence:2}),{mode:0o600})
+    await f.cache.consume('owner',check)
+    assert.equal(repairCompletionBlocker((await f.cache.read('owner')).items[0].report),'')
+    await writeFile(resultFile,JSON.stringify({...binding,...previous,reportSequence:3}),{mode:0o600})
+    await f.cache.consume('owner',check)
+    const current=(await f.cache.read('owner')).items[0]
+    assert.equal((current.report as StructuredRepairReport).reportVersion,3)
+    assert.ok(current.reportError)
   }finally{await f.close()}
 })

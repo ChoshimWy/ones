@@ -1,5 +1,5 @@
 import { statusPath, type StatusGoal, type StatusRoute } from './domain/status-path.ts'
-import { repairComment, repairCompletionBlocker, type RepairReport } from './domain/repair-report.ts'
+import { repairComment, repairCompletionBlocker, repairValidationSummary, type RepairReport } from './domain/repair-report.ts'
 import { createHash, randomUUID, randomInt } from 'node:crypto'
 import { mkdir, lstat, readFile, open, rename, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -111,7 +111,7 @@ export class StatusWorkflow {
     const route = statusPath(options.snapshot, goal)
     const context = await this.context(detailId)
     context.check()
-    return { ...options, goal, route, comment: goal === '修复中' ? null : repairComment(report), completionBlocker: goal === '已修复' ? repairCompletionBlocker(report) : '' }
+    return { ...options, goal, route, comment: goal === '修复中' ? null : repairComment(report), validationSummary: repairValidationSummary(report), completionBlocker: goal === '已修复' ? repairCompletionBlocker(report) : '' }
   }
   /// 全部未来步骤必填项先校验；没有完整预览不得开始任何状态写入。
   async businessPreview(input: BusinessInput): Promise<BusinessPreview> {

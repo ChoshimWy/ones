@@ -1,5 +1,5 @@
 import type { RepairActions } from '../repair-actions.ts'
-import { repairProgress, repairComment } from '../domain/repair-report.ts'
+import { repairProgress, repairValidationSummary, repairComment } from '../domain/repair-report.ts'
 import type { RepairRecord, RepairListItem } from '../repair.ts'
 import { button, card, el, message, notice, request, row, select, text, input } from './dom.ts'
 
@@ -103,7 +103,7 @@ export class RepairView {
         ? 'Orca 实际返回了终端而非聊天，可能已发送任务。请到项目核实，不会自动重试。'
         : '启动或消息结果待核实，已阻止重复发送。请到目标项目检查会话。'
     const report=this.result?.report
-    const technical=el('details','stack',el('summary','','技术信息'),text(`执行时间：${new Date(record.createdAt).toLocaleString()}`),text(`项目：${record.projectName}`),...(record.sessionId?[text(`Session：${record.sessionId}`)]:[]),...(record.directory?[text(`媒体目录：${record.directory}`,true)]:[]),...(report?[text(`源码身份：${report.sourceIdentity}`,true),...('reportVersion' in report?report.validation.evidence:report.evidence).map(value=>text(value,true))]:[]))
-    this.element.replaceChildren(card('修复进度',notice(report?repairProgress(report):status,record.state!=='sent'),...(report?[text(repairComment(report))]:[]),...(this.result?.reportError?[notice(this.result.reportError,true)]:[]),technical))
+    const technical=el('details','stack',el('summary','','技术信息'),text(`执行时间：${new Date(record.createdAt).toLocaleString()}`),text(`项目：${record.projectName}`),...(record.sessionId?[text(`Session：${record.sessionId}`)]:[]),...(record.directory?[text(`媒体目录：${record.directory}`,true)]:[]),...(report?[text(`源码身份：${report.sourceIdentity}`,true),...('reportVersion' in report?[report.validation.reason,...report.validation.remaining,report.delivery.note,...report.validation.evidence]:report.evidence).map(value=>text(value,true))]:[]))
+    this.element.replaceChildren(card('修复进度',notice(report?repairProgress(report):status,record.state!=='sent'),text(repairValidationSummary(report)),...(report?[text(repairComment(report))]:[]),...(this.result?.reportError?[notice(this.result.reportError,true)]:[]),technical))
   }
 }

@@ -30,7 +30,7 @@ try {
       if(f.auth) return {output:{ok:false,error:{code:'auth',message:'认证已失效'}}}
       if(f.fail) return {output:{ok:false,error:{code:'network',message:'网络不可达'}}}
       f.data.syncedAt=Date.now()
-      f.data.items[0].report={reportVersion:2,reportSequence:1,rootCause:'旧缓存',solution:'修复刷新',impact:'列表',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向验证通过',remaining:[],evidence:['fixture report']},delivery:{state:'uncommitted',note:'未提交'},sourceIdentity:'fixture source'}
+      f.data.items[0].report={reportVersion:3,reportSequence:1,rootCause:'旧缓存',solution:'修复刷新',impact:'列表',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向验证通过',remaining:[],evidence:['fixture report'],unitTests:{status:'passed',passed:3,failed:0,skipped:0,notRun:0,total:3}},delivery:{state:'uncommitted',note:'未提交'},sourceIdentity:'fixture source'}
       return {output:{ok:true,value:structuredClone(f.data)}}
     }}}
   })

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util'
 import { parseRepairReport, type RepairReport } from './domain/repair-report.ts'
 export type { RepairReport } from './domain/repair-report.ts'
 import { DatabaseSync } from 'node:sqlite'
@@ -132,6 +133,8 @@ export class RepairCache {
         const value = record(JSON.parse(await handle.readFile('utf8')))
         requireThat(value.runId === row.run_id && value.revision === row.revision && typeof value.token === 'string' && hash(value.token) === row.token_hash, 'receipt', '回执不属于本次任务或输入版本。')
         const {runId, revision, token, ...payload} = value
+        // 已接受 v2 的原文件保留可读；只允许显式 v3 更高序号更新，不重新接纳旧协议。
+        if (payload.reportVersion === 2 && row.report && isDeepStrictEqual(payload, JSON.parse(String(row.report)))) continue
         const report = parseRepairReport(payload)
         check()
         // 同一事务重读最新序号，跨 Worker 的迟到旧报告也不能覆盖新报告。

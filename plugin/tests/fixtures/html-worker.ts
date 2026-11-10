@@ -1,5 +1,5 @@
 import { bugContent } from '../../src/domain/bug-content.ts'
-import { repairComment, type StructuredRepairReport } from '../../src/domain/repair-report.ts'
+import { repairComment, repairCompletionBlocker, repairValidationSummary, type StructuredRepairReport } from '../../src/domain/repair-report.ts'
 import type { OrcaWorkerApi } from 'orca/worker'
 import { readFileSync } from 'node:fs'
 const assets = JSON.parse(readFileSync(new URL('./fixture-assets.json', import.meta.url), 'utf8'))
@@ -70,7 +70,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   let draft: unknown = null
   let listCount = 0
   let reportMode = 'not_run'
-  const report = () => ({reportVersion:2,reportSequence:1,rootCause:'列表还在显示旧内容。',solution:'刷新后重新读取最新内容。',impact:'影响列表和状态更新。',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:reportMode,reason:reportMode==='passed'?'定向验证通过':'实体硬件尚未验收',remaining:reportMode==='passed'?[]:['实体硬件验收'],evidence:['定向测试通过 /fixture/report.json']},delivery:{state:'uncommitted',note:'未提交、未合并、未发布'},sourceIdentity:'HEAD fixture + patch fixture'})
+  const report = (): StructuredRepairReport => ({reportVersion:3,reportSequence:1,rootCause:'列表还在显示旧内容。',solution:'刷新后重新读取最新内容。',impact:'影响列表和状态更新。',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'not_run',reason:'实体硬件尚未验收',remaining:['实体硬件验收'],evidence:['unit tests /fixture/report.json'],unitTests:{status:reportMode==='passed'?'passed':reportMode==='failed'?'failed':'not_run',passed:reportMode==='passed'?3:2,failed:reportMode==='failed'?1:0,skipped:0,notRun:reportMode==='not_run'?1:0,total:3}},delivery:{state:'uncommitted',note:'未提交、未合并、未发布'},sourceIdentity:'HEAD fixture + patch fixture'})
   const finalStep = () => ({id:'fix',name:'完成修复',target:{id:'done',name:'已修复'},blockers:[],commentRequired:false,fields:[{id:'cause',name:'根因',type:1,required:true,value:'',options:[{id:'logic',name:'代码逻辑问题'}]},{id:'version',name:'解决版本',type:2,required:false,value:'',options:[]}]})
   const startRoute = () => [{source:task.status,step:{id:'confirm',name:'确认',target:{id:'confirmed',name:'确认'},fields:[],commentRequired:false,blockers:[]}},{source:{id:'confirmed',name:'确认'},step:{id:'start',name:'开始修复',target:{id:'repairing',name:'修复中'},fields:[{id:'classification',name:'分类说明',type:2,required:true,value:'',options:[]}],commentRequired:false,blockers:[]}}]
   const summary = () => repairComment(report() as StructuredRepairReport)
@@ -83,10 +83,10 @@ export default function activate(orca: OrcaWorkerApi): void {
     'fixture.transition-mode': input => { transitionMode = String(input.mode); return {} },
     'fixture.transition-release': () => { transitionRelease?.(); return {} },
     'fixture.report-mode': input => {reportMode=String(input.mode);return{}},
-    'bugs.businessOptions': () => ({snapshot:{task,stamp:'fixture-stamp',steps:[finalStep()]},goal:'已修复',route:task.status.id==='done'?[]:[{source:task.status,step:finalStep()}],comment:summary(),completionBlocker:reportMode==='passed'?'':'验收尚未完成：实体硬件尚未验收',operation:transitionOperation,writeEnabled:true,blockedReason:''}),
+    'bugs.businessOptions': () => ({snapshot:{task,stamp:'fixture-stamp',steps:[finalStep()]},goal:'已修复',route:task.status.id==='done'?[]:[{source:task.status,step:finalStep()}],comment:summary(),completionBlocker:repairCompletionBlocker(report()),validationSummary:repairValidationSummary(report()),operation:transitionOperation,writeEnabled:true,blockedReason:''}),
     'bugs.businessPreview': input => {
       const fields=input.fields as Record<string,Record<string,string>>
-      if(reportMode!=='passed')throw Error('验收未完成')
+      if(repairCompletionBlocker(report()))throw Error(repairCompletionBlocker(report()))
       if(!fields.fix?.cause)throw Error('Fixture required root cause')
       transitionInput=input
       return{id:'preview-fixture',task,goal:'已修复',route:[{source:task.status,step:finalStep()}],fields,comment:input.comment,expiresAt:Date.now()+300000}

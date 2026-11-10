@@ -468,3 +468,13 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 
 仅调整图片专用 CSS：容器 flex-start、图片 object-position:left center，二者 background:transparent；保留 240px 区域、contain、小图原尺寸、无放大入口，视频与正文 card 背景不改。`image-sizing.browser.mjs` 深浅色计算样式/左边界、纵横小图尺寸、安全失败/资源释放、无预览及视频不变断言通过，pageErrors=[]；`git diff --check` 通过，未重跑其它功能。
 已实际打开 [460px 浅色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/image-left-transparent-460.png>)、[360px 深色](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/repair-summary-layout/image-left-transparent-360.png>)：图片靠左、容器灰底消失、图像完整无裁剪遮挡；原图片像素未修改。来源为 Chrome/生产组件/虚构数据，非正式插件现场验收，chat-scratch 可能清理。证据为同目录 image-left-transparent-evidence.json。
+
+### 单元测试计数与已修复门槛
+
+`agent/unit-test-gate`，基线 `main@3d3f34b0a4bfdb29932c27b4558962a1e6f0b406`。v3 回执用明确 unitTests 分类计数控制完成门槛；旧 v2 只读保留且计数未知，不转换历史状态。硬件/截图/人工剩余项保留在技术记录，不阻断单元测试全部通过后的已修复操作。
+
+- 类型检查、`git diff --check` 通过。定向 selectors（repair-cache/repair-actions/repair 三文件）共 11 个通过：`unit-test contract:|structured report: fixed|report sequence:|completion business:|repair receipt instructions: private complete|cache: offline completion|cache: wrong run`。覆盖真实业务类 + 虚构 API 的 3/3 且硬件未验收提交成功、2/3/0/0/失败/skip/notRun 零写、评论不可解锁、计数/状态不一致拒绝、旧 v2 文件重启不丢失及显式更高序号 v3 更新、逆序/篡改拒绝、报告/源码变更使旧预览失效；三项分段评论与私有协议 0600/启动/离线回执链路保留。
+- `ONES_JOURNEY=unit-tests`：360/460px 表单显示 2/3 阻止预览、刷新后 3/3 可预览且通过计数仍可见；编辑长评论不能解锁。`ONES_JOURNEY=unit-list`：实施列表与修复详情同样显示短计数，无结果显示未知；硬件原因留在折叠技术信息。两旅程 pageErrors=[]，只运行这些 selector，没有全量测试。
+- 首次 producer 测试残留“remaining 为空”旧期望，按新合同修正后通过；UI 旅程分别修正刷新数据、tab 角色与重复按钮定位，未改业务行为或放宽断言。
+- 已实际打开 [360px 2/3](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/unit-test-gate/completion-three-items-360.png>)、[460px 3/3](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/unit-test-gate/completion-unit-passed-460.png>)、[460px 实施列表](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/unit-test-gate/unit-list-460.png>)、[360px 修复详情](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/unit-test-gate/repair-detail-unit-count-360.png>)：短计数、按钮与三项说明布局正常，无横向溢出或遮挡；编辑区保持既有滚动，不截断存储内容。来源为 Chrome + 完整生产 HTML/虚构 Worker，非正式插件或真实 ONES 验收；chat-scratch 可能清理。
+- 单元测试结果仍为 Agent 结构化报告，不是插件独立重跑/核验测试真实性；旧会话 v2 私有协议不自动改写，继续时需明确提供 v3 合同和原绑定后以更高序号回报，不能只改版本号伪造计数。未触及真实运行文件、真实 Bug、正式插件加载或 Git 交付。

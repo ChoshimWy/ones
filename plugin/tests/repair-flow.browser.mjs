@@ -49,7 +49,27 @@ try{
     else await page.screenshot({path:join(output,name+'.png'),fullPage:true})
   }
   const api={evaluate:expression=>page.evaluate(expression),wait:async expression=>{try{return await page.waitForFunction(expression)}catch(error){console.log(JSON.stringify({waiting:expression,body:await page.locator('body').innerText(),errors}));throw error}},screenshot,press:key=>page.keyboard.press(key)}
-  if(process.env.ONES_JOURNEY==='footer'){
+  if(process.env.ONES_JOURNEY==='unit-list'){
+    await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true}}))
+    await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.report-mode',input:{mode:'passed'}}))
+    await page.getByRole('tab',{name:'实施',exact:true}).click()
+    await page.getByText('验收状态：3/3项验证已通过',{exact:true}).waitFor()
+    await page.getByText('验收状态：暂无单元测试结果',{exact:true}).waitFor()
+    assert.equal(await page.getByText('实体硬件尚未验收',{exact:true}).count(),0)
+    await screenshot('unit-list-460','dark',460)
+    await page.getByRole('button',{name:'查看详情',exact:true}).first().click()
+    await page.locator('.detail-toolbar').getByRole('button',{name:'查看执行记录',exact:true}).click()
+    const progress=page.getByRole('heading',{name:'修复进度',exact:true}).locator('..')
+    await progress.getByText('验收状态：3/3项验证已通过',{exact:true}).waitFor()
+    assert.equal(await progress.getByText('实体硬件尚未验收',{exact:true}).isVisible(),false)
+    await screenshot('repair-detail-unit-count-360','light',360)
+    await progress.getByText('技术信息',{exact:true}).click()
+    await progress.getByText('实体硬件尚未验收',{exact:true}).waitFor()
+    assert.deepEqual(errors,[])
+    const evidence={checks:['implementation uses passed counts and unknown fallback','hardware pending not shown as blocker','repair detail uses same short count','hardware reason retained in collapsed technical details'],pageErrors:errors}
+    await writeFile(join(output,'unit-list-evidence.json'),JSON.stringify(evidence,null,2))
+    console.log(JSON.stringify(evidence,null,2))
+  }else if(process.env.ONES_JOURNEY==='footer'){
     await page.setViewportSize({width:460,height:800})
     await page.locator('button.bug-item').first().click()
     await page.locator('.detail-footer').waitFor()
@@ -145,7 +165,7 @@ try{
     const evidence={environment:'Headless Chrome + fictional Worker using production bugContent parser',checks:['nested p/div/br blank paragraphs normalized','steps actual expected headings retained','image loaded and video placeholder kept in order','360/460px no horizontal overflow'],pageErrors:errors}
     await writeFile(join(output,'content-spacing-evidence.json'),JSON.stringify(evidence,null,2))
     console.log(JSON.stringify(evidence,null,2))
-  }else if(process.env.ONES_JOURNEY==='comment'){
+  }else if(['comment','unit-tests'].includes(process.env.ONES_JOURNEY)){
     await page.locator('button.bug-item').first().click()
     await page.getByRole('button',{name:'更新状态',exact:true}).click()
     const comment=page.getByLabel('修复说明（三项，可编辑）',{exact:true})
@@ -153,7 +173,7 @@ try{
     const original=await comment.inputValue()
     assert.deepEqual(original.split('\n\n').map(section=>section.split('\n')[0]),['根本原因：','解决方法：','影响范围：'])
     for(const removed of ['说明来源','验证结果','交付情况'])assert.equal(original.includes(removed),false)
-    await page.getByText('验收尚未完成：实体硬件尚未验收',{exact:true}).waitFor()
+    await page.getByText('验收状态：2/3项验证已通过',{exact:true}).waitFor()
     assert.equal(await page.getByRole('button',{name:'预览状态更新',exact:true}).isDisabled(),true)
     await screenshot('completion-three-items-360','light',360)
     await screenshot('completion-three-items-460','dark',460)
@@ -163,8 +183,21 @@ try{
     assert.equal(await comment.evaluate(element=>element.scrollHeight>element.clientHeight),true)
     assert.equal(await page.getByRole('button',{name:'预览状态更新',exact:true}).isDisabled(),true)
     await comment.fill(original)
+    if(process.env.ONES_JOURNEY==='unit-tests'){
+      await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.report-mode',input:{mode:'passed'}}))
+      await page.getByRole('button',{name:'刷新详情',exact:true}).click()
+      await page.getByRole('button',{name:'更新状态',exact:true}).click()
+      await page.getByText('验收状态：3/3项验证已通过',{exact:true}).waitFor()
+      assert.equal(await page.getByText('实体硬件尚未验收',{exact:true}).isVisible(),false)
+      await page.getByLabel('完成修复 · 根因 *（必填）',{exact:true}).selectOption('logic')
+      assert.equal(await page.getByRole('button',{name:'预览状态更新',exact:true}).isEnabled(),true)
+      await screenshot('completion-unit-passed-360','light',360)
+      await screenshot('completion-unit-passed-460','dark',460)
+      await page.getByRole('button',{name:'预览状态更新',exact:true}).click()
+      await page.locator('[data-status-preview]').waitFor()
+    }
     assert.deepEqual(errors,[])
-    const evidence={environment:'Headless Chrome + fictional Worker; not live ONES',checks:['three sections with label line and content line','pending validation reminder visible at 360/460px','editing long text retains full content and scrolling','editing comment cannot unlock completion'],pageErrors:errors}
+    const evidence={environment:'Headless Chrome + fictional Worker; not live ONES',checks:['three sections with label line and content line','2/3 unit test count visible and blocks preview at 360/460px',...(process.env.ONES_JOURNEY==='unit-tests'?['3/3 unit tests allow preview despite pending hardware; passed count remains visible']:[]),'editing long text retains full content and scrolling','editing comment cannot unlock completion'],pageErrors:errors}
     await writeFile(join(output,'repair-three-items-evidence.json'),JSON.stringify(evidence,null,2))
     console.log(JSON.stringify(evidence,null,2))
   }else{

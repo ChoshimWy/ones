@@ -11,7 +11,7 @@ import { OrcaCli } from '../src/adapters/orca-cli.ts'
 import { statusPath } from '../src/domain/status-path.ts'
 import type { StructuredRepairReport } from '../src/domain/repair-report.ts'
 
-const report: StructuredRepairReport={reportVersion:2,reportSequence:1,rootCause:'根因',solution:'解决方法',impact:'影响范围',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向验收通过',remaining:[],evidence:['fixture passed']},delivery:{state:'uncommitted',note:'未提交未合并'},sourceIdentity:'HEAD fixture patch fixture'}
+const report: StructuredRepairReport={reportVersion:3,reportSequence:1,rootCause:'根因',solution:'解决方法',impact:'影响范围',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向验收通过',remaining:[],evidence:['fixture passed'],unitTests:{status:'passed',passed:3,failed:0,skipped:0,notRun:0,total:3}},delivery:{state:'uncommitted',note:'未提交未合并'},sourceIdentity:'HEAD fixture patch fixture'}
 async function fixture(t:{after(fn:()=>Promise<void>):void}){
   const root=await mkdtemp(join(tmpdir(),'ones-business-'))
   t.after(()=>rm(root,{recursive:true,force:true}))
@@ -145,13 +145,13 @@ test('repair business: later schema drift preserves partial success; launch fail
 test('completion business: authoritative validation gate cannot be bypassed by editable comment; three concise items become one final comment',async t=>{
   const f=await fixture(t)
   f.state.status='repairing';f.state.version++;f.state.commentRequired='finish-action'
-  f.state.report.validation={status:'not_run',reason:'缺少硬件',remaining:['硬件验收'],evidence:['单测通过']}
+  f.state.report.validation={status:'not_run',reason:'缺少硬件',remaining:['硬件验收'],evidence:['单测通过'],unitTests:{status:'not_run',passed:2,failed:0,skipped:0,notRun:1,total:3}}
   const options=await f.statuses.businessOptions(f.detail.detailId,'已修复')
-  assert.ok(options.completionBlocker.includes('硬件'))
+  assert.equal(options.completionBlocker,'验收状态：2/3项验证已通过')
   assert.ok(options.comment?.includes('根因'))
   await assert.rejects(f.statuses.businessPreview({detailId:f.detail.detailId,goal:'已修复',fields:{'finish-action':{}},comment:'我把文字改为验证通过'}),/验收/)
   assert.equal(f.state.writes.length,0)
-  f.state.report=structuredClone(report)
+  f.state.report.validation.unitTests=structuredClone(report.validation.unitTests)
   const good=await f.statuses.businessOptions(f.detail.detailId,'已修复')
   const p=await f.statuses.businessPreview({detailId:f.detail.detailId,goal:'已修复',fields:{'finish-action':{}},comment:good.comment})
   assert.equal((await f.statuses.businessSubmit(p.id,true)).state,'verified')
@@ -192,7 +192,7 @@ test('completion business: report changes after preview cannot be hidden by edit
   const f=await fixture(t)
   f.state.status='repairing';f.state.version++
   const p=await f.statuses.businessPreview({detailId:f.detail.detailId,goal:'已修复',fields:{'finish-action':{}},comment:'完成'})
-  f.state.report.validation={status:'not_run',reason:'硬件未验收',remaining:['硬件'],evidence:[]}
+  f.state.report.validation={status:'not_run',reason:'硬件未验收',remaining:['硬件'],evidence:['2 passed'],unitTests:{status:'not_run',passed:2,failed:0,skipped:0,notRun:1,total:3}}
   await assert.rejects(f.statuses.businessSubmit(p.id,true),/验收/)
   assert.equal(f.state.writes.length,0)
 })
@@ -248,4 +248,20 @@ test('repair business: injected comment is discarded by target contract for ever
   assert.ok(result.operations.every(x=>x.evidence?.comment==='not_applicable'))
   assert.equal(f.state.messageReads,reads)
   assert.equal(f.state.messages.length,0)
+})
+
+/// 真实业务入口只认完整非空单元测试通过；评论、整体通过状态和证据存在不能解锁。
+test('completion business: zero failed skipped and not-run unit tests cause zero writes',async t=>{
+  for(const unitTests of [
+    {status:'not_run' as const,passed:0,failed:0,skipped:0,notRun:0,total:0},
+    {status:'failed' as const,passed:2,failed:1,skipped:0,notRun:0,total:3},
+    {status:'not_run' as const,passed:2,failed:0,skipped:1,notRun:0,total:3},
+    {status:'not_run' as const,passed:0,failed:0,skipped:0,notRun:3,total:3},
+  ]){
+    const f=await fixture(t)
+    f.state.status='repairing';f.state.version++
+    f.state.report.validation.unitTests=unitTests
+    await assert.rejects(f.statuses.businessPreview({detailId:f.detail.detailId,goal:'已修复',fields:{'finish-action':{}},comment:'已经全部完成'}),/验收状态/)
+    assert.deepEqual(f.state.writes,[])
+  }
 })

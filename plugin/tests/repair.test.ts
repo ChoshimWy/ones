@@ -298,12 +298,14 @@ test('repair receipt instructions: private complete contract, short prompt and c
     const protocol=await readFile(path,'utf8')
     const template=JSON.parse(protocol.split('字段须严格为：')[1]!.split('\n')[0]!)
     assert.equal((await stat(path)).mode & 0o777,0o600)
-    assert.equal(template.reportVersion,2)
+    assert.equal(template.reportVersion,3)
     assert.equal(template.reportSequence,1)
+    assert.deepEqual(template.validation.unitTests,{status:'not_run',passed:0,failed:0,skipped:0,notRun:0,total:0})
+    for(const rule of ['单元测试 runner 真实结果','build-only','硬件、截图或人工验证未完成'])assert.ok(protocol.includes(rule))
     for(const rule of ['每项一句简短白话','30–60 字','不加入代码符号、路径或测试命令','技术身份放 sourceIdentity','验证详情与命令放 validation.reason/evidence'])assert.ok(protocol.includes(rule))
     for(const key of ['rootCause','solution','impact'])assert.ok(template[key].includes('一句简短白话'))
     for(const field of ['runId','revision','token','rootCause','solution','impact','repair','validation','delivery','sourceIdentity'])assert.ok(field in template)
-    for(const rule of ['同序号内容不可变','旧序号不覆盖','remaining 为空','不修改或删除本协议与媒体','读取','reportSequence']){
+    for(const rule of ['同序号内容不可变','旧序号不覆盖','total 等于四类之和','不修改或删除本协议与媒体','读取','reportSequence']){
       if(rule==='读取')assert.ok(protocol.includes('协议不可读'))
       else assert.ok(protocol.includes(rule))
     }
@@ -314,7 +316,7 @@ test('repair receipt instructions: private complete contract, short prompt and c
     for(const value of [template.token,template.runId,template.revision,'reportVersion','reportSequence'])assert.ok(!f.sent.includes(value))
     const brief=f.sent.split('\n\n执行与回执：')[1]!
     assert.equal(brief.split('\n').length,4)
-    const report={...template,rootCause:'根因',solution:'解决方法',impact:'影响范围',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向验证通过',remaining:[],evidence:['fixture test passed']},delivery:{state:'uncommitted',note:'未提交'},sourceIdentity:'fixture HEAD patch'}
+    const report={...template,rootCause:'根因',solution:'解决方法',impact:'影响范围',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'passed',reason:'定向验证通过',remaining:[],evidence:['fixture test passed'],unitTests:{status:'passed',passed:3,failed:0,skipped:0,notRun:0,total:3}},delivery:{state:'uncommitted',note:'未提交'},sourceIdentity:'fixture HEAD patch'}
     await writeFile(join(result.directory!,'result.json'),JSON.stringify(report),{flag:'wx',mode:0o600})
     const imported=await f.create().result('detail')
     assert.equal(imported?.report?.sourceIdentity,'fixture HEAD patch')
