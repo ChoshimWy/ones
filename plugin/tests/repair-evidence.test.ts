@@ -68,7 +68,7 @@ test('acceptance N/A: explicit reason and executed checks required; missing fail
 test('acceptance cache: nonzero and managed history cannot downgrade to N/A; zero and unreferenced v2 can',async()=>{
   const { RepairCache }=await import('../src/repair-cache.ts')
   const { DatabaseSync }=await import('node:sqlite')
-  for(const mode of ['nonzero-history','managed','unavailable','zero','unreferenced']){
+  for(const mode of ['nonzero-history','managed','managed-structured-history','unavailable','zero','unreferenced']){
     const f=await evidenceFixture(),cache=new RepairCache(join(f.root,'db'),f.projector)
     try{
       const directory=join(f.root,'receipt');await mkdir(directory,{mode:0o700})
@@ -76,11 +76,11 @@ test('acceptance cache: nonzero and managed history cannot downgrade to N/A; zer
       const {resultFile,...binding}=await cache.register('scope',task,{state:'sent',projectId:'p',projectName:'项目',createdAt:1},'revision',directory)
       const base={...f.report,reportVersion:3,validation:{...f.report.validation,evidence:['fixture test result'],unitTests:{status:'failed',passed:2,failed:1,skipped:0,notRun:0,total:3}}}
       const zero={...base,validation:{...base.validation,evidence:[],unitTests:{status:'not_run',passed:0,failed:0,skipped:0,notRun:0,total:0}}}
-      const previous=mode==='nonzero-history'?base:mode==='zero'?zero:mode==='unreferenced'?{...f.report,validation:{...f.report.validation,evidence:['硬件未验收']}}:mode==='unavailable'?{...f.report,sourceIdentity:'unknown'}:f.report
+      const previous=mode==='managed-structured-history'?{...zero,validation:{...zero.validation,managedEvidence:{kind:'apple_selected_test',runId:f.run,sourceDigest:f.evidence.before.source}}}:mode==='nonzero-history'?base:mode==='zero'?zero:mode==='unreferenced'?{...f.report,validation:{...f.report.validation,evidence:['硬件未验收']}}:mode==='unavailable'?{...f.report,sourceIdentity:'unknown'}:f.report
       cache.close()
       const db=new DatabaseSync(join(f.root,'db','cache.sqlite'));db.prepare('UPDATE repairs SET report=?').run(JSON.stringify(previous));db.close()
       const write=async(report:unknown)=>{await writeFile(resultFile,JSON.stringify({...binding,...report as object}),{mode:0o600});await cache.consume('scope',()=>{})}
-      if(mode==='nonzero-history')for(let sequence=3;sequence<=24;sequence++)await write({...zero,reportSequence:sequence})
+      if(mode==='nonzero-history'||mode==='managed-structured-history')for(let sequence=3;sequence<=24;sequence++)await write({...zero,reportSequence:sequence})
       const next={...zero,reportSequence:25,validation:{...zero.validation,unitTests:{applicability:'not_applicable',reason:'仅提示文案调整，不涉及业务逻辑',checks:[{name:'文案与差异检查',status:'passed',evidence:['fixture review passed']}]}}}
       await write(next)
       const result=(await cache.read('scope')).items[0]!

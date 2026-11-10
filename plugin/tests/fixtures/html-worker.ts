@@ -71,7 +71,9 @@ export default function activate(orca: OrcaWorkerApi): void {
   let draft: unknown = null
   let listCount = 0
   let reportMode = 'not_run'
+  let projectedReport: RepairReport | undefined
   const report = (): RepairReport => {
+    if(projectedReport)return projectedReport
     const value: StructuredRepairReport = {reportVersion:3,reportSequence:1,rootCause:'列表还在显示旧内容。',solution:'刷新后重新读取最新内容。',impact:'影响列表和状态更新。',repair:{state:'fixed',workspace:'isolated_worktree'},validation:{status:'not_run',reason:'实体硬件尚未验收',remaining:['实体硬件验收'],evidence:['unit tests /fixture/report.json'],unitTests:{status:reportMode==='passed'?'passed':reportMode==='failed'?'failed':'not_run',passed:reportMode==='passed'?3:2,failed:reportMode==='failed'?1:0,skipped:0,notRun:reportMode==='not_run'?1:0,total:3}},delivery:{state:'uncommitted',note:'未提交、未合并、未发布'},sourceIdentity:'HEAD fixture + patch fixture'}
     if(reportMode.startsWith('na-'))value.validation.unitTests={applicability:'not_applicable',reason:'本次仅调整说明文字，没有业务逻辑变化。',checks:[{name:'文案与差异检查',status:reportMode==='na-passed'?'passed':'not_run',evidence:reportMode==='na-passed'?['git diff --check passed; fictional wording review']:[]}]}
     if(reportMode==='legacy'){
@@ -118,6 +120,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     },
     'fixture.repair-manual': () => { repairRecord = null; repairManual = true; return { changed: true } },
     'fixture.repair-error': input => { repairReadFails = input.enabled === true; return {} },
+    'fixture.projected-report': input => { projectedReport=input.report as RepairReport;return {} },
     'fixture.implementation': input => {
       implementationStatuses = Array.isArray(input.statuses) ? input.statuses.map(String) : undefined
       implementationSeeded = input.seeded === true

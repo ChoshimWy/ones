@@ -379,3 +379,21 @@ test('repair JSON boundary: pending receipt cache and detail omit an absent repo
     assert.equal(Object.hasOwn(detail,'report'),false)
   }finally{await rm(f.root,{recursive:true,force:true});await rm(f.root+'-cache',{recursive:true,force:true})}
 })
+
+/// 生成协议 -> 正常回执入口 -> 缓存与详情，保证两个页面不绕过同一证据投影。
+test('acceptance workflow: structured receipt projects same counts in cache and detail',async()=>{
+  const e=await evidenceFixture(),f=await fixture(e.projector)
+  try{
+    const run=await f.start((await f.flow.prepare('detail')).id)
+    const instructions=await readFile(join(run.directory!,'receipt-instructions.md'),'utf8')
+    const template=JSON.parse(instructions.split('字段须严格为：')[1]!.split('\n')[0]!)
+    const report={...template,...e.report,reportVersion:3,sourceIdentity:'HEAD fixture; final_source_digest='+e.evidence.before.source,validation:{...e.report.validation,evidence:[],unitTests:{status:'passed',passed:3,total:3,failed:0,skipped:0,notRun:0},managedEvidence:{kind:'apple_selected_test',runId:e.run,sourceDigest:e.evidence.before.source}}}
+    await writeFile(join(run.directory!,'result.json'),JSON.stringify(report),{mode:0o600})
+    const detail=await f.flow.result('detail'),cached=await f.flow.cached({scope:'scope',check(){}})
+    assert.equal(detail?.reportError,undefined)
+    assert.equal(repairValidationSummary(cached.items[0].report),'验收状态：3/3项验证已通过')
+    assert.deepEqual(cached.items[0].report,detail?.report)
+    assert.equal(detail?.report?.acceptanceEvidence?.state,'verified')
+    assert.equal(f.launches,1)
+  }finally{await e.close();await rm(f.root,{recursive:true,force:true});await rm(f.root+'-cache',{recursive:true,force:true})}
+})

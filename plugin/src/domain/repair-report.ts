@@ -1,3 +1,4 @@
+import { managedEvidenceReferences, parseManagedEvidence, requireEvidence, type ManagedEvidence, type EvidenceReason } from './managed-evidence.ts'
 import { record, requireThat } from './model.ts'
 
 /// 已接受的 v2 报告保留原字段，但不从整体验证状态推断单元测试结果。
@@ -18,11 +19,11 @@ export type UnitTestCounts = { status: 'passed' | 'failed' | 'not_run'; passed: 
 export type NotApplicableTests = { applicability: 'not_applicable'; reason: string; checks: { name: string; status: 'passed' | 'failed' | 'not_run'; evidence: string[] }[] }
 export type UnitTestResult = UnitTestCounts | NotApplicableTests
 /// 只由插件读受管文件生成的临时投影；不写回原始回执或接纳 Agent 注入。
-export type AcceptanceEvidence = { state: 'verified' | 'pending'; fingerprint: string; note: string; counts?: UnitTestCounts; source?: string; run?: string }
+export type AcceptanceEvidence = { state: 'verified' | 'pending'; fingerprint: string; note: string; reasonCode?: EvidenceReason; counts?: UnitTestCounts; source?: string; run?: string }
 /// 当前回执沿用原技术记录，新增明确单元测试统计作为唯一验收门槛。
 export type StructuredRepairReport = Omit<PreviousRepairReport, 'reportVersion' | 'validation'> & {
   reportVersion: 3
-  validation: PreviousRepairReport['validation'] & { unitTests: UnitTestResult }
+  validation: PreviousRepairReport['validation'] & { unitTests: UnitTestResult; managedEvidence?: ManagedEvidence }
 }
 /// 已接受的历史回执只读保留，不补造结构化结论。
 export type LegacyRepairReport = { outcome: 'passed' | 'failed' | 'blocked'; summary: string; sourceIdentity: string; evidence: string[] }
@@ -37,14 +38,17 @@ export function parseRepairReport(input: unknown): StructuredRepairReport {
   requireThat(value.reportVersion === 3 && Number.isSafeInteger(value.reportSequence) && Number(value.reportSequence) > 0, 'receipt', '新回执必须包含结构化版本及正整数报告序号。')
   const repair = record(value.repair), validation = record(value.validation), delivery = record(value.delivery)
   exact(repair,['state','workspace'])
-  exact(validation,['status','reason','remaining','evidence','unitTests'])
+  exact(validation,['status','reason','remaining','evidence','unitTests',...('managedEvidence' in validation ? ['managedEvidence'] : [])])
   exact(delivery,['state','note'])
   requireThat(['investigating','fixed','blocked'].includes(String(repair.state)) && ['isolated_worktree','main_workspace'].includes(String(repair.workspace)), 'receipt', '修复进度或工作区不符合协议。')
   requireThat(['passed','failed','not_run'].includes(String(validation.status)) && ['uncommitted','committed','merged','released'].includes(String(delivery.state)), 'receipt', '验证或交付状态不符合协议。')
   const remaining = strings(validation.remaining), evidence = strings(validation.evidence)
+  const managedEvidence = 'managedEvidence' in validation ? parseManagedEvidence(validation.managedEvidence) : undefined
+  requireEvidence(managedEvidence || managedEvidenceReferences(evidence).length === 0, 'binding')
   const unitTests = record(validation.unitTests)
   let tests: UnitTestResult
   if (unitTests.applicability === 'not_applicable') {
+    requireEvidence(!managedEvidence, 'binding')
     exact(unitTests,['applicability','reason','checks'])
     requireThat(Array.isArray(unitTests.checks) && unitTests.checks.length > 0 && unitTests.checks.length <= 20, 'receipt', '无需单元测试也必须列出替代检查。')
     const checks = (unitTests.checks as unknown[]).map(input => {
@@ -65,9 +69,9 @@ export function parseRepairReport(input: unknown): StructuredRepairReport {
   requireThat(tests.total === tests.passed + tests.failed + tests.skipped + tests.notRun, 'receipt', '单元测试总数与分类计数不一致。')
   const expectedStatus = tests.total > 0 && tests.passed === tests.total ? 'passed' : tests.failed > 0 ? 'failed' : 'not_run'
   requireThat(tests.status === expectedStatus, 'receipt', '单元测试状态与计数不一致，不能把跳过或未运行算作通过。')
-  requireThat(tests.passed + tests.failed === 0 || evidence.length > 0, 'receipt', '已执行单元测试必须提供命令、结果及证据。')
+  requireThat(tests.passed + tests.failed === 0 || evidence.length > 0 || managedEvidence, 'receipt', '已执行单元测试必须提供命令、结果及证据。')
   }
-  return { reportVersion:3,reportSequence:value.reportSequence as number,rootCause:string(value.rootCause),solution:string(value.solution),impact:string(value.impact),sourceIdentity:string(value.sourceIdentity),repair:repair as StructuredRepairReport['repair'],validation:{status:validation.status as StructuredRepairReport['validation']['status'],reason:string(validation.reason),remaining,evidence,unitTests:tests},delivery:{state:delivery.state as StructuredRepairReport['delivery']['state'],note:string(delivery.note)} }
+  return { reportVersion:3,reportSequence:value.reportSequence as number,rootCause:string(value.rootCause),solution:string(value.solution),impact:string(value.impact),sourceIdentity:string(value.sourceIdentity),repair:repair as StructuredRepairReport['repair'],validation:{status:validation.status as StructuredRepairReport['validation']['status'],reason:string(validation.reason),remaining,evidence,unitTests:tests,...(managedEvidence ? {managedEvidence} : {})},delivery:{state:delivery.state as StructuredRepairReport['delivery']['state'],note:string(delivery.note)} }
 }
 /// 临时证据投影优先；Agent 报告的原始字段不被覆盖。
 export function repairAcceptance(report: RepairReport | undefined): UnitTestResult | undefined {

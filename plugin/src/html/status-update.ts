@@ -57,7 +57,7 @@ export class StatusView {
     }
     content.append(notice(options.validationSummary,!!options.completionBlocker))
     if(options.completionBlocker.startsWith('代码修复'))content.append(notice(options.completionBlocker,true))
-    if(options.acceptanceNote)content.append(el('details','stack',el('summary','','验收依据'),text(options.acceptanceNote,true)))
+    if(options.acceptanceNote)content.append(Object.assign(el('details','stack',el('summary','','验收依据'),text(options.acceptanceNote,true)),{open:!!options.completionBlocker}))
     if(options.noUnitTestsConfirmationRequired){
       const acceptance=options.acceptance
       if(acceptance && 'applicability' in acceptance)content.append(text(`不适用原因：${acceptance.reason}`,true),el('details','stack',el('summary','','替代检查记录'),...acceptance.checks.flatMap(item=>[text(`${item.name}：${item.status}`,true),...item.evidence.map(value=>text(value,true))])))

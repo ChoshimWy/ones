@@ -106,6 +106,6 @@ export class RepairView {
     const acceptance=repairAcceptance(report)
     const alternative=isNotApplicable(acceptance)?[acceptance.reason,...acceptance.checks.flatMap(check=>[`${check.name}：${check.status}`,...check.evidence])]:[]
     const technical=el('details','stack',el('summary','','技术信息'),...alternative.map(value=>text(value,true)),...(report?.acceptanceEvidence?[text(report.acceptanceEvidence.note,true)]:[]),text(`执行时间：${new Date(record.createdAt).toLocaleString()}`),text(`项目：${record.projectName}`),...(record.sessionId?[text(`Session：${record.sessionId}`)]:[]),...(record.directory?[text(`媒体目录：${record.directory}`,true)]:[]),...(report?[text(`源码身份：${report.sourceIdentity}`,true),...('reportVersion' in report?[report.validation.reason,...report.validation.remaining,report.delivery.note,...report.validation.evidence]:report.evidence).map(value=>text(value,true))]:[]))
-    this.element.replaceChildren(card('修复进度',notice(report?repairProgress(report):status,record.state!=='sent'),text(repairValidationSummary(report)),...(report?[text(repairComment(report))]:[]),...(this.result?.reportError?[notice(this.result.reportError,true)]:[]),technical))
+    this.element.replaceChildren(card('修复进度',notice(report?repairProgress(report):status,record.state!=='sent'),text(repairValidationSummary(report)),...(report?.acceptanceEvidence?.state==='pending'?[notice(report.acceptanceEvidence.note,true)]:[]),...(report?[text(repairComment(report))]:[]),...(this.result?.reportError?[notice(this.result.reportError,true)]:[]),technical))
   }
 }

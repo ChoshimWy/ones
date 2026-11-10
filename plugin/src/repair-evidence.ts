@@ -1,9 +1,10 @@
+import { evidenceReasons, managedEvidenceReferences, parseManagedEvidence, requireEvidence, type EvidenceReason } from './domain/managed-evidence.ts'
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { record, requireThat } from './domain/model.ts'
+import { AppError, record, requireThat } from './domain/model.ts'
 import { isNotApplicable, type RepairReport, type UnitTestCounts } from './domain/repair-report.ts'
 
 /// 当前受管安装的 product_root/data/apple；只能由 Worker 构造时注入测试目录，panel/回执不能改根。
@@ -48,10 +49,13 @@ export class RepairEvidence {
     const original = {...report}
     delete original.acceptanceEvidence
     const explicit = 'reportVersion' in original ? original.validation.evidence : original.evidence
-    const references = explicit.filter(value => value.includes('/data/apple/') || value.endsWith('/evidence.json') || value.endsWith('/test-summary.json'))
-    if (!references.length) return original
+    const references = managedEvidenceReferences(explicit)
+    const binding = 'reportVersion' in original && original.reportVersion === 3 ? original.validation.managedEvidence : undefined
+    if (!references.length && !binding) return original
     const fingerprint = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    let reason: EvidenceReason = 'references'
     try {
+      const managed = binding ? parseManagedEvidence(binding) : undefined
       // 1. 多个 run、相对路径、遍历和不完整配对均拒绝，绝不从多个结果中挑成功。
       const paths = references.filter(value=>value.startsWith('/'))
       const parsed = paths.map(value => {
@@ -60,34 +64,45 @@ export class RepairEvidence {
         return relative.split('/')
       })
       const runs = new Set(parsed.map(parts=>parts[0]))
-      requireThat(runs.size === 1 && new Set(paths).size === paths.length, 'evidence', '证据引用重复或存在多个运行，需人工核对。')
-      const run = [...runs][0]!
-      requireThat(parsed.some(parts=>parts[1]==='evidence.json') && parsed.some(parts=>parts[1]==='test-summary.json'), 'evidence', '缺少受管证据配对。')
+      requireThat((managed && paths.length === 0 || runs.size === 1) && new Set(paths).size === paths.length, 'evidence', '证据引用重复或存在多个运行，需人工核对。')
+      const run = managed?.runId ?? [...runs][0]!
+      requireEvidence(!managed || paths.length === 0 || runs.has(run), 'references')
+      requireThat(managed || parsed.some(parts=>parts[1]==='evidence.json') && parsed.some(parts=>parts[1]==='test-summary.json'), 'evidence', '缺少受管证据配对。')
+      reason = 'unreadable'
       const raw = await this.read(run,'evidence.json'), summaryRaw = await this.read(run,'test-summary.json')
+      reason = 'malformed'
       const evidence = record(JSON.parse(raw)), summary = record(JSON.parse(summaryRaw))
       // 2. 仅接受真实 selected-test、稳定源码与完整成功收口；build-only/失败不能投影为通过。
+      reason = 'source'
       const source = record(evidence.before).source
       requireThat(typeof source === 'string' && /^[a-f0-9]{64}$/.test(source) && record(evidence.after).source === source, 'evidence', '测试输入身份不稳定。')
-      const declared = [...original.sourceIdentity.matchAll(/\bApple source\s+([a-f0-9]{64})\b/g)].map(match=>match[1])
+      const declared = managed ? [managed.sourceDigest] : [...original.sourceIdentity.matchAll(/\bApple source\s+([a-f0-9]{64})\b/g)].map(match=>match[1])
+      requireEvidence(declared.length > 0, 'binding')
       requireThat(declared.length === 1 && declared[0] === source, 'evidence', '回执没有唯一明确绑定此 Apple 测试源码身份。')
+      reason = 'execution'
       requireThat(evidence.version === '0.1.0' && evidence.synthetic === false && evidence.stage === 'complete' && evidence.verification_mode === 'strict' && evidence.inputs_stable === true && evidence.cleanup_known === true && evidence.passed === true && evidence.exit_code === 0 && record(evidence.request).action === 'selected-test' && evidence.bundle === join(this.root,run,'result.xcresult'), 'evidence', '受管证据不是完整成功的真实定向测试。')
+      reason = 'counts'
       const counts = ['passedTests','failedTests','skippedTests','expectedFailures','totalTestCount']
       requireThat(counts.every(key=>Number.isSafeInteger(summary[key]) && Number(summary[key])>=0), 'evidence', '测试统计不完整。')
       const total = Number(summary.totalTestCount), passed = Number(summary.passedTests)
       requireThat(total > 0 && passed === total && summary.failedTests === 0 && summary.skippedTests === 0 && summary.expectedFailures === 0 && summary.result === 'Passed', 'evidence', '存在失败、跳过或零测试，不能确认通过。')
+      reason = 'selection'
       const actual = evidence.actual_tests
       requireThat(Array.isArray(actual) && actual.length === total && actual.every(value=>typeof value === 'string' && /^[^/]+\/[^/]+\/[^/]+$/.test(value)) && new Set(actual).size === total, 'evidence', '实际执行测试与统计不一致。')
       const requested = record(evidence.request).only_testing
       requireThat(Array.isArray(requested) && requested.length > 0 && requested.every(selector=>typeof selector === 'string' && actual.some(test=>test === selector || test.startsWith(selector+'/'))) && actual.every(test=>requested.some(selector=>test === selector || test.startsWith(selector+'/'))), 'evidence', '测试选择与实际执行不一致。')
       const tests: UnitTestCounts = {status:'passed',passed,total,failed:0,skipped:0,notRun:0}
+      reason = 'counts'
       if ('reportVersion' in original && original.reportVersion === 3) {
         const claimed = original.validation.unitTests
         requireThat(!isNotApplicable(claimed) && Object.keys(tests).every(key=>claimed[key as keyof UnitTestCounts] === tests[key as keyof UnitTestCounts]), 'evidence', '回执与实际测试统计不一致。')
       }
       // 3. 内容摘要并入临时回执，既有完成预览/逐步重读自然检测证据变化，不持久改写原报告。
-      return {...original,acceptanceEvidence:{state:'verified',counts:tests,run,source,fingerprint:fingerprint([original.sourceIdentity,raw,summaryRaw]),note:'受管历史测试证据；仅对应回执明确引用的 Apple source（可为交付前身份），不表示合并后的 HEAD 已重新测试。'}}
-    } catch {
-      return {...original,acceptanceEvidence:{state:'pending',fingerprint:fingerprint(references),note:'测试证据路径、来源绑定、统计或文件状态待核对；未改写原始回执。'}}
+      return {...original,acceptanceEvidence:{state:'verified',counts:tests,run,source,fingerprint:fingerprint([original.sourceIdentity,managed,raw,summaryRaw]),note:'受管历史测试证据；仅对应回执绑定的测试源码（可为交付前身份），不表示合并后的 HEAD 已重新测试。'}}
+    } catch (error) {
+      const code = error instanceof AppError ? error.code.replace(/^evidence_/, '') : ''
+      if (Object.hasOwn(evidenceReasons,code)) reason = code as EvidenceReason
+      return {...original,acceptanceEvidence:{state:'pending',reasonCode:reason,fingerprint:fingerprint([references,binding,reason]),note:evidenceReasons[reason]+' 未改写原始回执。'}}
     }
   }
 }

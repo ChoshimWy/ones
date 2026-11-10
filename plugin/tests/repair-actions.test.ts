@@ -317,3 +317,19 @@ test('repair JSON boundary: first repair preparation and status options omit abs
     assert.equal(f.state.writes.length,0)
   }
 })
+
+test('acceptance business: structured artifact projection permits submit but changed artifact invalidates preview',async t=>{
+  const e=await evidenceFixture();t.after(e.close)
+  const f=await fixture(t,report=>e.projector.project(report))
+  f.state.status='repairing';f.state.version++
+  f.state.report={...e.report,reportVersion:3,sourceIdentity:'free-form HEAD and patch',validation:{...e.report.validation,evidence:[],unitTests:{status:'passed',passed:3,total:3,failed:0,skipped:0,notRun:0},managedEvidence:{kind:'apple_selected_test',runId:e.run,sourceDigest:e.evidence.before.source}}}
+  const input={detailId:f.detail.detailId,goal:'已修复' as const,fields:{'finish-action':{}},comment:'根本原因：虚构原因'}
+  const options=await f.statuses.businessOptions(f.detail.detailId,'已修复')
+  assert.equal(options.validationSummary,'验收状态：3/3项验证已通过')
+  const preview=await f.statuses.businessPreview(input)
+  await writeFile(join(e.directory,'test-summary.json'),JSON.stringify({...e.summary,observation:'changed'}),{mode:0o600})
+  await assert.rejects(f.statuses.businessSubmit(preview.id,true),/回执已变化/)
+  assert.deepEqual(f.state.writes,[])
+  const fresh=await f.statuses.businessPreview(input)
+  assert.equal((await f.statuses.businessSubmit(fresh.id,true)).state,'verified')
+})

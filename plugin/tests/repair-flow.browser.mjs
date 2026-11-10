@@ -100,6 +100,41 @@ try{
     assert.deepEqual(errors,[])
     await writeFile(join(output,'bug-pagination-evidence.json'),JSON.stringify({...evidence,pageErrors:errors},null,2))
     console.log(JSON.stringify(evidence,null,2))
+  }else if(process.env.ONES_JOURNEY==='evidence-contract'){
+    const {evidenceFixture}=await import(pathToFileURL(join(root,'tests/fixtures/repair-evidence.ts')).href)
+    const {parseRepairReport}=await import(pathToFileURL(join(root,'src/domain/repair-report.ts')).href)
+    const f=await evidenceFixture()
+    try{
+      f.evidence.actual_tests=f.evidence.request.only_testing=['Tests/Unit/test1']
+      f.summary.passedTests=f.summary.totalTestCount=1
+      await f.save()
+      const report=parseRepairReport({...f.report,reportVersion:3,sourceIdentity:'HEAD fixture; final_source_digest='+f.evidence.before.source,validation:{...f.report.validation,evidence:[],unitTests:{status:'passed',passed:1,total:1,failed:0,skipped:0,notRun:0},managedEvidence:{kind:'apple_selected_test',runId:f.run,sourceDigest:f.evidence.before.source}}})
+      for(const mode of ['passed','pending']){
+        const projected=await f.projector.project(mode==='passed'?report:{...report,validation:{...report.validation,managedEvidence:{...report.validation.managedEvidence,sourceDigest:'b'.repeat(64)}}})
+        await page.evaluate(report=>orca.host.call('plugin.request',{name:'fixture.projected-report',input:{report}}),projected)
+        await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true}}))
+        await page.getByRole('tab',{name:'实施',exact:true}).click()
+        await page.getByRole('button',{name:'刷新执行记录',exact:true}).click()
+        const message=mode==='passed'?'验收状态：1/1项验证已通过':'验收状态：测试证据待核对'
+        await page.getByText(message,{exact:true}).waitFor()
+        await page.getByRole('button',{name:'查看详情',exact:true}).first().click()
+        await page.locator('.detail-toolbar').getByRole('button',{name:'查看执行记录',exact:true}).click()
+        const progress=page.getByRole('heading',{name:'修复进度',exact:true}).locator('..')
+        await progress.getByText(message,{exact:true}).waitFor()
+        if(mode==='pending')await progress.getByText(projected.acceptanceEvidence.note,{exact:true}).first().waitFor()
+        await screenshot('repair-detail-evidence-'+mode,'light',360)
+        await page.getByRole('button',{name:'更新状态',exact:true}).click()
+        const form=page.getByRole('heading',{name:'更新为已修复',exact:true}).locator('..')
+        await form.getByText(message,{exact:true}).waitFor()
+        assert.equal(await page.getByRole('button',{name:'预览状态更新',exact:true}).isEnabled(),mode==='passed')
+        if(mode==='pending')await form.getByText(projected.acceptanceEvidence.note,{exact:true}).waitFor()
+        await screenshot('completion-evidence-'+mode,'dark',460)
+      }
+      assert.deepEqual(errors,[])
+      const evidence={environment:'Chrome production HTML + real evidence projector on fictional files; no live ONES writes',checks:['structured 1/1 across list detail and status form','source mismatch shows specific reason and disables preview','360px light and 460px dark without overflow'],pageErrors:errors}
+      await writeFile(join(output,'evidence-contract-ui.json'),JSON.stringify(evidence,null,2))
+      console.log(JSON.stringify(evidence))
+    }finally{await f.close()}
   }else if(process.env.ONES_JOURNEY==='acceptance'){
     for(const mode of ['legacy','na-pending','na-passed']){
       await page.evaluate(mode=>orca.host.call('plugin.request',{name:'fixture.report-mode',input:{mode}}),mode)

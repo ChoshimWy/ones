@@ -1,3 +1,4 @@
+import { managedEvidenceReferences } from './domain/managed-evidence.ts'
 import { RepairEvidence } from './repair-evidence.ts'
 import { isDeepStrictEqual } from 'node:util'
 import { parseRepairReport, repairAcceptance, isNotApplicable, type RepairReport } from './domain/repair-report.ts'
@@ -134,8 +135,8 @@ export class RepairCache {
         const value = record(JSON.parse(await handle.readFile('utf8')))
         requireThat(value.runId === row.run_id && value.revision === row.revision && typeof value.token === 'string' && hash(value.token) === row.token_hash, 'receipt', '回执不属于本次任务或输入版本。')
         const {runId, revision, token, ...payload} = value
-        // 已接受 v2 的原文件保留可读；只允许显式 v3 更高序号更新，不重新接纳旧协议。
-        if (payload.reportVersion === 2 && row.report && isDeepStrictEqual(payload, JSON.parse(String(row.report)))) continue
+        // 原样读取已接受的历史协议，不将新增绑定要求追溯应用到旧文件；新更新仍严格校验。
+        if (row.report && isDeepStrictEqual(payload, JSON.parse(String(row.report))) && (payload.reportVersion === 2 || payload.reportVersion === 3 && !record(payload.validation).managedEvidence && managedEvidenceReferences(record(payload.validation).evidence as string[]).length > 0)) continue
         const report = parseRepairReport(payload)
         if (isNotApplicable(report.validation.unitTests)) {
           // 只阻止已明确要求单测的历史；旧 v2 无受管引用并不等于已执行测试。
@@ -166,13 +167,13 @@ export class RepairCache {
           db.prepare(`DELETE FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3
             AND sequence NOT IN (SELECT sequence FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3 ORDER BY sequence DESC LIMIT 20)
             AND sequence NOT IN (SELECT MIN(sequence) FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3 AND json_extract(report,'$.validation.unitTests.total')>0 HAVING MIN(sequence) IS NOT NULL)
-            AND sequence NOT IN (SELECT MIN(sequence) FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3 AND json_extract(report,'$.reportVersion')=2 AND EXISTS (SELECT 1 FROM json_each(report,'$.validation.evidence') WHERE value LIKE '%/data/apple/%') HAVING MIN(sequence) IS NOT NULL)`).run({'1':scope,'2':String(row.task_id),'3':String(row.run_id)})
+            AND sequence NOT IN (SELECT MIN(sequence) FROM report_history WHERE scope=?1 AND task_id=?2 AND run_id=?3 AND (json_extract(report,'$.validation.managedEvidence') IS NOT NULL OR EXISTS (SELECT 1 FROM json_each(report,'$.validation.evidence') WHERE value LIKE '%/data/apple/%')) HAVING MIN(sequence) IS NOT NULL)`).run({'1':scope,'2':String(row.task_id),'3':String(row.run_id)})
           db.exec('COMMIT')
         } catch (error) { db.exec('ROLLBACK'); throw error }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           check()
-          db.prepare('UPDATE repairs SET report_error=? WHERE scope=? AND task_id=? AND run_id=? ').run(error instanceof AppError && error.code === 'acceptance' ? error.message : '回执未接收：格式、身份、权限或证据不符合协议；可修正结果文件后重试。',scope,String(row.task_id),String(row.run_id))
+          db.prepare('UPDATE repairs SET report_error=? WHERE scope=? AND task_id=? AND run_id=? ').run(error instanceof AppError && (error.code === 'acceptance' || error.code.startsWith('evidence_')) ? `回执未接收：${error.message} 已保留上次有效报告（如有），本次报告尚未生效。` : '回执未接收：格式、身份、权限或证据不符合协议；可修正结果文件后重试。',scope,String(row.task_id),String(row.run_id))
         }
       } finally { await handle?.close() }
     }
