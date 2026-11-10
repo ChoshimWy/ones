@@ -1,3 +1,4 @@
+import { StatusView } from './status-update.ts'
 import type { BugDetail, DetailPage, Discussion, Attachment } from '../adapters/bug-details.ts'
 import type { BugContent } from '../domain/bug-content.ts'
 import {
@@ -36,6 +37,16 @@ export class DetailView {
   }
   private sections = { comments: el('div'), attachments: el('div') }
   private busy = false
+  /// 状态子视图随 detailId 失效，不复用旧确认。
+  private statusView?: StatusView
+  /// 同页状态表单容器。
+  private statusArea = el('div')
+  /// 与修复启动独立的状态操作入口。
+  private statusTop = button('更新状态', () => this.statusView?.open(), true)
+  /// 步骤缺失、权限或 schema 不支持的可见原因。
+  private statusReason = el('p', 'muted')
+  /// 权威详情刷新后通知父列表刷新，保留当前结果。
+  updated?: () => Promise<void>
   private repair?: RepairView
   private repairArea = el('div')
   private repairTop = button('执行修复', () => this.repair?.open(), true, 'primary')
@@ -50,7 +61,9 @@ export class DetailView {
         button(backLabel, () => this.back?.()),
         button('刷新详情', () => this.open())
       ),
-      el('div', 'row detail-actions', button('打开原单', () => openOriginal(team, taskId)), this.repairTop),
+      el('div', 'row detail-actions', button('打开原单', () => openOriginal(team, taskId)), this.statusTop, this.repairTop),
+      this.statusReason,
+      this.statusArea,
       this.repairArea,
       this.progress,
       this.error,
@@ -67,6 +80,11 @@ export class DetailView {
     this.media[kind] = []
   }
   private reset(): void {
+    this.statusView?.dispose()
+    this.statusView = undefined
+    this.statusArea.replaceChildren()
+    this.statusTop.disabled = true
+    this.statusReason.textContent = ''
     this.repair?.dispose()
     this.repair = undefined
     this.repairArea.replaceChildren()
@@ -105,6 +123,15 @@ export class DetailView {
         return
       }
       this.current = detail
+      this.statusView = new StatusView(detail.detailId, (disabled, reason) => {
+        this.statusTop.disabled = disabled
+        this.statusReason.textContent = reason
+      }, async () => {
+        await this.open()
+        await this.updated?.()
+      }, () => this.statusTop.focus())
+      this.statusArea.replaceChildren(this.statusView.element)
+      void this.statusView.load()
       this.repair = new RepairView(detail.detailId, (busy, hasRecord) => {
         this.repairTop.disabled = busy
         this.repairBottom.disabled = busy

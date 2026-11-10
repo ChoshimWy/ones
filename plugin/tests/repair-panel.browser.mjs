@@ -5,7 +5,7 @@ export async function exerciseRepairPanel({ evaluate, wait, screenshot }) {
   await evaluate(`document.querySelector('button.bug-item').click()`)
   await wait(`!!document.querySelector('h2') && document.body.innerText.includes('正文末尾')`)
   assert.equal(await evaluate(`[...document.querySelectorAll('button')].filter(b=>b.textContent==='执行修复').length`), 2)
-  const geometry = await evaluate(`(()=>{const row=document.querySelector('.detail-actions'),buttons=row.querySelectorAll('button'),a=buttons[0].getBoundingClientRect(),b=buttons[1].getBoundingClientRect();return {sameRow:Math.abs(a.top-b.top)<1,right:b.right>a.right,overflow:document.documentElement.scrollWidth>innerWidth}})()`)
+  const geometry = await evaluate(`(()=>{const row=document.querySelector('.detail-actions'),buttons=[...row.querySelectorAll('button')],a=buttons.find(b=>b.textContent==='打开原单').getBoundingClientRect(),b=buttons.find(b=>b.textContent==='执行修复').getBoundingClientRect();return {sameRow:Math.abs(a.top-b.top)<1,right:b.right>a.right,overflow:document.documentElement.scrollWidth>innerWidth}})()`)
   assert.deepEqual(geometry, { sameRow: true, right: true, overflow: false })
   await screenshot('ones-repair-detail', 'light', 460)
   await click('执行修复')

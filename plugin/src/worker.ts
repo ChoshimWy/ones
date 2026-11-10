@@ -1,3 +1,4 @@
+import { StatusWorkflow } from './status-update.ts'
 import { FocusedProject } from './adapters/focused-project.ts'
 import type { OrcaWorkerApi } from 'orca/worker'
 import { RepairWorkflow } from './repair.ts'
@@ -22,6 +23,12 @@ export default function activate(orca: OrcaWorkerApi): void {
     set: (key, value) => orca.storage.set(key, value as never),
     delete: key => orca.storage.delete(key)
   })
+  // 2026-11-10 正式 Worker 两步状态流转及独立回读已验证；仅开放 Adapter 支持的步骤，工时闸保持关闭。
+  const transitions = new StatusWorkflow(detailId => service.transitionContext(detailId), undefined, true)
+  orca.panels.handle('bugs.transitionOptions', input => answer(() => transitions.options(input.detailId)))
+  orca.panels.handle('bugs.transitionPreview', input => answer(() => transitions.preview(input)))
+  orca.panels.handle('bugs.transitionSubmit', input => answer(() => transitions.submit(input.previewId, input.confirmed)))
+  orca.panels.handle('bugs.transitionReconcile', input => answer(() => transitions.reconcile(input.detailId, input.operationId)))
   const focusedProject = new FocusedProject({
     context: () => orca.host.call('workspace.readContext'),
     list: () => orca.host.call('workspace.list')

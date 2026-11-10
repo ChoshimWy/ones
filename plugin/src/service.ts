@@ -1,3 +1,4 @@
+import { OnesTransitions } from './adapters/ones-transitions.ts'
 import { filterProject, projectMappingKey, type ProjectMapping } from './domain/project-mapping.ts'
 import type { Option } from './domain/model.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -66,7 +67,7 @@ export class Workbench {
   async status(): Promise<Status> {
     await this.ready
     const ones = this.sessions.ones; const coho = this.sessions.coho
-    return { ones: { connected: !!ones && ones.expiresAt > Date.now(), label: ones?.label ?? '未登录' }, coho: { connected: !!coho && coho.expiresAt > Date.now(), label: coho?.label ?? '未登录' }, teams: ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, blockers: ['工时写入尚待插件端到端验证，当前仅开放预览。', 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建、修改与流转的动态字段契约待验证。'] }
+    return { ones: { connected: !!ones && ones.expiresAt > Date.now(), label: ones?.label ?? '未登录' }, coho: { connected: !!coho && coho.expiresAt > Date.now(), label: coho?.label ?? '未登录' }, teams: ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, blockers: ['工时写入尚待插件端到端验证，当前仅开放预览。', 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建与内容修改尚未开放；状态更新按详情中的独立能力闸与字段配置校验，工时写闸不受影响。'] }
   }
   async login(input: LoginInput, signal?: AbortSignal): Promise<Status> {
     await this.ready
@@ -218,6 +219,15 @@ export class Workbench {
         return page
       }
     }
+  }
+  /// 状态业务上下文固定在当前详情，关闭或切身份立即撤销未发送确认。
+  async transitionContext(detailId: string) {
+    await this.ready
+    const detail = this.currentDetail(detailId), client = this.ones(detail.team)
+    await client.assertIdentity()
+    const check = () => { requireThat(this.currentDetail(detailId) === detail, 'stale', '详情或身份已变化，请重新打开。') }
+    check()
+    return { scope: this.scope(client), task: detail.view.task, adapter: new OnesTransitions(this.onesTransport, client.session, detail.team), check }
   }
   async repairContext(detailId: string) {
     await this.ready

@@ -1,21 +1,21 @@
 ---
 document_id: TSD-ONES-001
 document_type: technical-design
-version: "1.4.0"
+version: "1.5.0"
 status: draft
 owner: TBD
 related_requirements: ["REQ-ONES-001", "REQ-ONES-002", "REQ-ONES-003", "REQ-ONES-004"]
-related_documents: ["TSD-COHO-001: coho-attendance-api.md"]
-updated_at: "2026-11-09"
-source_identity: "仓库基线 22c0c86f0981bb54679812511e4b0ad3717c2868；内网 ONES release_version=v6.18.7、build_version 为空；前端 733.9178f7c8.js、734.03b4e2e4.js、app.842f08a8.js、index.dff858f5.js"
-evidence: ["EV-ONES-001: 本文第 8 节脱敏只读实测", "EV-ONES-002: 本文第 8 节静态调用链", "EV-ONES-003: 本文第 9 节官方参考", "EV-ONES-004: 单笔工时提交与回读", "EV-ONES-005: 原记录描述补全与回读"]
+related_documents: ["TSD-COHO-001: coho-attendance-api.md", "IMP-ONES-PLUGIN-001: orca-plugin-plan.md", "VR-ONES-PLUGIN-001: orca-plugin-verification.md"]
+updated_at: "2026-11-10"
+source_identity: "本次文档基线 main@cc0cdfb8e1335e72ca2eaf894c8855010e94b801；EV-ONES-006 为本会话实际 API 回执、非插件运行证据；历史仓库基线 22c0c86f0981bb54679812511e4b0ad3717c2868；内网 ONES release_version=v6.18.7、build_version 为空；前端 733.9178f7c8.js、734.03b4e2e4.js、app.842f08a8.js、index.dff858f5.js"
+evidence: ["EV-ONES-001: 本文第 8 节脱敏只读实测", "EV-ONES-002: 本文第 8 节静态调用链", "EV-ONES-003: 本文第 9 节官方参考", "EV-ONES-004: 单笔工时提交与回读", "EV-ONES-005: 原记录描述补全与回读", "EV-ONES-006: §8.1 单笔状态流转与字段/评论回读"]
 ---
 
 # ONES 接口与 Orca 接入规则
 
 ## 1. 结论与范围
 
-本文件是当前内网实例的接口契约草稿，涉及凭证、业务写入及个人工时，按 L3 边界记录。**文档完成不代表插件完成。单笔工时添加与原记录描述更新已实测；其它写操作及异常恢复仍未验证。**
+本文件是当前内网实例的接口契约草稿，涉及凭证、业务写入及个人工时，按 L3 边界记录。**文档完成不代表插件完成。单笔工时添加、原记录描述更新及一次 Bug 修复状态流转已实测；插件状态更新 UI/流程已有实现与虚构故障测试；正式插件自身认证下的指定两步状态流转、字段/评论及独立回读已通过（EV-ONES-008）；状态支持子集已开放，工时写闸不变。**
 
 | 证据标签 | 含义 |
 | --- | --- |
@@ -113,7 +113,7 @@ Accept: application/json
 | 新建 Bug | `POST /tasks/add3` | `STATIC`；动态创建字段合同有缺口，默认关闭 |
 | 修改 Bug 内容 | `POST /tasks/update3` | `STATIC`；只提交用户确认的字段，不携带陈旧完整对象 |
 | 可用流转 | `GET /task/{taskUUID}/transitions` | `LIVE-READ`：`transitions[]` |
-| 执行流转 | `POST /task/{taskUUID}/new_transit` | `STATIC`；步骤必填字段/后置动作需预检 |
+| 执行流转 | `POST /task/{taskUUID}/new_transit` | 单笔 `LIVE-WRITE` + 回读（EV-ONES-006）；插件实写未验证 |
 | 项目、类型、字段/选项/权限元数据 | 按当前前端对应配置接口接入 | `GAP`：尚未完整验证，不硬编码生产枚举 |
 | 评论/附件 | 暂不启用 | `GAP`：另行核实上传、签名 URL、消息模型及授权 |
 
@@ -363,14 +363,53 @@ variables 只带已核实的原 key、用户确认的描述和当前团队 mode�
 
 ### 6.3 提交流转
 
-1. `GET /task/{taskUUID}/transitions`，读取当前任务可见步骤。
-2. 展示当前状态、目标状态、步骤和所需输入，补齐该步骤的字段/评论/工时/附件约束。
-3. 用户明确确认后 `POST /task/{taskUUID}/new_transit`，核心参数 `transition_uuid`；当前前端也会合并步骤表单参数。
-4. 回读任务状态和必要的异步动作结果。API 已接受不等于后置动作全部完成。
+接口与字段合同以本节为真源；插件交互与实施计划见 [状态更新规划](orca-plugin-plan.md#bug-status-update)。`TEAM_API` 为 `{ONES_ORIGIN}/project/api/project/team/{teamUUID}`。
 
-本次 transitions 样本只有 `uuid/name/start_status_uuid/end_status_uuid`，**没有 `match_condition`**。不能因旧文档列出该字段便假定一定返回，也不能仅因步骤可见就认定所有必填条件满足。流程可能有异步后置动作，见[官方工作流说明](https://docs.ones.cn/project/open-api-doc/project/workflow.html)。
+1. 写前重新核对 `GET {PROJECT_API}/users/me` 与当前插件身份；读取任务详情与 `GET {TEAM_API}/task/{taskUUID}/transitions`，验证任务、项目、当前状态和目标步骤一致。
+2. 展示步骤对应的必填/可编辑字段与目标状态。2026-11-10 实测的任务及项目类型 transitions 响应仅提供步骤身份、名称、起止状态；没有 `fields` 或 `match_condition`，**不能把它们当成完整表单 schema**。完整配置读取链已由 EV-ONES-007 只读核实：项目 stamps、团队字段目录、项目类型字段配置与任务允许步骤按 project/type/scope/status 交集关联；缺项时禁用提交。
+3. 人工确认后执行 `POST {TEAM_API}/task/{taskUUID}/new_transit`，JSON 请求体见下方。不能用 `tasks/update3` 直接写 `status_uuid` 绕过工作流；不额外发送同内容评论请求。
+4. HTTP 成功只表示已接受。若返回 `async_token`，可调用 `GET {TEAM_API}/transition_async_status?token={asyncToken}`，随后回读任务状态、提交字段及本次评论；不要因前端 toast 或会话结束宣称已验证。
 
-提交工时、创建 PR、Agent 结束都不触发流转；“已解决/已验收”必须按真实团队工作流和人工决策处理。不要在更新普通字段的接口里绕过流程直接写状态。
+#### 请求与字段编码
+
+下列为本次已执行形状的脱敏示例，UUID 均为占位符；实际字段、类型、选项及必填约束必须由当前项目配置解析，不能硬编码本次实例 ID：
+
+```json
+{
+  "transition_uuid": "<selected-transition-uuid>",
+  "field_values": [
+    {"field_uuid": "<root-cause-field-uuid>", "type": 1, "value": "<root-cause-option-uuid>"},
+    {"field_uuid": "<solution-version-field-uuid>", "type": 2, "value": "<user-confirmed-version>"}
+  ],
+  "discussion": {
+    "uuid": "<client-generated-comment-uuid>",
+    "content_type": 1,
+    "text": "<p>根本原因：…</p><p>解决方法：…</p><p>影响范围：…</p><p>验证结果及待办：…</p>"
+  },
+  "manhours": [],
+  "resource_uuids": []
+}
+```
+
+| 当前“已完成修复”表单项 | 已核实编码 / 接入约束 |
+| --- | --- |
+| 缺陷根因 | 必填单选，`type: 1`；`value` 是选项 UUID，不是中文名称或整段根因说明。本次经确认选“代码错误”；不能对所有 Bug 自动默认该选项 |
+| 解决版本 | 本项目为自定义文本，`type: 2`，不是版本实体 UUID；本次写入并回读 `2.5.00.09`。其它项目须依元数据解析 |
+| 评论 | 页面 `tf-comment` 映射为 `discussion`，富文本 `content_type: 1`；客户端生成已实测形状的 8 位字母数字评论 UUID 并保留用于回读（不假设服务端幂等）。文本须转义后生成受限 HTML，不执行 Agent 输出或直接拼入不可信 HTML |
+| 其它步骤字段 | 前端还支持工时、资源与 Wiki 关联。本次工时/资源为空、未传 Wiki；不代表其它步骤可以省略它们。首期插件遇到未支持的必填类型阻断，不借空数组绕过 |
+
+非必填且未改动字段省略；空值不等于省略，不能为“未填写”覆盖远端已有值。根因说明、解决方法、影响范围、验证及交付限制写入本次流转评论，不覆盖原 Bug 描述。方案未要求独立评论发布或自动流转。
+
+认证沿用 Worker 的 ONES 会话，`Authorization: Bearer <access-token>`；本次一次性操作在用户授权下复用浏览器登录态，仅以同源 `fetch` 发 HTTP 请求，没有点击网页提交。前端对非 GET 请求在存在 `ct` 时携带 `x-csrf-token`；EV-ONES-007 已确认本次成功单笔路径没有 `ct`，也未携带 CSRF 头；插件不虚构此头，复用 Bearer 与 `credentials: omit`，不把浏览器 Cookie/localStorage 读取变成正式登录入口。不同实例认证要求不外推。凭证与异步 token 不进入 UI、日志或仓库，禁止跨源重定向；HTTP 明文风险沿用 §3。
+
+#### 回读、未知结果与证据边界
+
+- 任务详情验证目标状态及每个提交字段；`GET {TEAM_API}/task/{taskUUID}/messages?count=20[&max={send_time}]` 按客户端评论 UUID 定位，核对 `ref_type: task`、`ref_id`、作者 `from` 与 `rich_text || text` 完整内容。必要时有界续页；首屏找不到不等于提交失败。
+- 本次 `new_transit` 返回 HTTP 200 和 `async_token`；异步查询实际返回 `status: "none"`，**不是 `done`**。任务状态、根因、版本及评论逐项回读匹配，因此只确认这些更新已生效，不推断全部后置动作完成；未知异步状态的通用语义仍待核实。
+- 提交前持久记录意图与评论 UUID；超时、5xx、响应丢失或重启进入待核实，禁止自动再发或补发评论。同一 Bug 的提交串行，已有待核实记录先回读；评论 UUID 未证明是服务端幂等键。仅目标状态相同不足以证明本次提交成功。
+- 用户确认绑定账号、团队、任务、步骤、原状态、详情版本与 payload 摘要；确认后发生变化须重新预览。写前重读无法消除与其它客户端的竞态，未证明服务端 CAS；状态与字段/评论部分匹配时保留差异，不自动补偿或强制覆盖。
+
+提交工时、创建 PR、Agent 结束都不触发流转；“已修复”不等于“已验收”。根因分类、解决版本、修复总结及未完成验证由用户检查后提交。
 
 ## 7. 写入保护与失败恢复合同
 
@@ -398,7 +437,7 @@ draft → validated → confirmed → submitting → acknowledged → verified
 
 ### 8.1 本次证据
 
-初始只读/静态证据采集于 2026-11-06；同日完成一笔已授权工时添加，2026-11-09 完成该原记录描述补全。环境：macOS 上 Orca 内置浏览器、上述内网 HTTP 实例。只使用已有会话，无密码登录、无写 REST、无 HAR/原始响应落盘；两次 mutation 分别为 addManhour 和仅描述 updateManhour。下列只记录字段、类型、数量与状态；不存账号、Token、真实业务 ID、任务标题或个人工时原始响应；参数规格中的数字仅说明单位，不携带实际任务映射。`EV-ONES-001` 为本次工具回执的脱敏摘要，不是可脱离原会话独立审计的网络原始包。
+以下 EV-ONES-001–005 为历史证据。初始只读/静态证据采集于 2026-11-06；同日完成一笔已授权工时添加，2026-11-09 完成该原记录描述补全。环境：macOS 上 Orca 内置浏览器、上述内网 HTTP 实例。只使用已有会话，无密码登录、无写 REST、无 HAR/原始响应落盘；两次 mutation 分别为 addManhour 和仅描述 updateManhour。下列只记录字段、类型、数量与状态；不存账号、Token、真实业务 ID、任务标题或个人工时原始响应；参数规格中的数字仅说明单位，不携带实际任务映射。`EV-ONES-001` 为本次工具回执的脱敏摘要，不是可脱离原会话独立审计的网络原始包。
 
 | ID / 检查 | 实际结果与限制 |
 | --- | --- |
@@ -413,11 +452,19 @@ draft → validated → confirmed → submitting → acknowledged → verified
 | EV-ONES-004 / 单笔添加与回读 | 2026-11-06：一次 addManhour，HTTP 200、无 GraphQL errors、返回 key；按 key 及本人日期回读一致，任务状态不变；空描述被服务端接受，但不满足后续第 5.5 节规则 |
 | EV-ONES-005 / 原记录描述补全 | 2026-11-09：原记录匹配唯一且描述为空；一次 updateManhour、零次 add，HTTP 200、无 errors；回读描述一致，key/开始时间/时长/类型/归属保持不变，条数和合计工时不变 |
 
-两次写验证的私有脱敏回执仅保留在本机 chat-scratch（临时目录可能清理），未纳入 Git；摘要用于绑定复用证据，不是独立网络抓包：
+EV-ONES-004/005 两次写验证的私有脱敏回执仅保留在本机 chat-scratch（临时目录可能清理），未纳入 Git；摘要用于绑定复用证据，不是独立网络抓包：
 
 - EV-ONES-004 回执 SHA-256：`4797a7dd1ab03239703021993b99c90a89a2cfe5adb40ed3046a265c5afd19c2`。
 - EV-ONES-005 回执 SHA-256：`c3fbf121190387504036aa7d7d2071d4bc52bf16fd7f977f46387120ae6fc263`。
 - 写操作由用户分别授权，本次仅复用已有证据更新文档，没有重放写请求。单笔添加按用户明确指定值执行，不作为 Coho 自动计算/身份映射已闭环的证据。
+
+#### EV-ONES-006：单笔状态流转（2026-11-10）
+
+- 环境与身份：本机 macOS、Orca ONES 同源页面登录态；前端 `733.9178f7c8.js`、`734.03b4e2e4.js`、`app.842f08a8.js` 静态调用链及真实表单配置。不是插件 Worker 调用，不绑定插件代码为已测身份。
+- 授权与请求：用户明确授权指定 Bug → 已修复、版本 `2.5.00.09`、根据修复总结填表，并要求接口处理；本人身份匹配、原状态与步骤匹配后，单次 POST `new_transit`，HTTP 200，仅返回 `async_token`。零次独立评论写入、零次重试。
+- 回读：目标状态为“已修复”；根因选项匹配“代码错误”；版本精确匹配；按本次客户端 UUID 找到评论且内容完全一致，保留实体设备待复测、代码未提交/未合并说明。异步状态为 `none`，不声称所有后置动作完成。
+- 证据：本会话工具回执，提交 invocation `6e360c26-917e-4d48-a9ee-eaaaaa410725`；回读 invocation `db243e3c-5f3d-4901-b386-8d68ccd9b9bb`。这里只保留脱敏摘要，不是独立网络抓包；无 HAR、凭证、真实任务/字段/选项 UUID 或 Bug 正文落入仓库。
+- 未覆盖：插件自身认证与 CSRF、步骤字段配置读取链、全部项目、权限拒绝、并发写、超时/重启恢复、异步后置动作、插件 UI。后续验证仅针对新增实现与缺口；不为写文档重放该笔请求。
 
 前端脚本从 `ONES_ORIGIN/project/scripts/` 读取，具体文件名记录于 source_identity。未来包名或服务端版本变化应重新核对相关契约，不把本次读证据升级为未来写能力。
 
@@ -431,7 +478,7 @@ draft → validated → confirmed → submitting → acknowledged → verified
 | TC-ONES-004 / REQ-ONES-002 | 确认后提交、逐项回读、超时不重发、部分成功可恢复 | 单笔提交/回读 PASS（EV-ONES-004）；超时/部分成功恢复 NOT_RUN；初次空描述不满足新增规则 |
 | TC-ONES-009 / REQ-ONES-002 | 确认描述后仅更新原记录，保护字段、条数及合计不变 | 真实补全/回读 PASS（EV-ONES-005）；缺描述阻断、多条匹配、并发变化和已等值跳过等插件负向场景 NOT_RUN |
 | TC-ONES-005 / REQ-ONES-003 | 动态必填/无权限拒绝、新建和更新后回读、并发编辑保护 | NOT_RUN：创建 schema/字段权限与写契约未闭合 |
-| TC-ONES-006 / REQ-ONES-003 | 可用步骤与必填约束、人工确认、异步后置动作核对 | 流转列表 PASS；执行及后置动作 NOT_RUN |
+| TC-ONES-006 / REQ-ONES-003 | 可用步骤与必填约束、人工确认、异步后置动作核对 | 流转列表及单笔状态/字段/评论写入回读 PASS（EV-ONES-006）；后置动作完成、插件负向/恢复 NOT_RUN |
 | TC-ONES-007 / REQ-ONES-004 | 原 Bug 不变、重复实施请求不重复发起、Agent 完成不改 ONES | NOT_RUN：插件未实现 |
 | TC-ONES-008 / 全部 | HTTP origin 白名单、拒绝跨域重定向、凭据不进入 task spec/日志 | 本次读取使用同源/拒绝重定向；插件负向测试 NOT_RUN |
 
@@ -443,12 +490,41 @@ draft → validated → confirmed → submitting → acknowledged → verified
 | 元数据/创建 schema/权限 | 读取选定项目和类型的字段配置与作用域，固定必填/可编辑字段契约；此前关闭 Bug 写入 | TBD |
 | 单日边界及日期锚点 | 用获准样本核实团队时区午夜、起止边界、跨日及未填写日期语义；此前不自动提交工时 | TBD |
 | Coho ↔ ONES 身份映射 | 用户确认两个系统的本人身份，并在切换账号时失效重确认 | TBD |
-| 写入与回读契约 | 单笔工时添加/描述补全及回读已有证据；其它工时字段、删除、Bug 创建/更新/流转须另取具体测试授权后验证；不能用文档授权代替业务写授权 | TBD |
+| 写入与回读契约 | 单笔工时添加/描述补全、单笔 Bug 状态流转及字段/评论回读已有证据；其它工时字段、删除、Bug 创建/内容更新、其它流转与插件接入须另取具体测试授权后验证；不能用文档授权代替业务写授权 | TBD |
 | 并发与不确定结果 | 先用合成数据验证本地状态机、重复提交、超时/部分成功；真实远端幂等能力未知时保留人工核对 | TBD |
 
-文档任务 ownership 仅 `README.md` 和本文件，canonical Git root 为 `/Users/choshim/Desktop/Aputure/Code/Projects/Ones`；任务分支 `docs/ones-api-integration` 从 `main@22c0c86f0981bb54679812511e4b0ad3717c2868` 建立，Worktree 为 `/Users/choshim/.agent-worktrees/choshimwy-ones/docs/ones-api-integration`。不修改 scripts/tests/config，不因文档生成自动提交、合并或推送。
+历史文档任务 ownership 仅 `README.md` 和本文件，canonical Git root 为 `/Users/choshim/Desktop/Aputure/Code/Projects/Ones`；任务分支 `docs/ones-api-integration` 从 `main@22c0c86f0981bb54679812511e4b0ad3717c2868` 建立，Worktree 为 `/Users/choshim/.agent-worktrees/choshimwy-ones/docs/ones-api-integration`。不修改 scripts/tests/config，不因文档生成自动提交、合并或推送。
 
 自检已完成：补齐版本/认证差异、响应顶层形状、分页提前截断、定点单位、跨日证据缺口、动态必填、并发覆盖、超时重复和原 Bug 不变约束。补齐描述非空确认、原记录最窄更新及证据分层；未将单笔成功推广为全部写能力或日期边界通过。N/A：本次文档修订无插件代码、数据库迁移、UI 或线上发布；撤回文档不会撤销已授权的历史业务写入，修订过程没有新增线上写操作。
+
+#### EV-ONES-007：状态 schema 与权限只读补证（2026-11-10）
+
+Main 在当前实例执行只读 metadata/权限查询，脱敏结果如下；POST 在本表均为读取，不发送业务 mutation：
+
+| 路径 / 请求 | 已确认响应与关联 |
+| --- | --- |
+| `POST {TEAM_API}/project/{project}/stamps/data?t=transition`，`{transition:0}` | `transition.transitions[]` 与 `server_update_stamp`；步骤含 project/type/scope、起止状态、`fields`、`condition`、`trigger`、`post_function` |
+| `GET {TEAM_API}/fields` | `fields[]`；`uuid/name/type/fixed/options`；单选 option 为 `uuid/value` |
+| `GET {TEAM_API}/project/{project}/issue_type/{type}/field_configs` | `field_configs[]`，按 project/type/scope/field 关联；本次两字段 `option_configs:null`，根因必填取步骤 `fields.required:true`，不被字段配置 `required:false` 覆盖 |
+| `POST {TEAM_API}/tasks/evaluated_permissions`，`{tasks:{"<task>":["view_tasks","update_tasks","transit_tasks"]}}` | `tasks[task]` 的三项布尔权限；字段更新同时要求 update 权限 |
+| `GET {TEAM_API}/task/{task}/info` | 顶层 task，`issue_type_scope_uuid`；`field_values` 项含 `field_uuid/type/value/value_type/date_value`；已实测根因/版本的 value 均 string |
+| `GET .../messages` / `transition_async_status` | 作者键 `from`，本次 `rich_text || text` 与提交 HTML 一致；后置响应 `{update_tasks:[],status:'none'}` |
+
+证据引用（Main 本会话 invocation）：schema `a40c0c56-8d2b-4561-9a82-2f58860741c5`；CSRF `69b751b7-80c2-4698-887b-7c2b4d03a0dc`；权限 `198164ce-b30e-40ac-aff8-7ea752662f39`；字段/评论 `c8d7c6a3-79da-4291-90e8-4c6e4eda23ef`。不保存真实任务正文、UUID、token 或原始响应。
+
+插件首期仅支持该已核实字段子集；未知条件/触发器/后置动作、非空 option_configs、fixed 字段或不支持类型均阻断。EV-ONES-007 单独不证明所有字段编辑约束、其它项目或真实插件写入已通过；正式插件限定实写另见 EV-ONES-008。
+
+#### EV-ONES-008：正式插件状态提交与独立回读（2026-11-10）
+
+用户指定样本、目标版本和完整总结后，Main 经已授权正式开发插件加载、插件自身 Vault 认证，以 CLI 调用正式 typed handler；没有浏览器 token 注入，没有绕过工作流，未重放上一笔已修复缺陷。步骤如下：
+
+1. 重新读取 detail/options：当前待处理仅允许“确认→修复中”，无直接修复步骤。preview/submit 执行该允许步骤；无字段的 comment-only 请求回读 verified。
+2. 重新获取新的 detailId 与完整字段配置，选择“已完成修复→已修复”；用户确认的根因、解决版本及完整总结单次提交；状态/字段/本次评论全部回读一致。
+3. 再次独立读取详情、操作账本、reconcile 和本人 Bug 列表：目标状态与本次两条评论可见，操作 verified，列表行状态已更新；状态独立写能力 true，工时写能力 false。
+
+Main 工具回执：首步骤 `9c3bf1`、第二步 `2bc423`、最终只读核对 `82a8ba`。业务执行源码清单指纹为 `78f4fae93f50f1ea56c73bacb81009ff70af3ba31ab48318602c5cc605818baf`（HEAD `cc0cdfb8e1335e72ca2eaf894c8855010e94b801` + 未提交内容）；后续仅文档/注释收口，不新增业务请求。仓库不保存凭证、真实任务 UUID、原始评论或 async token。
+
+两次回读后置状态均为 `none`，不证明后置动作完成；没有额外 mutation 重试。真实失败恢复、其它实例/项目约束、真实人工点击 UI 到服务端的完整路径未验证。fixture UI、负向测试与本次正式 handler/API 证据分别记录于验证报告；不能彼此冒充。
 
 ## 9. 官方参考
 

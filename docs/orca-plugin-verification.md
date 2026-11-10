@@ -1,21 +1,21 @@
 ---
 document_id: VR-ONES-PLUGIN-001
 document_type: verification-report
-version: "0.5.0"
+version: "0.6.0"
 status: draft
 owner: "Main：实施与定向验证"
 related_requirements: ["REQ-ONES-001", "REQ-ONES-002", "REQ-ONES-003", "REQ-ONES-004"]
 related_documents: ["IMP-ONES-PLUGIN-001: orca-plugin-plan.md", "TSD-ONES-001: ones-api-integration.md", "TSD-COHO-001: coho-attendance-api.md"]
-updated_at: "2026-11-09"
-source_identity: "本轮 main@59f1225d439e15cb912b13e959f453e54044d109 + feat/bug-repair-session；最终未提交身份见本机 chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-repair-source-identity.json；历史证据身份仅适用于对应章节"
-evidence: ["EV-PLUGIN-002: 本会话定向 runner 结果", "EV-PLUGIN-003: Orca plugin validate/check 结果", "EV-PLUGIN-004: Orca dev load/open/status 与真实登录现场"]
+updated_at: "2026-11-10"
+source_identity: "本次文档基线 main@cc0cdfb8e1335e72ca2eaf894c8855010e94b801；EV-ONES-006 不属于插件执行；历史实施 main@59f1225d439e15cb912b13e959f453e54044d109 + feat/bug-repair-session；最终未提交身份见本机 chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-repair-source-identity.json；历史证据身份仅适用于对应章节"
+evidence: ["EV-PLUGIN-002: 本会话定向 runner 结果", "EV-PLUGIN-003: Orca plugin validate/check 结果", "EV-PLUGIN-004: Orca dev load/open/status 与真实登录现场", "EV-ONES-006: ones-api-integration.md §8.1；非插件运行证据"]
 ---
 
 # ONES 工作台：阶段验证报告
 
 ## 1. 判定与环境
 
-**完整方案验收不通过；开发原型部分完成。** 不能将虚构 fixture 的提交成功写成真实工时成功。生产 Worker 固定 `writesVerified: false`，没有可绕过的 UI 设置；未修改真实工时、Bug、工作区或启动 Agent。
+**完整方案验收不通过；开发原型部分完成。** 不能将虚构 fixture 的提交成功写成真实工时成功。生产 Worker 固定 `writesVerified: false`，没有可绕过的 UI 设置；该初始验证阶段未修改真实工时、Bug、工作区或启动 Agent。后续 CLI 阶段证据见对应章节；2026-11-10 单笔 API 状态写入见文末，不能计为插件写入已通过。
 
 - 仓库、基线、Worktree、ownership 与 DAG 见 [规划 §5](orca-plugin-plan.md#5-实施-dag-与写入所有权)。主仓保持只读，未提交、合并或推送。
 - 2026-11-09：本机 macOS arm64，Orca 1.4.254 / `9b9363f4fb130969e63e4a31ecac6d4f569d77a8`；初始脚手架为 1.4.253，重启后刷新 1.4.254 官方类型与指南。
@@ -280,3 +280,66 @@ EV-PLUGIN-FOLLOW-001 与 CLI 阶段使用同一临时证据目录（可能被清
 - [无匹配回退全部](</Users/choshim/Library/Application Support/orca/chat-scratch/f653ebe6031d929d0fa28d15e32aac18/ones-project-follow-all.png>)
 - `ones-project-follow-evidence.json` / `ones-project-follow-terminal-evidence.json`：运行身份和行为结果；`verify-project-follow.mts` / `verify-project-follow-terminal.mts`：本机驱动；`ones-project-follow-source-identity.json`：收口源码身份。生产源码在两段 UI 旅程及最终类型检查间未变，最后仅补充负向测试和文档。
 - 边界：筛选仍限已读取本人缺陷；没有匹配项目的缺陷尚未加载时显示全部，续页后重匹配。无上下文/无终端且同名歧义、其它 Orca 版本、多窗口/远端与真实账号项目切换未验证。原 CLI 修复聊天的真实启动/媒体消费 NOT_RUN 保持不变，不能用本轮只读筛选验证替代。
+
+
+## 状态更新接口证据与 UI 规划（2026-11-10，历史规划阶段）
+
+- 单笔真实接口结果：引用 [EV-ONES-006](ones-api-integration.md#ev-ones-006单笔状态流转2026-11-10)，用户授权后通过同源 HTTP API 完成修复状态、根因、解决版本及评论提交并回读一致；异步查询返回 `none`，不是后置动作完成证据。未通过插件或网页表单提交。
+- 插件结论：状态更新操作尚未实现，现有写闸未改变；不把接口样本成功扩展为插件认证、动态字段、权限/竞态、未知结果恢复或 UI 验收通过。
+- 待执行项：详见 [规划 §13](orca-plugin-plan.md#bug-status-update) 的 TASK-PLUGIN-100–103 与 TC-PLUGIN-STATUS-001–004，均未实施/NOT_RUN。会话总结自动读取未实现，不作为首期手动粘贴的前置条件。
+- 本轮只改文档；复用本会话提交与回读回执，不重放业务写请求、不运行插件测试。未新增可视内容，未生成 UI 验证截图；实施时由 Main 按规划补齐真实渲染截图并实际查看。
+
+
+## 状态更新实现阶段（2026-11-10，初次验证快照，未发布）
+
+- 身份：`main@cc0cdfb8e1335e72ca2eaf894c8855010e94b801` → `feat/bug-status-update`，Worktree `/Users/choshim/.agent-worktrees/choshimwy-ones/feat/bug-status-update`；单 Builder 实施，Main 接口补证。所有改动未提交，未改主工作区或其它仓。
+- `status-update.test.ts`：9 个定向测试通过；覆盖动态字段/权限与转义、双击单次请求、账本失败零写入、详情/配置漂移、身份失效、403/5xx/丢响应/200 后回读失败、重启未知不重发、跨 Worker 锁、评论 UUID/作者/富文本核对、崩溃锁只读核对、历史保留及真实 Workbench 的详情/评论/列表/修复上下文刷新链。全部使用虚构 fetcher，不是真实 ONES 写入证据。
+- 静态：严格 TypeScript 检查通过；`git diff --check` 通过。未运行全仓/全插件测试。
+- UI：已编写 `status-update.browser.mjs` 有界旅程，但安装版 Orca 1.4.255 隐藏隔离 profile 的 fixture 首次加载遇到 `approval_required`；未自动批准、未触及真实 profile。当前无有效 UI 截图，不能标记视觉或交互通过。恢复条件：用户批准该 fixture 的同范围 trusted-worker / storage:own / secrets:own / workspace:read 权限。
+- 正式 `StatusWorkflow` 写闸默认 false，现有 `writesVerified:false`（工时）不变；真实插件登录到单次提交/回读端到端 NOT_RUN。真实样本或一次 API 手工成功不能替代插件路径；不从浏览器提取 token 注入测试。
+- 限制：只支持已核实空条件/触发器/后置动作的单选、文本及评论步骤；未知配置 fail closed。磁盘目录 0700、文件 0600 不等于加密；崩溃残留锁不会自动释放，允许只读核对但新提交需人工核实本机状态。只有状态/字段/评论全部一致才标记成功，异步 `none` 仍单独标为后置未确认。
+
+定向复现（使用本机已安装 loader，不自动下载工具）：
+
+```sh
+node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs --test plugin/tests/status-update.test.ts
+"$TOOLING/node_modules/.bin/tsc" -p plugin --preserveSymlinks false --typeRoots "./plugin/.orca/types,$TOOLING/node_modules/@types"
+```
+
+最小回退为保持状态写闸关闭、撤销本次状态入口/handler wiring；保留账本用于核对，不撤销远端已生效状态或删除评论，不删除既有修复聊天。
+
+
+### 状态 UI 验收续记与受控 E2E 准备
+
+用户已明确授权本次隔离 fixture 和正式插件的既有同范围权限。安装版 Orca **1.4.255**、macOS、隐藏隔离 HOME/profile；虚构数据 Worker，不使用真实凭证。原截图驱动因隐藏 guest 捕获等待触发 deadline，未计作通过；仅将驱动改为 Electron 支持的 `stayHidden/stayAwake` 捕获及有界等待后完成验证，未放宽产品检查。
+
+- `status-update.browser.mjs` 主旅程 PASS：必填根因错误、总结粘贴/转义、完整字段与评论预览、提交期间控件禁用、unknown 重开禁止重发、核对成功后详情/评论/列表权威刷新与筛选移除、修复记录保留。fixture 状态 Submit 和 repair.start 均只有 1 次。
+- 新增 comment-only 定向测试 1/1 PASS：无字段步骤提交空 field_values，保留已有字段并按自身评论确认。结合此前未失效的 9 项证据，共 10 个状态风险用例；没有执行全量测试。
+- 收起状态表单时补齐焦点回到“更新状态”；仅补跑键盘旅程 PASS：展开聚焦原生 select、收起回焦、真实 Tab 到“执行修复”。此局部焦点改动不改变此前截图布局，复用主旅程视觉证据。
+- 实际打开检查全部 8 张截图：360/460px 深浅色，必填标签、错误、长总结换行、预览确认按钮、提交禁用、unknown/success 结果与评论可见，无横向溢出或控件遮挡。textarea 内长内容可滚动，完整评论在预览显示；单张图不覆盖整页。`none` 始终注明后置动作未证明完成。
+
+本机证据目录（临时 chat-scratch，可能被清理，不纳入 Git）：
+`/Users/choshim/Library/Application Support/orca/chat-scratch/8f900a07ed408984d279644035c82856`
+
+- [表单深色](</Users/choshim/Library/Application Support/orca/chat-scratch/8f900a07ed408984d279644035c82856/ones-status-form-dark.png>) / [窄屏完整预览](</Users/choshim/Library/Application Support/orca/chat-scratch/8f900a07ed408984d279644035c82856/ones-status-preview-light.png>)
+- [待核实](</Users/choshim/Library/Application Support/orca/chat-scratch/8f900a07ed408984d279644035c82856/ones-status-unknown.png>) / [更新成功](</Users/choshim/Library/Application Support/orca/chat-scratch/8f900a07ed408984d279644035c82856/ones-status-success.png>)
+- [评论刷新](</Users/choshim/Library/Application Support/orca/chat-scratch/8f900a07ed408984d279644035c82856/ones-status-comment.png>) / [焦点回退](</Users/choshim/Library/Application Support/orca/chat-scratch/8f900a07ed408984d279644035c82856/ones-status-focus-return.png>)
+- `ones-status-evidence.json`、`ones-status-keyboard-evidence.json`：运行身份、旅程与截图清单；`verify-status-panel.mts`、`verify-status-keyboard.mts`：本机驱动。
+
+**受控验证结果**：Main 已完成本次指定样本正式 Worker 两步提交与独立回读，保留状态 gate true；工时 `writesVerified:false` 不变。Builder 不发送 mutation。此验证不是正式发布或全部方案验收，详细边界见下节。
+
+
+### 正式 Worker 两步实写收口（2026-11-10）
+
+接口真源 [EV-ONES-008](ones-api-integration.md#ev-ones-008正式插件状态提交与独立回读2026-11-10)。用户明确授权本次正式插件加载、目标及完整总结；Main 在现有插件自身 Vault 登录下通过 CLI 调用正式 handler，未提取浏览器凭证。
+
+| 证据 | 结果 |
+| --- | --- |
+| `9c3bf1`：comment-only 的“确认→修复中” | verified，状态/字段/评论均 true，async none |
+| `2bc423`：重新 detail/options 后“已完成修复→已修复” | 用户确认的根因、解决版本和完整总结单次提交，verified，三项均 true，async none |
+| `82a8ba`：最终独立只读核对 | 新详情为已修复、本次两条评论存在，账本 verified；独立 reconcile 三项 true，首屏列表行状态已修复；statusWriteEnabled true、hoursWriteEnabled false |
+| Main 视觉验收 | 已实际打开表单/预览/unknown/成功四张代表截图检查通过；Builder 另检查全部截图和键盘旅程 |
+
+以上实写使用源码指纹 `78f4fae93f50f1ea56c73bacb81009ff70af3ba31ab48318602c5cc605818baf`；随后仅文档/注释收口，复用有效行为证据，没有额外 mutation 或重跑既有测试。真实操作只按当前允许工作流执行，没有直接写 status_uuid、没有重放先前已修复样本。
+
+结论：正式 CLI handler → Worker → Adapter/API → 独立回读通过；fixture UI 的表单/预览/防重/刷新与截图通过。**没有宣称真实人工点击 UI 到服务端整链通过**，亦未用 fixture 证明真实异常恢复。异步 `none` 仍不是后置完成；其它项目/schema、真实网络失败/崩溃恢复、跨平台仍未验证。状态写闸只开放 Adapter 明确支持的步骤，工时及其它 Bug 写入继续关闭。

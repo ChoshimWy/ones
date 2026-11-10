@@ -1,3 +1,5 @@
+import type { StatusWorkflow, StatusPreview, StatusResult } from './status-update.ts'
+import type { TransitionInput } from './adapters/ones-transitions.ts'
 import type { RepairPreparation, RepairRecord, RepairListItem } from './repair.ts'
 import type { BugDetail, Discussion, Attachment, DetailPage } from './adapters/bug-details.ts'
 import type { MediaChunk } from './adapters/bug-media.ts'
@@ -13,6 +15,11 @@ export type RecoveryPreview = { id: string | null; receiptId: string; matchCount
 export type ImplementationBrief = { task: Task; text: string; blockedReason: string }
 declare module 'orca' {
   interface PluginRequests {
+    'bugs.transitionOptions': { input: { detailId: string }; output: Answer<Awaited<ReturnType<StatusWorkflow['options']>>> }
+    'bugs.transitionPreview': { input: TransitionInput; output: Answer<StatusPreview> }
+    'bugs.transitionSubmit': { input: { previewId: string; confirmed: boolean }; output: Answer<StatusResult> }
+    'bugs.transitionReconcile': { input: { detailId: string; operationId: string }; output: Answer<StatusResult> }
+
     'bugs.projectFilter': { input: { team: string; projects: Option[] }; output: Answer<{ localProject: Option | null; project: Option | null }> }
     'repair.list': { input: { team: string }; output: Answer<RepairListItem[]> }
     'repair.read': { input: { detailId: string }; output: Answer<RepairRecord | null> }

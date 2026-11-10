@@ -1,14 +1,14 @@
 ---
 document_id: IMP-ONES-PLUGIN-001
 document_type: implementation-plan
-version: "1.6.0"
+version: "1.7.0"
 status: draft
 owner: "Main：实施与验证；本轮单 writer"
 related_requirements: ["REQ-ONES-001", "REQ-ONES-002", "REQ-ONES-003", "REQ-ONES-004"]
 related_documents: ["TSD-ONES-001: ones-api-integration.md", "TSD-COHO-001: coho-attendance-api.md"]
-updated_at: "2026-11-09"
-source_identity: "本轮 main@59f1225d439e15cb912b13e959f453e54044d109 + feat/bug-repair-session 未提交变更；Orca 1.4.254；旧阶段身份保留在对应章节"
-evidence: ["EV-PLUGIN-001: 第 2 节本机 Orca 能力发现；仅文档与类型事实"]
+updated_at: "2026-11-10"
+source_identity: "§13 文档基线 main@cc0cdfb8e1335e72ca2eaf894c8855010e94b801；docs/bug-status-update；历史实施基线 main@59f1225d439e15cb912b13e959f453e54044d109 + feat/bug-repair-session 未提交变更；Orca 1.4.254；旧阶段身份保留在对应章节"
+evidence: ["EV-PLUGIN-001: 第 2 节本机 Orca 能力发现；仅文档与类型事实", "EV-ONES-006: ones-api-integration.md §8.1；非插件运行证据"]
 ---
 
 # ONES 工作台：Orca 插件功能与实施规划
@@ -160,7 +160,7 @@ draft → confirmed → submitting → verifying → verified
 
 ### 4.3 Bug 写入
 
-DEC-PLUGIN-006：新建、内容修改与状态流转是三个明确动作。动态 schema、类型作用域、必填字段、权限和当前版本戳经核实后，预览本次差异并单独确认；只回传已确认字段。出现并发变化重新确认，不假设服务端 CAS。相关功能在契约缺口关闭前保持禁用，详见 [Bug 提交与状态流转](ones-api-integration.md#6-bug-提交与状态流转)。
+DEC-PLUGIN-006：新建、内容修改与状态流转是三个明确动作。动态 schema、类型作用域、必填字段、权限和当前版本戳经核实后，预览本次差异并单独确认；只回传已确认字段。出现并发变化重新确认，不假设服务端 CAS。状态流转的当前细化方案见 [§13](#bug-status-update)；其它功能在各自契约缺口关闭前保持禁用，详见 [Bug 提交与状态流转](ones-api-integration.md#6-bug-提交与状态流转)。
 
 ## 5. 实施 DAG 与写入所有权
 
@@ -309,3 +309,80 @@ DAG：080（HTML 公共桥接/主题/生命周期）→ 081（同面板列表、
 验收：选中 SidusLinkPro 自动筛选对应 ONES 项目；无唯一匹配显示全部已读取项目；显式映射优先；同名 main 不误认；账号/团队变化与旧响应隔离；状态筛选不变；手动选择直到下次切项目前保留。新增 `workspace:read`，真实加载需重新核对授权；不授予业务写或自动聊天启动。截图覆盖 460px 深色匹配、360px 浅色无匹配，必须实际查看控件/换行/遮挡。完整合同见 [插件说明](../plugin/README.md#已实现与边界)，真实加载与隐藏 fixture 的验证分别记录。
 
 已自问“是否还有遗漏点或可优化点”：补入多个主分支均叫 main、终端事件与真正项目切换区别、宿主上下文为空、CLI 不继承 cwd、分页匹配范围与迟到结果保护。回退到全部筛选，不猜项目，不清除既有映射；未授权 Git 交付与真实 session 测试仍不执行。
+
+
+<a id="bug-status-update"></a>
+
+## 13. Bug 详情状态更新规划（2026-11-10）
+
+**状态：首期实现、定向故障测试、fixture UI/键盘/截图及正式 Worker 指定两步实写回读已通过；开放已支持状态步骤，工时写闸关闭。** REQ-ONES-003 的状态流转子范围从 TASK-PLUGIN-050 拆为下列 100–103，Bug 创建/内容编辑仍留原任务。API 合同与真实单笔证据唯一维护于 [TSD-ONES-001 §6.3](ones-api-integration.md#63-提交流转) / EV-ONES-006，不将手工 API 成功算作插件验收。
+
+### 范围与 UI 合同
+
+DEC-PLUGIN-STATUS-001 / UI-PLUGIN-STATUS-001：在 Bug 详情顶部操作区增加次级“更新状态”，与“打开原单”“执行修复/查看执行记录”分开；当前状态仍显示在详情信息中。入口不依赖有无修复记录、不要求会话已结束；禁止会话完成自动流转。无权限、无可用步骤或 schema 未支持时入口可见但禁用并解释原因，不把状态筛选下拉当流转目标。
+
+点击后在同一详情内展开状态表单（复用现有 card、label、select、textarea、button 和主题 token），保留上下文而非跳转外站：
+
+| 区域 / 状态 | 行为与可观察验收 |
+| --- | --- |
+| 加载 / 步骤选择 | 重新读取当前状态、允许步骤与字段配置；展示“当前状态 → 目标状态”和步骤名称，不猜目标。读取失败保留错误/重试，不显示过期选项可提交 |
+| 动态字段 | 按步骤显示字段、必填标识与验证错误；本项目根因单选、解决版本文本。保留已有值；解决版本不永久默认本次实测值，不能由修复会话猜发布版本 |
+| 修复说明 | 提供可编辑的根本原因、解决方法、影响范围、验证结果/未完成项及交付情况，生成流转评论预览。首期支持手动填写/粘贴修复总结；预填后必须人工检查，不覆盖原 Bug 描述 |
+| 确认 | 显示 Bug 编号、步骤/目标、字段差异和完整评论；“确认更新状态”只提交一次。必填缺失、未知选项、身份/详情过期、已有待核实操作时不可提交 |
+| 提交中 | 禁用重复提交和相关字段编辑，明确“离开详情不会撤销已发送请求”；禁止通过关闭/重新打开表单重发 |
+| 成功 | 只有状态、字段及本次评论回读一致才显示“更新成功”；刷新权威详情、评论和列表，不创建/重发修复会话。状态变化后不符合筛选条件的列表行移除，已打开详情仍可看结果 |
+| 结果待核实 / 冲突 | 显示已确认部分与差异，提供“核对结果”，不提供盲目重试写入；异步后置状态单独展示，`none` 不改写为 `done`。仅后置语义不明且三项回读一致时可显示更新成功并注明后置动作未确认 |
+
+说明来源必须区分“会话报告”与插件独立验证；不得丢弃“未提交/未合并/实体设备待复测”，不得虚构影响范围或将代码已修复等同已发布。自动读取会话总结是后续增强：需先证明按真实 sessionId 读取的能力与 Bug 对应关系，未闭合前保持手动输入，不解析其它会话或仅凭最终一句“已修复”判定成功。
+
+### Worker 与安全边界
+
+DEC-PLUGIN-STATUS-002：以下为已实现的插件 typed 业务请求，不是直接透传任意 HTTP 的 API。UI 只传 `detailId`、步骤 ID、允许字段值、评论文本和确认意图，不接收 Token、任意 URL/HTTP 方法或原始 HTML。
+
+| 拟议请求 | Worker 责任 |
+| --- | --- |
+| `bugs.transitionOptions` | 绑定 detailId 的账号/团队/任务，读取步骤、字段 schema、选项及已有值；声明未支持约束 |
+| `bugs.transitionPreview` | 校验输入、读取最新详情，生成有时限的 previewId 与确认摘要；统一转义评论；禁止客户端替换 task/origin |
+| `bugs.transitionSubmit` | 输入仅 previewId + confirmed；核对身份代次、当前状态/版本/步骤/字段约束，变化则要求重新预览；持久化意图后单次写入并回读 |
+| `bugs.transitionReconcile` | 输入操作 ID，只读核对；按本次评论 UUID/归属/内容及字段回读分类，不新增评论、不补偿写入 |
+
+- 正式认证复用插件 `secrets:own` 与现有 ONES Adapter，不读取浏览器存储。本次授权的临时浏览器会话 API 方法不是产品方案。仅在该操作合同与最窄端到端验证闭合后开放状态写能力；不得把现有 `writesVerified` 一并改为 true 而开放工时等无关写入，也不增加绕过验证的 UI 开关。
+- 独立状态操作账本按实例/账号/团队/任务隔离，记录操作/评论 ID、确认字段与摘要、原状态/版本、阶段和已知响应标识；不混用修复启动防重记录或工时日期账本。持久化失败零写入；重启时未结束操作必须先核对，不因新 detailId 绕过防重。
+- 状态/评论回读规则、未知结果及无服务端 CAS 的限制沿用接口 §6.3–7。切换账号/团队、关闭详情使旧读取/预览失效；已发送写入的记录保留，迟到结果不能覆盖新 Bug，恢复同身份后继续只读核对。
+- UI→Worker 明确允许类型与长度/容量限制，使用元数据及既有详情容量合同；未支持必填工时/附件/Wiki 或其它类型时阻断并提示打开原单，不隐藏或伪造通过。页面原文与修复总结均视为不可信数据。
+
+### Task DAG、ownership 与验收
+
+本轮实施身份：canonical Git root `/Users/choshim/Desktop/Aputure/Code/Projects/Ones`；`base_branch=main`；`base_sha=cc0cdfb8e1335e72ca2eaf894c8855010e94b801`；任务分支 `feat/bug-status-update`；任务 root `/Users/choshim/.agent-worktrees/choshimwy-ones/feat/bug-status-update`；repository_id `choshimwy-ones`。Builder 为唯一实现 writer，allowed paths 为 `plugin/`、`README.md` 和 `docs/{ones-api-integration,orca-plugin-plan,orca-plugin-verification}.md`；Main 只读接口补证与验收。无真实业务写入和 Git 交付授权。
+
+已复用由 session-create 创建的本任务独占 Worktree；以下路径相对该仓库 root。共享协议和状态串行：`100 → 101 → 102 → 103`；不要求额外并行 Agent，最终源码身份与验证另见验证报告。
+
+| 任务 / 依赖 | 单 writer ownership（拟议） | 输出与最窄验收 | 状态 |
+| --- | --- | --- | --- |
+| TASK-PLUGIN-100 / 接口 §6.3 | Adapter 实施者；`plugin/src/adapters/ones.ts`、新增 `ones-transitions.ts`、对应 `plugin/tests/status-update.test.ts` | 闭合字段配置/步骤关联、枚举、CSRF 与错误响应；根因/版本/评论 formatter；未知必填和无权限拒绝。不能将 transitions 简表当完整 schema | 已实现限定 schema；只读链和指定正式插件步骤实写回读通过 |
+| TASK-PLUGIN-101 / 100 | Worker 实施者；`plugin/src/{service,worker,protocol}.ts`、新增 `status-update.ts`、上述定向测试 | preview→submit→reconcile；独立能力闸、持久防重、账号切换、版本冲突、超时/重启恢复与实际请求次数；不开放其它写操作 | 已实现；定向证据见验证报告 |
+| TASK-PLUGIN-102 / 101 | UI 实施者；`plugin/src/html/detail.ts`、`panel.ts`、`panel.css`、新增 `status-update.ts`、对应定向 browser fixture/测试 | 完成 UI 合同、总结粘贴与预览、列表筛选/详情/评论刷新；同一 Bug 后续操作使用更新后的权威数据，修复启动记录保留 | 已实现；定向证据见验证报告 |
+| TASK-PLUGIN-103 / 102 | 验收责任 Main；定向测试、本文及验证报告 | 汇合后冻结最终 Source Identity，执行受影响测试及截图实际查看；真实接口只在另行指定样本与授权下最小验证，不重放旧 Bug | 已实现；定向证据见验证报告 |
+
+REQ-ONES-003 → DEC-PLUGIN-STATUS-001/002 → TASK-PLUGIN-100–103；既有 TC-PLUGIN-006/007 在本子范围细化如下，不重复定义全部写入验收：
+
+| 用例 | 必需覆盖与证据 |
+| --- | --- |
+| TC-PLUGIN-STATUS-001 | 合法步骤/根因选项/版本/评论构造、未知字段类型、必填与权限错误；fixture 仅虚构数据 |
+| TC-PLUGIN-STATUS-002 | 双击/跨面板同 Bug 串行、写前账本失败、确认后远端变化、身份切换、HTTP 200 后回读失败、5xx/丢响应/重启；未知结果零自动重发，按评论 UUID 核对而非仅比较目标状态 |
+| TC-PLUGIN-STATUS-003 | 更新成功后详情/评论/筛选列表一致，移出筛选不丢结果；再次打开读到新状态和新步骤；原 Bug 描述、无关字段与修复启动记录保持不变，不重发 Agent |
+| TC-PLUGIN-STATUS-004 | macOS 安装版 Orca HTML guest，实际版本现场记录；360/460px、深浅色代表性截图覆盖表单、长总结/错误、提交中、待核实与成功。Main 实际打开截图检查换行、遮挡、按钮可见、必填标签和对比度；键盘 Tab、焦点返回及禁用语义另作交互验证。证据路径及观察结果写入验证报告 |
+
+TC-PLUGIN-STATUS-001–003 的虚构数据风险用例已通过，不能扩展为真实业务写入通过。TC-PLUGIN-STATUS-004 已通过隔离 fixture 主旅程、定向键盘旅程及截图实际检查，详见验证报告。EV-ONES-006/007 只作接口输入证据，不新增写授权。
+
+### 自检、缺口与回退
+
+已自问“是否还有遗漏点或可优化点”：补齐步骤简表不是字段 schema、CSRF、独立写闸、刷新后筛选移除、根因分类与根因说明分离、持久防重、评论 UUID 回读、异步 `none` 和已发送请求离页恢复。缺口由未来 Adapter/Worker 实施者收口，未解决只阻塞依赖节点；手动总结可先实施，不被会话监控能力绑住。回退关闭状态入口的写能力，保留操作记录和只读核对；不撤销已成功的远端状态或删除评论，不影响已有修复会话和工时功能。
+
+### 状态实现收口补充
+
+- 已实现 `StatusWorkflow` 与独立 `StatusJournal`：同任务磁盘排他锁、意图 fsync 后单次发送、未知恢复只读核对、已完成操作历史保留；崩溃残留锁不按时间自动删除，可核对但新写入保持阻断，人工确认后才处理锁。跨客户端仍无 CAS 或 exactly-once 保证。
+- `StatusResult` 不回传 async token、内部 HTML 和持久化身份摘要。未改的非必填字段不发送；评论手动填写/粘贴，保留未提交/未合并/未验证，受限转义 HTML 不覆盖原描述。
+- 已自检遗漏点：补入富文本 `rich_text || text`、字段 update 权限、已验证 8 位评论 ID、容量拒绝与敏感回执裁剪；成功后父详情统一重新读取并触发列表刷新，修复记录不删除、不重发聊天。
+
+2026-11-10 最终续记：UI/键盘与 comment-only 用例已验收；Main 以正式 Worker 自身认证，完成指定 Bug 的两步允许流转与最终独立核对。保留独立状态 gate true，工时 gate false。真实证据为 CLI handler→Adapter/API，不是人工点击 UI 全链；后置 none 未证明完成。详细证据为 EV-ONES-008 与验证报告。

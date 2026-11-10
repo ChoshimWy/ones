@@ -56,6 +56,10 @@ const detail = {
 }
 export default function activate(orca: OrcaWorkerApi): void {
   const calls: string[] = []
+  let transitionMode = 'success'
+  let transitionOperation: Record<string, unknown> | null = null
+  let transitionInput: Record<string, unknown> | null = null
+  let transitionRelease: (() => void) | undefined
   let repairManual = false
   let repairRecord: Record<string, unknown> | null = null
   let repairReadFails = false
@@ -65,6 +69,34 @@ export default function activate(orca: OrcaWorkerApi): void {
   let listCount = 0
   const handlers: Record<string, (input: Record<string, unknown>) => unknown> = {
     status: () => status,
+    'fixture.transition-mode': input => { transitionMode = String(input.mode); return {} },
+    'fixture.transition-release': () => { transitionRelease?.(); return {} },
+    'bugs.transitionOptions': () => ({ snapshot: { task, stamp: 'fixture-stamp', steps: [{ id: 'fix', name: '完成修复', target: { id: 'done', name: '已修复' }, blockers: [], fields: [
+      { id: 'cause', name: '根因', type: 1, required: true, value: '', options: [{ id: 'logic', name: '代码逻辑问题' }] },
+      { id: 'version', name: '解决版本', type: 2, required: false, value: '', options: [] }
+    ] }] }, operation: transitionOperation, writeEnabled: true, blockedReason: '' }),
+    'bugs.transitionPreview': input => {
+      const fields = input.fields as Record<string, string>
+      if (!fields.cause) throw Error('Fixture required root cause')
+      transitionInput = input
+      return { id: 'preview-fixture', task, stepName: '完成修复', targetName: '已修复', changes: [{ name: '根因', before: '（空）', after: '代码逻辑问题' }, { name: '解决版本', before: '（空）', after: fields.version }], comment: input.comment, expiresAt: Date.now() + 300000 }
+    },
+    'bugs.transitionSubmit': async () => {
+      transitionOperation = { id: 'operation-fixture', state: 'unknown', createdAt: Date.now(), evidence: { status: false, fields: false, comment: false, asyncStatus: 'none', message: '结果待核实；禁止重发。' } }
+      if (transitionMode === 'hold') await new Promise<void>(resolve => { transitionRelease = resolve })
+      if (transitionMode === 'unknown') return transitionOperation
+      task.status = { id: 'done', name: '已修复' }
+      detail.comments.items.unshift({ id: 'new-comment', author: '虚构用户', sentAt: 1794000000000000, content: [{ kind: 'text', text: String(transitionInput?.comment) }] })
+      transitionOperation.state = 'verified'
+      transitionOperation.evidence = { status: true, fields: true, comment: true, asyncStatus: 'none', message: '状态、字段及本次评论已回读一致。' }
+      return transitionOperation
+    },
+    'bugs.transitionReconcile': () => {
+      task.status = { id: 'done', name: '已修复' }
+      detail.comments.items.unshift({ id: 'new-comment', author: '虚构用户', sentAt: 1794000000000000, content: [{ kind: 'text', text: String(transitionInput?.comment) }] })
+      if (transitionOperation) { transitionOperation.state = 'verified'; transitionOperation.evidence = { status: true, fields: true, comment: true, asyncStatus: 'none', message: '状态、字段及本次评论已回读一致。' } }
+      return transitionOperation
+    },
     'fixture.repair-manual': () => { repairRecord = null; repairManual = true; return { changed: true } },
     'fixture.repair-error': input => { repairReadFails = input.enabled === true; return {} },
     'fixture.implementation': input => {
@@ -229,9 +261,9 @@ export default function activate(orca: OrcaWorkerApi): void {
   for (const [name, handler] of Object.entries(handlers))
     orca.panels.handle(name, (input) => {
       calls.push(name)
-      return Promise.resolve(handler(input as Record<string, unknown>)).then((value) => ({
+      return Promise.resolve().then(() => handler(input as Record<string, unknown>)).then((value) => ({
         ok: true,
         value
-      }))
+      })).catch(error => ({ ok: false, error: { code: 'fixture', message: error.message === 'Fixture required root cause' ? '请填写根因。' : '虚构读取失败。' } }))
     })
 }

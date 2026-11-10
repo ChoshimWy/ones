@@ -263,6 +263,7 @@ export class WorkbenchUI {
     this.error = ''
     this.info = ''
     this.detail = new DetailView(this.team, task.id, fromImplementation ? '返回执行记录' : '返回我的 Bug')
+    this.detail.updated = () => this.loadBugs()
     this.detail.back = () => fromImplementation ? this.showImplementation() : this.changeTab('bugs')
     this.render()
   }
