@@ -1,18 +1,31 @@
 import { execFile } from 'node:child_process'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
 import { AppError, record, requireThat, text, type Option } from '../domain/model.ts'
 
 export type LocalTarget = { projectId: string; name: string; path: string; selector: string }
 export type CliRunner = (args: string[], cwd?: string) => Promise<Record<string, unknown>>
 // Pinned to the executable verified on this installation; never search PATH or invoke a shell.
-export const ORCA_CLI = '/Applications/Orca.app/Contents/Resources/bin/orca'
+export const ORCA_CLI = process.platform === 'win32'
+  ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'Programs', 'orca', 'resources', 'bin', 'orca.exe')
+  : '/Applications/Orca.app/Contents/Resources/bin/orca'
 export const runCli: CliRunner = (args, cwd) => new Promise((resolve, reject) => {
-  execFile(ORCA_CLI, [...args, '--json'], { cwd, timeout: 90000, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }, (error, stdout) => {
+  // Orca deliberately gives workers a minimal environment. Its standalone CLI
+  // still needs the Windows profile paths to find this host's running runtime.
+  const env = process.platform === 'win32' ? { ...process.env,
+    APPDATA: process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'),
+    LOCALAPPDATA: process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'),
+    USERPROFILE: process.env.USERPROFILE ?? homedir(),
+    SystemRoot: process.env.SystemRoot ?? 'C:\\Windows'
+  } : process.env
+  execFile(ORCA_CLI, [...args, '--json'], { cwd, env, windowsHide: true, timeout: 90000, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }, (error, stdout) => {
     try {
       requireThat((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT', 'cli-unavailable', '未找到已配置的 Orca CLI；请安装匹配版本，未启动会话。')
       // Do not reflect stderr/argv: they may contain Bug text.
       const envelope = record(JSON.parse(stdout))
-      requireThat(!error && envelope.ok === true, 'cli', 'Orca CLI 未完成操作；若已开始启动，请先核实会话，勿重新发送。')
+      const failure = record(envelope.error ?? {}).code
+      const code = typeof failure === 'string' && /^[a-z_]{1,64}$/.test(failure) ? `（${failure}）` : ''
+      requireThat(!error && envelope.ok === true, 'cli', `Orca CLI 未完成操作${code}；若已开始启动，请先核实会话，勿重新发送。`)
       resolve(record(envelope.result))
     } catch (failure) {
       reject(failure instanceof AppError ? failure : new AppError('cli', 'Orca CLI 返回不可用；若已开始启动，请到项目核实，勿重复发送。'))

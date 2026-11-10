@@ -28,7 +28,7 @@ export class StatusView {
       this.noUnitTestsConfirmed=false
       this.availability(false,'')
       this.error=''
-    } catch(error) { if(!this.disposed){this.error=message(error);this.availability(false,'状态配置暂不可用，可打开查看原因。')} }
+    } catch(error) { if(!this.disposed){this.error=message(error);this.availability(false,`状态配置读取失败：${this.error}`);this.expanded=true} }
     finally {if(!this.disposed){this.busy=false;this.render()}}
   }
   open(): void {this.expanded=true;this.render();this.element.querySelector<HTMLElement>('select,textarea,button')?.focus()}

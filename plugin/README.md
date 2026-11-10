@@ -20,7 +20,17 @@ Orca `trusted-worker` + HTML 侧栏插件；图片/视频由插件内受控 Blob
 - 进入或刷新 Bug 详情时自动只读加载本地执行记录，显示发送状态、执行时间、目标项目与 Session；已有记录时入口为“查看执行记录”。读取失败明确提示并阻止启动，可重试查询，不视作未执行。
 - 启动前独占创建并同步本地记录；聊天 ID 与消息 journal 回执才记作已发送，未知结果/终端降级禁止自动重试。已有记录只展示，不重新创建；目前不判断 Agent 是否已完成，也不自动重开后续修复。记录损坏、残留启动意图须人工核实，不能直接删除记录重试。关闭页面不保证取消已启动操作。
 - CLI 暂无打开指定 session 的能力；界面显示目标项目、session ID 和媒体目录，用户在该项目下切换会话。确认会话已不再需要媒体后，可自行清理对应媒体子目录，保留启动记录以防误重发。
-- CLI 固定使用本机已核实的 `/Applications/Orca.app/Contents/Resources/bin/orca`，不走 shell 或 PATH，不修改 Orca 宿主。远程项目、其它安装路径和平台不在本次范围。
+- CLI 使用平台对应的默认安装路径：macOS 为 `/Applications/Orca.app/Contents/Resources/bin/orca`，Windows 为 `%LOCALAPPDATA%\Programs\orca\resources\bin\orca.exe`。不走 shell 或 PATH；Windows Worker 的精简环境会补齐 CLI 定位本机运行时所需的用户目录变量，并隐藏子进程窗口。远程项目和自定义安装路径仍未覆盖。
+
+### Windows 本地修复支持
+
+Windows 的状态账本、修复资料与 SQLite 缓存位于 `%APPDATA%\Orca\plugins-data\local.ones-workbench\runtime`；解析 `plugins-data` 的目录映射后使用真实路径，因此把插件数据迁移到其它磁盘后，回执与媒体也会写入该磁盘。macOS 保留既有 `~/Library/Application Support/ones-workbench` 路径，不迁移历史账本。
+
+Windows 使用实际 NTFS ACL 与文件所有者检查，代替不适用的 Unix uid/mode 判断。只允许当前用户、SYSTEM 和本机管理员访问；仅初始化当前用户所有的空目录，不自动收紧并接受已有不安全资料。符号链接、硬链接、超限回执、身份绑定和防重复执行检查继续生效。文件写入后仍执行同步及原子替换；Windows 不执行 Node 不支持的目录 fsync，不声称具备断电后的目录同步保证。
+
+状态读取失败会直接展示具体原因及“重新读取”，不再显示没有可点击入口的“可打开查看原因”。Apple 受管测试证据仍按原有 macOS 路径和权限合同处理，本次未扩展至 Windows。
+
+验证范围：Windows 真实 Orca Worker 的状态配置、执行记录和修复准备读取通过；定向测试覆盖状态提交防重、未知结果、文件权限、缓存回执及模拟 CLI 启动。未提交真实 ONES 状态变更、未启动真实 Bug 修复 Agent；完整业务链仍须单独验收。
 
 需求及剩余验收见 [实施规划](../docs/orca-plugin-plan.md) 与 [验证报告](../docs/orca-plugin-verification.md)。考勤折算只按 [既定规则](../docs/coho-attendance-api.md#6-已确认的工时规则)，不会推断迟到、缺卡、跨日或其它班次政策。
 

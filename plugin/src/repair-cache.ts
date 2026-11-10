@@ -10,6 +10,7 @@ import { lstat, mkdir, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { AppError, requireThat, record, type Task } from './domain/model.ts'
 import type { RepairListItem, RepairRecord } from './repair.ts'
+import { ensurePrivateDirectory, assertPrivatePath } from './private-files.ts'
 
 /// Agent 回执只是报告，不等价于独立验证证据通过。
 /// scope 包含站点、团队与账号；远端快照与本地修复状态分离。
@@ -28,14 +29,11 @@ export class RepairCache {
     if (this.database) return this.database
     if (this.opening) return this.opening
     this.opening = (async () => {
-      await mkdir(this.root, { recursive: true, mode: 0o700 })
-      const dir = await lstat(this.root)
-      requireThat(dir.isDirectory() && !dir.isSymbolicLink() && dir.uid === process.getuid?.() && (dir.mode & 0o077) === 0, 'storage', '执行缓存目录权限不安全。')
+      await ensurePrivateDirectory(this.root, '执行缓存目录权限不安全。')
       const path = join(this.root, 'cache.sqlite')
       try { const file = await open(path, 'wx', 0o600); await file.close() }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
-      const file = await lstat(path)
-      requireThat(file.isFile() && !file.isSymbolicLink() && file.nlink === 1 && file.uid === process.getuid?.() && (file.mode & 0o077) === 0, 'storage', '执行缓存文件权限不安全。')
+      await assertPrivatePath(path, 'file', '执行缓存文件权限不安全。')
       const db = new DatabaseSync(path)
       db.exec('PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE;')
       const version = db.prepare('PRAGMA user_version').get()!.user_version
@@ -129,9 +127,11 @@ export class RepairCache {
       check()
       let handle
       try {
+        await assertPrivatePath(String(row.result_file), 'file', '回执文件类型、权限或大小不符合要求。')
         handle = await open(String(row.result_file), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
         const st = await handle.stat()
-        requireThat(st.isFile() && st.nlink === 1 && st.uid === process.getuid?.() && (st.mode & 0o077) === 0 && st.size <= 64000, 'receipt', '回执文件类型、权限或大小不符合要求。')
+        const current = await lstat(String(row.result_file))
+        requireThat(st.isFile() && st.nlink === 1 && !current.isSymbolicLink() && st.dev === current.dev && st.ino === current.ino && st.size <= 64000 && (process.platform === 'win32' || st.uid === process.getuid?.() && (st.mode & 0o077) === 0), 'receipt', '回执文件类型、权限或大小不符合要求。')
         const value = record(JSON.parse(await handle.readFile('utf8')))
         requireThat(value.runId === row.run_id && value.revision === row.revision && typeof value.token === 'string' && hash(value.token) === row.token_hash, 'receipt', '回执不属于本次任务或输入版本。')
         const {runId, revision, token, ...payload} = value
