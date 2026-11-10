@@ -57,15 +57,23 @@ const detail = {
 export default function activate(orca: OrcaWorkerApi): void {
   const calls: string[] = []
   let repairManual = false
+  let repairRecord: Record<string, unknown> | null = null
+  let repairReadFails = false
   let draft: unknown = null
   let listCount = 0
   const handlers: Record<string, (input: Record<string, unknown>) => unknown> = {
     status: () => status,
-    'fixture.repair-manual': () => { repairManual = true; return { changed: true } },
-    'repair.prepare': () => ({ id: 'repair-plan', mapping: repairManual ? { kind: 'manual', reason: 'missing', candidates: [{ id: 'local-fixture', name: '本地虚构项目' }] } : { kind: 'mapped', via: 'automatic', project: { id: 'local-fixture', name: '本地虚构项目' } }, existing: null }),
+    'fixture.repair-manual': () => { repairRecord = null; repairManual = true; return { changed: true } },
+    'fixture.repair-error': input => { repairReadFails = input.enabled === true; return {} },
+    'repair.read': () => {
+      if (repairReadFails) return Promise.reject(Error('Fixture record read failed'))
+      return repairRecord
+    },
+    'repair.prepare': () => ({ id: 'repair-plan', mapping: repairManual ? { kind: 'manual', reason: 'missing', candidates: [{ id: 'local-fixture', name: '本地虚构项目' }] } : { kind: 'mapped', via: 'automatic', project: { id: 'local-fixture', name: '本地虚构项目' } }, existing: repairRecord }),
     'repair.start': input => {
       if (input.projectId !== 'local-fixture' || input.confirmed !== true) throw Error('Invalid fixture repair')
-      return { state: 'sent', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1, sessionId: 'session-fixture-only' }
+      repairRecord = { state: 'sent', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794186000000, sessionId: 'session-fixture-only' }
+      return repairRecord
     },
     'fixture.calls': () => ({ calls, listCount }),
     'auth.login': (input) => {

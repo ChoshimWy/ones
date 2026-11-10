@@ -5,10 +5,33 @@ export class RepairView {
   readonly element = el('div')
   private disposed = false
   private busy = false
-  constructor(private detailId: string, private changed: (busy: boolean) => void) {}
+  private record: RepairRecord | null = null
+  private readFailed = false
+  constructor(private detailId: string, private changed: (busy: boolean, hasRecord: boolean) => void) {}
+  async load() {
+    if (this.busy || this.disposed) return
+    this.setBusy(true)
+    this.element.replaceChildren(notice('正在读取执行记录…'))
+    try {
+      const record = await request<RepairRecord | null>('repair.read', { detailId: this.detailId })
+      if (this.disposed) return
+      this.readFailed = false
+      this.record = record
+      if (record) this.showRecord(record)
+      else this.element.replaceChildren()
+    } catch (error) {
+      if (!this.disposed) {
+        this.readFailed = true
+        this.element.replaceChildren(notice('执行记录读取失败，暂不可启动修复。' + message(error), true),
+          button('重试读取记录', () => this.load()))
+      }
+    } finally { this.setBusy(false) }
+  }
   dispose() { this.disposed = true }
   async open() {
     if (this.busy || this.disposed) return
+    if (this.readFailed) { await this.load(); return }
+    if (this.record) { this.showRecord(this.record); this.element.scrollIntoView({ block: 'nearest' }); return }
     this.setBusy(true)
     this.element.replaceChildren(notice('正在匹配已有本地项目及检查修复会话…'))
     this.element.scrollIntoView({ block: 'nearest' })
@@ -23,7 +46,7 @@ export class RepairView {
   }
   private setBusy(busy: boolean) {
     this.busy = busy
-    if (!this.disposed) this.changed(busy)
+    if (!this.disposed) this.changed(busy || this.readFailed, this.record !== null)
   }
   private form(preparation: RepairPreparation) {
     const mapping = preparation.mapping
@@ -53,15 +76,17 @@ export class RepairView {
       row(start, button('取消', () => this.element.replaceChildren()))))
   }
   private showRecord(record: RepairRecord) {
+    this.record = record
     const status = record.state === 'sent'
       ? '聊天已创建，消息已写入会话；不代表修复或媒体分析已完成。'
       : record.state === 'terminal'
         ? 'Orca 实际返回了终端而非聊天，可能已发送任务。请到项目核实，不会自动重试。'
         : '启动或消息结果待核实，已阻止重复发送。请到目标项目检查会话。'
-    this.element.replaceChildren(card('修复会话', notice(status, record.state !== 'sent'),
+    this.element.replaceChildren(card('执行记录', notice(status, record.state !== 'sent'),
+      text(`执行时间：${new Date(record.createdAt).toLocaleString()}`),
       text(`项目：${record.projectName}`),
       ...(record.sessionId ? [text(`Session：${record.sessionId}`)] : []),
       ...(record.directory ? [text(`媒体目录：${record.directory}`, true)] : []),
-      text('CLI 暂不支持打开指定 session，请在该项目下切换到对应聊天；再次点击执行修复只显示此记录。', true)))
+      text('CLI 暂不支持打开指定 session，请在该项目下切换到对应聊天；查看执行记录不会再次发送任务。', true)))
   }
 }

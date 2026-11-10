@@ -104,10 +104,15 @@ export class DetailView {
         return
       }
       this.current = detail
-      this.repair = new RepairView(detail.detailId, busy => { this.repairTop.disabled = busy; this.repairBottom.disabled = busy })
+      this.repair = new RepairView(detail.detailId, (busy, hasRecord) => {
+        this.repairTop.disabled = busy
+        this.repairBottom.disabled = busy
+        this.repairTop.textContent = this.repairBottom.textContent = hasRecord ? '查看执行记录' : '执行修复'
+      })
       this.repairArea.replaceChildren(this.repair.element)
       this.repairTop.disabled = false
       this.repairBottom.disabled = false
+      void this.repair.load()
       this.body.replaceChildren(
         el('h2', '', `#${detail.task.number} ${detail.task.name}`),
         text(`${detail.task.project.name} · ${detail.task.status.name}`, true),

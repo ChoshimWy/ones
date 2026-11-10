@@ -14,6 +14,7 @@ export type ImplementationBrief = { task: Task; text: string; blockedReason: str
 declare module 'orca' {
   interface PluginRequests {
     'bugs.projectFilter': { input: { team: string; projects: Option[] }; output: Answer<{ localProject: Option | null; project: Option | null }> }
+    'repair.read': { input: { detailId: string }; output: Answer<RepairRecord | null> }
     'repair.prepare': { input: { detailId: string }; output: Answer<RepairPreparation> }
     'repair.start': { input: { preparationId: string; projectId: string; agent: string; confirmed: boolean }; output: Answer<RepairRecord> }
     'status': { output: Answer<Status> }

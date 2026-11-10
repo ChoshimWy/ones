@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { OrcaCli, launchReceipt } from '../src/adapters/orca-cli.ts'
@@ -164,5 +164,33 @@ test('repair workflow: identity change while saving mapping cannot launch after 
     await assert.rejects(f.start(plan.id))
     assert.equal(f.launches, 0)
     assert.deepEqual(await readdir(f.root), [])
+  } finally { await rm(f.root, { recursive: true, force: true }) }
+})
+
+test('repair read: restores persisted receipt without CLI or preparation and preserves scope', async () => {
+  const f = await fixture()
+  try {
+    assert.equal(await f.flow.read('detail'), null)
+    const plan = await f.flow.prepare('detail')
+    const receipt = await f.start(plan.id)
+    const service: Pick<Workbench, 'repairContext' | 'collectRepair'> = {
+      repairContext: async () => ({ scope: 'scope', task: bug.task }),
+      collectRepair: async () => { throw Error('Read must not collect or launch') }
+    }
+    class UnavailableCli extends OrcaCli {
+      async projects(): Promise<never> { throw Error('CLI unavailable') }
+    }
+    const restored = new RepairWorkflow(service, f.store, new UnavailableCli(), f.root)
+    assert.deepEqual(await restored.read('new-detail'), receipt)
+    assert.equal(f.launches, 1)
+    const other = new RepairWorkflow({ ...service, repairContext: async () => ({ scope: 'other-account', task: bug.task }) }, f.store, new UnavailableCli(), f.root)
+    assert.equal(await other.read('detail'), null)
+    const journal = (await readdir(f.root)).find(name => name.endsWith('.json'))!
+    for (const state of ['unknown', 'terminal']) {
+      await writeFile(join(f.root, journal), JSON.stringify({ ...receipt, state }))
+      assert.equal((await restored.read('detail'))?.state, state)
+    }
+    await writeFile(join(f.root, journal), '{broken')
+    await assert.rejects(restored.read('detail'))
   } finally { await rm(f.root, { recursive: true, force: true }) }
 })

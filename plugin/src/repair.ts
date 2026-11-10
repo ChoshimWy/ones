@@ -41,6 +41,17 @@ export class RepairWorkflow {
       throw error
     }
   }
+  async read(detailId: string): Promise<RepairRecord | null> {
+    const context = await this.service.repairContext(detailId)
+    try {
+      const st = await lstat(this.root)
+      requireThat(st.isDirectory() && !st.isSymbolicLink() && (st.mode & 0o077) === 0 && st.uid === process.getuid?.(), 'storage', '修复资料目录权限不安全。')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw error
+    }
+    return this.existing(this.key(context.scope, context.task.id))
+  }
   async prepare(detailId: string): Promise<RepairPreparation> {
     const context = await this.service.repairContext(detailId)
     await this.ensureRoot()
