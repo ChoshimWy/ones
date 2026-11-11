@@ -9,7 +9,7 @@ import type { MediaChunk } from './adapters/bug-media.ts'
 import type { Allocation, Attendance, Option, Preview, Site, Status, Task, TaskPage, Worklog } from './domain/model.ts'
 export type Answer<T> = { ok: true; value: T } | { ok: false; error: { code: string; message: string } }
 export type LoginInput = { site: Site; account: string; password: string; httpAcknowledged: boolean; remember?: boolean }
-export type DayInput = { team: string; date: string; mappingConfirmed: boolean }
+export type DayInput = { team: string; date: string }
 export type Day = { id: string; date: string; attendance: Attendance; existing: number; worklogs: Worklog[] }
 export type PreviewInput = { dayId: string; allocations: Allocation[] }
 export type Draft = { date: string; allocations: Allocation[] }
@@ -44,7 +44,8 @@ declare module 'orca' {
     'bugs.list': { input: { team: string; after?: string }; output: Answer<TaskPage> }
     'tasks.list': { input: { team: string; after?: string }; output: Answer<TaskPage> }
     'tasks.brief': { input: { team: string; taskId: string }; output: Answer<ImplementationBrief> }
-    'hours.scan': { input: { team: string; months: number; mappingConfirmed: boolean; cursor?: string }; output: Answer<{ days: import('./domain/missing-hours.ts').MissingDay[]; nextCursor: string | null; total: number }> }
+    'hours.cache': { input: { team: string; month: string }; output: Answer<import('./hours-cache.ts').HoursMonth | null> }
+    'hours.scan': { input: { team: string; month: string; cursor?: string }; output: Answer<{ days: import('./domain/missing-hours.ts').MissingDay[]; nextCursor: string | null; total: number; savedAt: number | null }> }
     'day.read': { input: DayInput; output: Answer<Day> }
     'hours.preview': { input: PreviewInput; output: Answer<Preview> }
     'hours.submit': { input: { previewId: string; confirmed: boolean }; output: Answer<{ count: number }> }

@@ -113,7 +113,7 @@ test('TC-PLUGIN-003/004: service authority survives stale preview and refuses di
   const service=new Workbench(deps)
   await assert.rejects(()=>service.submit('invented',true))
   await assert.rejects(()=>service.makePreview({dayId:'invented',allocations:[row]}))
-  const input={team:'team-fixture',date:'2026-01-05',mappingConfirmed:true}
+  const input={team:'team-fixture',date:'2026-01-05'}
   const day=await service.readDay(input)
   const preview=await service.makePreview({dayId:day.id,allocations:[row]})
   assert.equal(preview.budget,480);assert.equal(preview.remaining,0)
@@ -172,7 +172,7 @@ test('TC-PLUGIN-004-positive: confirmed synthetic batch writes and reads each or
     return json({data:{buckets:[{manhours:logs,pageInfo:{hasNextPage:false,endCursor:'',unstable:false}}]}})
   }
   const service=new Workbench({store:mem.store,vault:mem.vault,protection:async()=>true,fetcher,writesVerified:true})
-  const day=await service.readDay({team:'team-fixture',date:'2026-01-05',mappingConfirmed:true})
+  const day=await service.readDay({team:'team-fixture',date:'2026-01-05'})
   const preview=await service.makePreview({dayId:day.id,allocations:[row,{...row,minutes:120,start:'19:00',description:'另一条虚构描述'}]})
   assert.deepEqual(await service.submit(preview.id,true),{count:2})
   assert.equal(writes,2)

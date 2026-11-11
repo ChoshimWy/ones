@@ -5,7 +5,7 @@ import { Workbench } from '../src/service.ts'
 import { authFixture, loginInput, deferred } from './fixtures/remember-auth.ts'
 import type { Site } from '../src/domain/model.ts'
 const sites: Site[] = ['ones', 'coho']
-const day = { team: 'team', date: '2026-01-05', mappingConfirmed: true }
+const day = { team: 'team', date: '2026-01-05' }
 
 test('saved login: explicit opt-in only, vault only, public status never includes password/token', async () => {
   for (const site of sites) {

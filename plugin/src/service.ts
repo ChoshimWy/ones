@@ -1,4 +1,5 @@
-import { classifyDay, scanDates, type MissingDay } from './domain/missing-hours.ts'
+import type { HoursMonth, HoursMonthStore } from './hours-cache.ts'
+import { classifyDay, monthDates, businessDate, type MissingDay } from './domain/missing-hours.ts'
 import { OnesTransitions } from './adapters/ones-transitions.ts'
 import { filterProject, projectMappingKey, type ProjectMapping } from './domain/project-mapping.ts'
 import type { Option } from './domain/model.ts'
@@ -17,7 +18,7 @@ import { allPages, mediaIds, type CompleteBug } from './domain/repair-content.ts
 import type { BugContent } from './domain/bug-content.ts'
 export interface Store { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void>; delete(key: string): Promise<void> }
 export interface Vault { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; delete(key: string): Promise<void> }
-export interface Dependencies { store: Store; vault: Vault; protection(): Promise<boolean>; fetcher?: Fetcher; writesVerified?: boolean }
+export interface Dependencies { store: Store; vault: Vault; protection(): Promise<boolean>; fetcher?: Fetcher; writesVerified?: boolean; hoursCache?: HoursMonthStore }
 type SavedLogin = { account: string; password: string; principal: string; httpAcknowledged: boolean; paused: boolean; retryAfter: number }
 type Snapshot = { input: DayInput; data: Day; identity: string; stamp: string }
 type Confirmation = { view: Preview; snapshot: Snapshot; input: PreviewInput; identity: string }
@@ -31,7 +32,8 @@ export class Workbench {
   private autoFlights: Partial<Record<Site, { epoch: number; promise: Promise<void>; controller: AbortController }>> = {}
   private authQueues: Record<Site, Promise<unknown>> = { ones: Promise.resolve(), coho: Promise.resolve() }
   private ready?: Promise<void>
-  private hoursScan?: { cursor: string; identity: string; team: string; months: number; dates: string[]; groups: Map<string, Worklog[]>; offset: number }
+  private hoursScanEpoch = 0
+  private hoursScan?: { cursor: string; identity: string; team: string; month: string; scope: string; startedAt: number; today: string; results: MissingDay[]; dates: string[]; groups: Map<string, Worklog[]>; offset: number }
   private day?: Snapshot
   private preview?: Confirmation
   private recovery?: { id: string; receiptId: string; team: string; identity: string; key: string; stamp: string; expiresAt: number }
@@ -228,7 +230,7 @@ export class Workbench {
     this.authQueues[site] = next.catch(() => {})
     return next
   }
-  private invalidate(): void { this.hoursScan = undefined; this.day = undefined; this.preview = undefined; this.recovery = undefined; this.closeDetail() }
+  private invalidate(): void { this.hoursScanEpoch++; this.hoursScan = undefined; this.day = undefined; this.preview = undefined; this.recovery = undefined; this.closeDetail() }
   private identity(): string {
     return digest([this.sessions.ones?.userId, this.sessions.coho?.principal, this.epochs.ones, this.epochs.coho])
   }
@@ -560,7 +562,6 @@ export class Workbench {
     })
   }
   private async fetchDay(input: DayInput, signal?: AbortSignal): Promise<Snapshot> {
-    requireThat(input.mappingConfirmed === true, 'identity', '请确认两站均为本人账号。')
     validDate(input.date)
     const identity = this.identity(); const ones = this.ones(input.team); const coho = this.coho()
     await this.authenticated('ones', async () => { await ones.assertIdentity(signal); await ones.config(signal) }, ones.session)
@@ -573,17 +574,31 @@ export class Workbench {
     const stamp = digest([attendance.date, attendance.punches, [...worklogs].sort((a,b) => a.key.localeCompare(b.key))])
     return { input: { ...input }, data, identity, stamp }
   }
-  async scanHours(input: { team: string; months: number; mappingConfirmed: boolean; cursor?: string }, signal?: AbortSignal) {
-    requireThat(input.mappingConfirmed === true, 'identity', '请确认两站均为本人账号。')
-    const dates = scanDates(input.months)
+  private hoursCacheScope(team: string): string {
+    return digest(['hours-v1', team, this.ones(team).session.userId, this.coho().session.principal])
+  }
+  async cachedHours(team: string, month: string): Promise<HoursMonth | null> {
+    monthDates(month)
+    await this.ensureReady()
+    const identity = this.identity()
+    const scope = this.hoursCacheScope(team)
+    requireThat(this.deps.hoursCache, 'cache', '考勤缓存不可用。')
+    const cached = await this.deps.hoursCache.read(scope, month)
+    requireThat(identity === this.identity(), 'stale', '账号已变化，缓存读取失效。')
+    return cached
+  }
+  async scanHours(input: { team: string; month: string; cursor?: string }, signal?: AbortSignal) {
+    const dates = monthDates(input.month)
     await this.ensureOnesReady()
     await this.ensureCohoReady()
     const identity = this.identity()
     const ones = this.ones(input.team)
     const coho = this.coho()
-    const check = () => requireThat(identity === this.identity() && !signal?.aborted, 'stale', '查询已取消或账号变化，请重新读取。')
+    let epoch = this.hoursScanEpoch
+    const check = () => requireThat(epoch === this.hoursScanEpoch && identity === this.identity() && !signal?.aborted, 'stale', '查询已取消或账号变化，请重新读取。')
     if (!input.cursor) {
       this.invalidate()
+      epoch = this.hoursScanEpoch
       await this.authenticated('ones', async () => { await ones.assertIdentity(signal); await ones.config(signal) }, ones.session)
       const worklogs = await this.authenticated('ones', () => ones.worklogsRange(dates[0]!, dates[dates.length - 1]!, signal), ones.session)
       check()
@@ -595,10 +610,10 @@ export class Workbench {
         requireThat(group, 'schema', '接口返回了查询范围外的工时。')
         group.push(row)
       }
-      this.hoursScan = { cursor: randomUUID(), identity, team: input.team, months: input.months, dates, groups, offset: 0 }
+      this.hoursScan = { cursor: randomUUID(), identity, team: input.team, month: input.month, scope: this.hoursCacheScope(input.team), startedAt: Date.now(), today: businessDate(), results: [], dates, groups, offset: 0 }
     }
     const scan = this.hoursScan
-    requireThat(scan && scan.identity === identity && scan.team === input.team && scan.months === input.months &&
+    requireThat(scan && scan.identity === identity && scan.team === input.team && scan.month === input.month &&
       (!input.cursor || input.cursor === scan.cursor), 'stale', '扫描已失效，请重新查询。')
     // Consume the cursor before I/O: concurrent retries cannot duplicate a chunk.
     scan.cursor = randomUUID()
@@ -621,13 +636,34 @@ export class Workbench {
             days.push({ date, existing, budget: null, remaining: null, state: 'review', reason: error.message })
           } else throw error
         }
+        if (date === scan.today) {
+          const last = days[days.length - 1]!
+          last.state = 'pending'
+          last.remaining = null
+          last.reason = '当天尚未结束，不判定缺失工时。'
+        }
         check()
         requireThat(this.hoursScan === scan, 'stale', '扫描已被新的查询替换。')
       }
+      scan.results.push(...days)
       scan.offset += days.length
       const nextCursor = scan.offset < scan.dates.length ? scan.cursor : null
-      if (!nextCursor) this.hoursScan = undefined
-      return { days, nextCursor, total: scan.dates.length }
+      let savedAt: number | null = null
+      if (!nextCursor) {
+        if (this.deps.hoursCache) {
+          try {
+            await this.deps.hoursCache.publish(scan.scope, { month: scan.month, days: scan.results, savedAt: scan.startedAt }, () => {
+              check()
+              requireThat(this.hoursScan === scan, 'stale', '扫描已失效，未保存缓存。')
+            })
+            savedAt = scan.startedAt
+          } catch { /* A cache failure must not discard a complete authoritative read. */ }
+        }
+        check()
+        requireThat(this.hoursScan === scan, 'stale', '扫描已失效。')
+        this.hoursScan = undefined
+      }
+      return { days, nextCursor, total: scan.dates.length, savedAt }
     } catch (error) {
       if (this.hoursScan === scan) this.hoursScan = undefined
       throw error

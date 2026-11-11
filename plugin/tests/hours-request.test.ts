@@ -3,52 +3,70 @@ import assert from 'node:assert/strict'
 import { HoursView } from '../src/html/hours.ts'
 import type { WorkbenchUI } from '../src/html/panel.ts'
 
-// Exercise the real view -> request -> host boundary, not just the service method.
-// Structured-clone transport preserves undefined object values, unlike JSON.stringify.
-for (const failSecond of [false, true]) test('hours scan transport: ' + (failSecond ? 'failed continuation cannot publish partial results' : 'initial and continuation payloads are plain JSON'), async () => {
+const day = { date: '2026-02-01', existing: 0, budget: 480, remaining: 480, state: 'missing', reason: 'fixture' }
+function viewFixture() {
+  const app = { team: 'fixture-team', status: { identity: 'owner', ones: { connected: true }, coho: { connected: true } },
+    invalidateDay() { view.clearDay() }, render() {} }
+  const view = new HoursView(app as unknown as WorkbenchUI)
+  const internal = view as unknown as { active: boolean; scan: typeof day[] | null; cached: boolean; loadError: string; calendarMonth: string; loading: boolean; loadMonth(month: string): Promise<void> }
+  internal.active = true
+  return { app, view, internal }
+}
+for (const failSecond of [false, true]) test('hours month transport: ' + (failSecond ? 'failed refresh retains cached snapshot' : 'cache first and JSON-safe continuation'), async () => {
   const previous = globalThis.orca
   const calls: Record<string, unknown>[] = []
-  let pending: Promise<void> | undefined
-  const app = {
-    team: 'fixture-team', info: '', error: '',
-    invalidateDay() { view.clearDay() },
-    render() {},
-    run(action: (signal: AbortSignal) => Promise<unknown>, accept: (result: unknown) => void) {
-      pending = action(new AbortController().signal).then(accept).catch(error => { app.error = error.message })
-      return pending
-    }
-  }
-  const view = new HoursView(app as unknown as WorkbenchUI)
-  const internal = view as unknown as { mapping: boolean; scan: unknown; scanMissing(): void }
-  internal.mapping = true
+  const { internal } = viewFixture()
   globalThis.orca = { host: { call: async (method: string, params: Record<string, unknown>) => {
     assert.equal(method, 'plugin.request')
-    assert.equal(params.name, 'hours.scan')
-    // Every own property must survive a JSON round trip; rejects cursor: undefined.
     assert.deepEqual(structuredClone(params), JSON.parse(JSON.stringify(params)))
+    if (params.name === 'hours.cache') return { output: { ok: true, value: { month: '2026-02', days: [{ ...day, existing: 60 }], savedAt: 1 } } }
+    assert.equal(params.name, 'hours.scan')
+    assert.equal(internal.scan?.[0]?.existing, 60)
     const input = params.input as Record<string, unknown>
+    assert.equal(input.month, '2026-02')
     calls.push(input)
     if (calls.length === 1) assert.equal(Object.hasOwn(input, 'cursor'), false)
     else {
       assert.equal(input.cursor, 'next-fixture')
       if (failSecond) throw Error('fixture transport unavailable')
     }
-    return { output: { ok: true, value: {
-      days: [{ date: calls.length === 1 ? '2026-11-09' : '2026-11-10', existing: 0, budget: 480, remaining: 480, state: 'missing', reason: 'fixture' }],
-      total: 2, nextCursor: calls.length === 1 ? 'next-fixture' : null
-    } } }
+    return { output: { ok: true, value: { days: [{ ...day, date: '2026-02-0' + calls.length }], total: 2, nextCursor: calls.length === 1 ? 'next-fixture' : null, savedAt: calls.length === 1 ? null : 2 } } }
   } } } as unknown as typeof globalThis.orca
   try {
-    internal.scanMissing()
-    await pending
+    await internal.loadMonth('2026-02')
     assert.equal(calls.length, 2)
     if (failSecond) {
-      assert.equal(internal.scan, null)
-      assert.ok(app.error)
-      assert.ok(!app.info.includes('扫描完成'))
+      assert.equal(internal.scan?.length, 1)
+      assert.equal(internal.scan?.[0]?.existing, 60)
+      assert.match(internal.loadError, /缓存/)
     } else {
-      assert.equal(app.error, '')
-      assert.deepEqual((internal.scan as { date: string }[]).map(d => d.date), ['2026-11-10', '2026-11-09'])
+      assert.equal(internal.loadError, '')
+      assert.deepEqual(internal.scan?.map(d => d.date), ['2026-02-01', '2026-02-02'])
     }
+    assert.equal(internal.loading, false)
+  } finally { globalThis.orca = previous }
+})
+
+test('hours month transport: late prior month and leave cannot publish stale data', async () => {
+  const previous = globalThis.orca
+  const { internal, view } = viewFixture()
+  let release!: (value: unknown) => void
+  let reached!: () => void
+  const started = new Promise<void>(resolve => { reached = resolve })
+  globalThis.orca = { host: { call: async (_: string, params: { name: string; input: { month: string } }) => {
+    if (params.name === 'hours.cache') return { output: { ok: true, value: null } }
+    if (params.input.month === '2026-01') { reached(); return await new Promise(resolve => { release = resolve }) }
+    return { output: { ok: true, value: { days: [day], nextCursor: null, total: 1, savedAt: 1 } } }
+  } } } as unknown as typeof globalThis.orca
+  try {
+    const old = internal.loadMonth('2026-01')
+    await started
+    await internal.loadMonth('2026-02')
+    release({ output: { ok: true, value: { days: [{ ...day, date: '2026-01-01' }], nextCursor: null, total: 1, savedAt: 1 } } })
+    await old
+    assert.equal(internal.calendarMonth, '2026-02')
+    assert.equal(internal.scan?.[0]?.date, day.date)
+    view.leave()
+    assert.equal(internal.active, false)
   } finally { globalThis.orca = previous }
 })

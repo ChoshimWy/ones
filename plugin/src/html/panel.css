@@ -478,7 +478,11 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
 
 /* Monthly attendance overview: keep seven weekday columns even in the sidebar. */
 .hours-calendar { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-.hours-calendar > .row { justify-content: space-between; }
+.calendar-month-navigation { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; }
+.calendar-month-navigation > button { width: auto; white-space: nowrap; }
+.calendar-month-navigation > button:first-child { justify-self: start; }
+.calendar-month-navigation > button:last-child { justify-self: end; }
+.calendar-month-title { white-space: nowrap; }
 .hours-calendar-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .hours-calendar-table caption { font-size: 16px; font-weight: 650; padding: 4px 0 14px; text-align: center; }
 .hours-calendar-table th { color: var(--orca-muted-foreground); font-size: 12px; font-weight: 500; padding: 8px 0; }

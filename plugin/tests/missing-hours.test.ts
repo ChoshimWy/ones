@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { scanDates, classifyDay, taskDraft } from '../src/domain/missing-hours.ts'
-import { Workbench, type Vault } from '../src/service.ts'
+import { monthDates, businessDate, classifyDay, taskDraft } from '../src/domain/missing-hours.ts'
+import { Workbench, type Vault, type Dependencies } from '../src/service.ts'
 import { startSeconds } from '../src/domain/attendance.ts'
 import type { Attendance, Task } from '../src/domain/model.ts'
 
@@ -9,16 +9,14 @@ const day = '2026-02-10'
 const attendance: Attendance = { date: day, fetchedAt: Date.now(), punches: ['18:30', '09:00'].map(time => ({ date: day, realDate: day, time, isNext: false, outFence: false })) }
 const task: Task = { id: 'task', number: 1, name: '虚构任务', project: { id: 'p', name: 'P' }, issueType: { id: 't', name: '任务' }, status: { id: 's', name: '处理中' } }
 
-test('missing hours: calendar months, leap day and Shanghai midnight', () => {
-  for (const months of [1,2,3,6,12]) {
-    const dates = scanDates(months, new Date('2026-03-30T16:00:00Z'))
-    assert.equal(dates.at(-1), '2026-03-30')
-    assert.equal(new Set(dates).size, dates.length)
-  }
-  assert.equal(scanDates(1, new Date('2026-03-31T00:00:00Z'))[0], '2026-02-28')
-  assert.equal(scanDates(12, new Date('2024-02-29T00:00:00Z'))[0], '2023-02-28')
-  assert.equal(scanDates(1, new Date('2026-03-30T15:59:59Z')).at(-1), '2026-03-29')
-  assert.throws(() => scanDates(4))
+test('missing hours: calendar-month bounds and current day are explicit', () => {
+  const now = new Date('2026-03-30T16:00:00Z')
+  assert.equal(businessDate(now), '2026-03-31')
+  assert.equal(monthDates('2026-02', now).length, 28)
+  assert.equal(monthDates('2024-02', now).length, 29)
+  assert.equal(monthDates('2026-03', now).at(-1), '2026-03-31')
+  assert.equal(monthDates('2026-03', new Date('2026-03-30T15:59:59Z')).at(-1), '2026-03-30')
+  assert.throws(() => monthDates('2026-04', now))
 })
 test('missing hours: absent, partial, covered and ambiguous attendance remain distinct', () => {
   assert.equal(classifyDay(attendance, 0).state, 'missing')
@@ -50,7 +48,12 @@ function fixture() {
   const vault: Vault = { get: async key => data.get(key) ?? null, set: async (key,value) => { data.set(key,value) }, delete: async key => { data.delete(key) } }
   const calls: string[] = []
   let requested = '', fail = false
-  const service = new Workbench({ store: vault, vault, protection: async () => true, fetcher: async (url, init) => {
+  let hold: (() => Promise<void>) | undefined
+  const cache = new Map<string, import('../src/hours-cache.ts').HoursMonth>()
+  const deps: Dependencies = { hoursCache: {
+    read: async (scope, month) => structuredClone(cache.get(scope + month) ?? null),
+    publish: async (scope, value, check) => { check(); cache.set(scope + value.month, structuredClone(value)) }
+  }, store: vault, vault, protection: async () => true, fetcher: async (url, init) => {
     const path = new URL(String(url)).pathname
     calls.push(path)
     const body = init?.body ? JSON.parse(String(init.body)) : {}
@@ -58,6 +61,7 @@ function fixture() {
     if (path.endsWith('/users/me')) return json({ uuid: 'owner' })
     if (path.endsWith('/info')) return json({ timezone: 'Asia/Shanghai', workhours_unit: 'hour', configs: [{ type: 'manhour_mode', data: 'simple' }] })
     if (path.endsWith('/items/graphql')) {
+      const wait = hold; hold = undefined; if (wait) await wait()
       assert.ok(!JSON.stringify(body).includes('mutation'))
       return json({ data: { buckets: [{ manhours: [], pageInfo: { hasNextPage: false, endCursor: '', unstable: false } }] } })
     }
@@ -71,30 +75,36 @@ function fixture() {
       return json({ code: 200, data: { dateList: requested.endsWith('02') ? [] : [{ date: requested }], dkList: requested.endsWith('01') ? [] : ['09:00', '18:30'].map(time => ({ date: requested, realDate: requested, time, isNext: false, outFence: false })) } })
     }
     throw new Error('unexpected endpoint')
-  } })
-  return { service, calls, fail: () => { fail = true } }
+  } }
+  const service = new Workbench(deps)
+  return { service, deps, cache, calls, holdNext: (value: () => Promise<void>) => { hold = value }, fail: () => { fail = true } }
 }
-const input = { team: 'team', months: 1, mappingConfirmed: true }
+const input = { team: 'team', month: '2026-02' }
 test('missing hours: service batches all dates, reads worklogs first and re-reads selected day', async () => {
   const f = fixture()
   let result = await f.service.scanHours(input)
   const scanned = [...result.days]
   const dates = result.days.map(d => d.date)
   assert.equal(result.days.length, 7)
+  assert.equal(f.cache.size, 0)
   assert.ok(f.calls.findIndex(p => p.endsWith('/items/graphql')) < f.calls.findIndex(p => p.endsWith('/attCalendar')))
   while (result.nextCursor) {
     result = await f.service.scanHours({ ...input, cursor: result.nextCursor })
     dates.push(...result.days.map(d => d.date))
     scanned.push(...result.days)
   }
-  assert.deepEqual(dates, scanDates(1))
+  assert.deepEqual(dates, monthDates(input.month))
+  assert.equal(f.cache.size, 1)
+  const callCount = f.calls.length
+  assert.equal((await new Workbench(f.deps).cachedHours(input.team, input.month))?.days.length, dates.length)
+  assert.equal(f.calls.length, callCount)
   const absent = scanned.filter(d => d.date.endsWith('01'))
   assert.ok(absent.length > 0)
   assert.ok(absent.every(d => d.state === 'not_required' && d.remaining === 0))
-  await assert.rejects(f.service.readDay({ team: 'team', date: absent[0]!.date, mappingConfirmed: true }), { code: 'no_attendance' })
+  await assert.rejects(f.service.readDay({ team: 'team', date: absent[0]!.date }), { code: 'no_attendance' })
   assert.ok(scanned.filter(d => d.date.endsWith('02')).every(d => d.state === 'review'))
   const selected = dates.find(d => !d.endsWith('01') && !d.endsWith('02'))!
-  const data = await f.service.readDay({ team: 'team', date: selected, mappingConfirmed: true })
+  const data = await f.service.readDay({ team: 'team', date: selected })
   assert.equal(data.date, selected)
   assert.equal(data.existing, 0)
   assert.equal(startSeconds(selected, '00:00') > 0, true)
@@ -102,7 +112,7 @@ test('missing hours: service batches all dates, reads worklogs first and re-read
 test('missing hours: stale cursor, wrong range, cancelled and failed reads never publish partial results', async () => {
   const f = fixture()
   const first = await f.service.scanHours(input)
-  await assert.rejects(f.service.scanHours({ ...input, months: 2, cursor: first.nextCursor! }))
+  await assert.rejects(f.service.scanHours({ ...input, month: '2026-01', cursor: first.nextCursor! }))
   const second = await f.service.scanHours({ ...input, cursor: first.nextCursor! })
   await assert.rejects(f.service.scanHours({ ...input, cursor: first.nextCursor! }))
   f.fail()
@@ -130,4 +140,41 @@ test('missing hours: range adapter follows pages and rejects duplicate lists', a
   assert.equal((await client.worklogsRange('2026-02-01', '2026-02-28')).length, 2)
   duplicate = true
   await assert.rejects(client.worklogsRange('2026-02-01', '2026-02-28'))
+})
+
+
+test('missing hours: cached month is isolated by principal; failed refresh preserves full snapshot; today is pending', async () => {
+  const f = fixture()
+  const request = { team: 'team', month: businessDate().slice(0, 7) }
+  let result = await f.service.scanHours(request)
+  while (result.nextCursor) result = await f.service.scanHours({ ...request, cursor: result.nextCursor })
+  const cached = await f.service.cachedHours(request.team, request.month)
+  assert.equal(cached?.days.at(-1)?.date, businessDate())
+  assert.equal(cached?.days.at(-1)?.state, 'pending')
+  const other = new Workbench({ ...f.deps, vault: { ...f.deps.vault, get: async key => {
+    const value = await f.deps.vault.get(key)
+    return key === 'session.coho' ? JSON.stringify({ ...JSON.parse(value!), principal: 'other-owner' }) : value
+  } } })
+  assert.equal(await other.cachedHours(request.team, request.month), null)
+  f.fail()
+  await assert.rejects(f.service.scanHours(request))
+  assert.deepEqual(await f.service.cachedHours(request.team, request.month), cached)
+})
+
+
+test('missing hours: late initial month request cannot replace a newer scan cursor', async () => {
+  const f = fixture()
+  let release!: () => void
+  let started!: () => void
+  const reached = new Promise<void>(resolve => { started = resolve })
+  const gate = new Promise<void>(resolve => { release = resolve })
+  f.holdNext(async () => { started(); await gate })
+  const old = assert.rejects(f.service.scanHours({ team: 'team', month: '2026-01' }), { code: 'stale' })
+  await reached
+  const fresh = await f.service.scanHours(input)
+  release()
+  await old
+  assert.ok(fresh.nextCursor)
+  const next = await f.service.scanHours({ ...input, cursor: fresh.nextCursor! })
+  assert.equal(next.days[0]?.date, '2026-02-08')
 })

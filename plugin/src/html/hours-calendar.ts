@@ -1,6 +1,6 @@
-import type { MissingDay } from '../domain/missing-hours.ts'
+import { adjacentMonth, businessDate, type MissingDay } from '../domain/missing-hours.ts'
 import { validDate } from '../domain/model.ts'
-import { button, el, hours, row, text } from './dom.ts'
+import { button, el, hours } from './dom.ts'
 
 export function calendarMonths(days: MissingDay[]): string[] {
   return [...new Set(days.map(day => validDate(day.date).slice(0, 7)))].sort()
@@ -20,6 +20,7 @@ export function calendarDates(month: string): (string | null)[][] {
 
 export function calendarLabels(day?: MissingDay): { attendance: string; registration: string } {
   if (!day) return { attendance: '未查询', registration: '' }
+  if (day.state === 'pending') return { attendance: '当日进行中', registration: day.existing ? '已登记 ' + hours(day.existing) : '暂未登记' }
   if (day.state === 'not_required') return { attendance: '无考勤', registration: '无需工时' }
   const attendance = day.budget === null ? '考勤待核实' : '考勤 ' + hours(day.budget)
   const registration = day.existing === 0 ? '未登记' :
@@ -28,16 +29,19 @@ export function calendarLabels(day?: MissingDay): { attendance: string; registra
 }
 
 export function hoursCalendar(options: {
-  days: MissingDay[]; month: string; selected: string | null; busy: boolean
+  days: MissingDay[]; month: string; selected: string | null; busy: boolean; loading?: boolean
   changeMonth(month: string): void; chooseDate(date: string): void
 }): HTMLElement {
-  const months = calendarMonths(options.days)
-  if (!months.length) return text('查询范围内没有日期。', true)
-  const month = months.includes(options.month) ? options.month : months[months.length - 1]!
-  const index = months.indexOf(month)
+  const month = options.month
+  validDate(month + '-01')
   const byDate = new Map(options.days.map(day => [day.date, day]))
   const title = month.replace('-', '年') + '月'
-  const caption = el('caption', '', title)
+  const heading = el('span', 'calendar-month-title', title)
+  heading.setAttribute('aria-live', 'polite')
+  const caption = el('caption', '', el('div', 'calendar-month-navigation',
+    button('上一月', () => options.changeMonth(adjacentMonth(month, -1)), options.busy || month <= '1970-01'),
+    heading,
+    button('下一月', () => options.changeMonth(adjacentMonth(month, 1)), options.busy || month >= businessDate().slice(0, 7))))
   const table = el('table', 'hours-calendar-table', caption)
   const header = el('tr')
   for (const name of ['周一', '周二', '周三', '周四', '周五', '周六', '周日']) {
@@ -59,8 +63,8 @@ export function hoursCalendar(options: {
         el('span', 'calendar-attendance', labels.attendance),
         el('span', 'calendar-registration', labels.registration)
       ]
-      const selectable = day && day.state !== 'not_required'
-      const cell = selectable ? button('', () => options.chooseDate(date), options.busy, 'calendar-day') : el('div', 'calendar-day')
+      const selectable = day && day.state !== 'not_required' && day.state !== 'pending'
+      const cell = selectable ? button('', () => options.chooseDate(date), options.busy || options.loading, 'calendar-day') : el('div', 'calendar-day')
       cell.append(...content)
       cell.setAttribute('aria-label', `${date}，${labels.attendance}，${labels.registration}`)
       cell.classList.add('calendar-' + (day?.state ?? 'unqueried'))
@@ -75,11 +79,5 @@ export function hoursCalendar(options: {
     body.append(tr)
   }
   table.append(body)
-  const position = text(`${index + 1} / ${months.length} 月`, true)
-  position.setAttribute('aria-live', 'polite')
-  return el('section', 'hours-calendar',
-    row(button('上一月', () => options.changeMonth(months[index - 1]!), options.busy || index === 0),
-      position, button('下一月', () => options.changeMonth(months[index + 1]!), options.busy || index === months.length - 1)),
-    table,
-    text('仅有考勤的日期需要工时；点击日期核对。', true))
+  return el('section', 'hours-calendar', table)
 }

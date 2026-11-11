@@ -15,7 +15,7 @@ const login = () => ({ site: 'coho' as const, account: 'fixture', password: 'fix
 const json = (data: unknown, status = 200) => Response.json(data, { status })
 const auth: Fetcher = async url => String(url).endsWith('requestToken') ? json({ code: 200, data: { token: 'fixture-new' } }) : json({ code: 200, data: { tenantCode: 'ATS', globalId: 'owner' } })
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
-const day = { team: 'team', date: '2026-01-05', mappingConfirmed: true }
+const day = { team: 'team', date: '2026-01-05' }
 
 test('auth lifecycle: reload restores both sites without network or deletion', async () => {
   const f = fixture(async () => { throw Error('unexpected network') })

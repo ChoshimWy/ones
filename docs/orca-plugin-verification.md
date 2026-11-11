@@ -546,3 +546,11 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - protections 12 项、missing-hours 6 项、hours-request 2 项共 20/20；调整服务fixture后，attendance/service authority/positive 对应4项通过。覆盖早到正常8小时、反序输入自动排序、迟到/早退及异常拒绝、考勤/已有工时变化后拒绝提交、虚构逐笔写入回读。类型检查、diff-check 通过。
 - 实际 HoursView 虚构浏览器交互：08:50—18:31 自动显示8小时，配对选择器和确认框不存在，开始时间自动为08:50，无打卡确认即可生成及预览，生产提交按钮仍禁用。460px截图已打开检查，无遮挡或横向溢出。真实账号未在本次执行扫描或工时写入。
 - 截图本地绝对路径：/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/automatic-attendance.png（虚构渲染预览；chat-scratch可能清理）。
+
+### 自动月历、月度 SQLite 缓存与导航同排（2026-11-11）
+
+- 移除手动团队/日期/身份勾选和范围扫描表单；进入自动查询当月，切月查询对应月份；当天进行中不判缺失。完整摘要按两站身份、团队和月份隔离持久化，失败不覆盖旧缓存，缓存不授权写入。
+- 定向验证共 19 个不同用例通过：missing-hours 8、hours-cache 2、hours-request 3、hours-calendar 2、protections 中受影响选择器 4；包括完整查询后发布、SQLite 重开读取、账号隔离、失败保留、迟到请求保护与既有写入前权威重读。TypeScript 检查和 diff 空白检查通过；未执行全量测试。
+- 实际 WorkbenchUI 虚构数据浏览器旅程通过：进入自动加载、切月读取、离线保留缓存、快速切月迟到响应丢弃、退出取消、重新进入当月、选日自动读任务。未访问真实业务账号，不能代证真实整月查询性能或生产写入。
+- 月份导航改为同一行三列布局（左上一月、中央年月、右下一月）；360px 和 1100px 几何断言显示三者纵向中心一致、无横向溢出。已实际打开检查两个尺寸截图：文字不截断、无遮挡，年月居中。布局修改后重跑 hours-calendar 2 个定向用例及类型检查通过，未重复无关测试。
+- 虚构数据渲染截图：`/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/month-navigation-360.png`、同目录 `month-navigation-1100.png`；属于本机会话证据，可能随缓存清理。此前深浅色检查与生命周期证据复用；截图不作为真实账户或业务写入验收。

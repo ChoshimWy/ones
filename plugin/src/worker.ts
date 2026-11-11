@@ -1,3 +1,6 @@
+import { HoursCache } from './hours-cache.ts'
+import { privateDataRoot } from './private-files.ts'
+import { join } from 'node:path'
 import { RepairActions } from './repair-actions.ts'
 import { StatusWorkflow } from './status-update.ts'
 import { FocusedProject } from './adapters/focused-project.ts'
@@ -9,6 +12,7 @@ import type { Answer } from './protocol.ts'
 
 export default function activate(orca: OrcaWorkerApi): void {
   const service = new Workbench({
+    hoursCache: new HoursCache(join(privateDataRoot(), 'hours-cache')),
     store: { get: key => orca.storage.get(key), set: (key, value) => orca.storage.set(key, value as never), delete: key => orca.storage.delete(key) },
     vault: orca.secrets,
     protection: async () => (await orca.host.call('secrets.protection')).status === 'os-keyring',
@@ -57,6 +61,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('bugs.close', input => answer(async () => { service.closeDetail(input.detailId); return {closed:true as const} }))
   orca.panels.handle('tasks.list', (input, context) => answer(() => service.tasks(input.team, input.after, context.signal)))
   orca.panels.handle('tasks.brief', (input, context) => answer(() => service.brief(input.team, input.taskId, context.signal)))
+  orca.panels.handle('hours.cache', input => answer(() => service.cachedHours(input.team, input.month)))
   orca.panels.handle('hours.scan', (input, context) => answer(() => service.scanHours(input, context.signal)))
   orca.panels.handle('day.read', (input, context) => answer(() => service.readDay(input, context.signal)))
   orca.panels.handle('hours.preview', (input, context) => answer(() => service.makePreview(input, context.signal)))

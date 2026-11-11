@@ -23,7 +23,7 @@ function fetcherFor(code: number | string, status = 200): Fetcher {
     throw Error('Unexpected request')
   }
 }
-const day = { team: 'team', date: '2026-01-05', mappingConfirmed: true }
+const day = { team: 'team', date: '2026-01-05' }
 
 test('coho auth: server expTime is seconds and survives vault restore; secrets stay out of Status', async () => {
   for (const expTime of [7200, '7200']) {

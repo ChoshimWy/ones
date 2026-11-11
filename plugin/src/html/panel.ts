@@ -259,6 +259,7 @@ export class WorkbenchUI {
       this.clearBusiness()
     this.team = team
     this.status = status
+    if (this.tab === 'hours') queueMicrotask(() => { if (!this.disposed && this.tab === 'hours') this.hours.enter() })
     for (const site of ['ones', 'coho'] as const) {
       if (!this.accounts[site] && status[site].savedLogin) this.accounts[site] = status[site].savedLogin!.account
     }
@@ -326,6 +327,7 @@ export class WorkbenchUI {
     if (value === 'implementation') { this.showImplementation(); return }
     if (value === this.tab) return
     const returningToBugs = value === 'bugs' && !!this.detail
+    if (this.tab === 'hours') this.hours.leave()
     if (this.tab === 'bugs') this.cancelBugs()
     if (this.tab === 'implementation') {
       this.implementation?.dispose()
@@ -338,6 +340,7 @@ export class WorkbenchUI {
     this.error = ''
     this.info = ''
     this.render()
+    if (value === 'hours') this.hours.enter()
     if (value === 'bugs') {
       if (returningToBugs && this.bugLoaded) void this.showBugPage(this.bugPage)
       else void this.loadBugs()
@@ -345,6 +348,7 @@ export class WorkbenchUI {
   }
   /// 重建实施列表时恢复本生命周期页码，由新缓存约束有效范围。
   private showImplementation(): void {
+    this.hours.leave()
     this.passwords = { ones: '', coho: '' }
     this.cancelBugs()
     this.detail?.dispose()
@@ -862,6 +866,7 @@ export class WorkbenchUI {
     window.scrollTo(0, scroll)
   }
   dispose(): void {
+    this.hours.leave()
     window.removeEventListener('focus', this.onResume)
     document.removeEventListener('visibilitychange', this.onResume)
     window.removeEventListener('workbench-auth-invalid', this.onAuthInvalid)

@@ -1,8 +1,9 @@
-import { calendarMonths, hoursCalendar } from './hours-calendar.ts'
+import { hoursCalendar } from './hours-calendar.ts'
 import { attendanceBudget, resolveAttendance } from '../domain/attendance.ts'
-import { taskDraft, type MissingDay } from '../domain/missing-hours.ts'
+import { taskDraft, businessDate, type MissingDay } from '../domain/missing-hours.ts'
 import { safeFailure } from '../domain/model.ts'
 import type { Allocation, Preview, Task, TaskPage } from '../domain/model.ts'
+import type { HoursMonth } from '../hours-cache.ts'
 import type { Day, Draft } from '../protocol.ts'
 import type { WorkbenchUI } from './panel.ts'
 import {
@@ -12,6 +13,8 @@ import {
   hours,
   input,
   notice,
+  message,
+  UIError,
   request,
   row,
   select,
@@ -26,12 +29,18 @@ export class HoursView {
     month: '2-digit',
     day: '2-digit'
   }).format(new Date())
-  private months = '1'
-  private calendarMonth = ''
+  private calendarMonth = businessDate().slice(0, 7)
   private scan: MissingDay[] | null = null
+  private active = false
+  private generation = 0
+  private controller?: AbortController
+  private loading = false
+  private loadError = ''
+  private progress = ''
+  private savedAt: number | null = null
+  private cached = false
   preview: Preview | null = null
   confirmed = false
-  private mapping = false
   private day: Day | null = null
   private tasks: Task[] = []
   private next: string | null = null
@@ -48,15 +57,19 @@ export class HoursView {
     this.confirmed = false
   }
   clear(): void {
+    this.leave()
     this.clearDay()
     this.tasks = []
     this.next = null
     this.cursors.clear()
     this.selected = ''
     this.allocations = []
-    this.mapping = false
     this.scan = null
-    this.calendarMonth = ''
+    this.calendarMonth = businessDate().slice(0, 7)
+    this.savedAt = null
+    this.cached = false
+    this.loadError = ''
+    this.progress = ''
     this.description = ''
   }
   changeDate(value: string): void {
@@ -100,12 +113,13 @@ export class HoursView {
       (signal) =>
         request<Day>(
           'day.read',
-          { team: this.app.team, date: this.date, mappingConfirmed: this.mapping },
+          { team: this.app.team, date: this.date },
           signal
         ),
       (day) => {
         this.day = day
         try { this.start = resolveAttendance(day.attendance).start } catch { /* Anomalous days remain blocked. */ }
+        queueMicrotask(() => { if (this.active && this.day?.id === day.id && !this.tasks.length) this.loadTasks() })
       }
     )
   }
@@ -132,29 +146,72 @@ export class HoursView {
     this.app.error = ''
     this.app.render()
   }
-  private scanMissing(): void {
-    this.scan = null
+  enter(): void {
+    if (this.active) return
+    this.active = true
+    void this.loadMonth(businessDate().slice(0, 7))
+  }
+  leave(): void {
+    this.active = false
+    this.generation++
+    this.controller?.abort()
+    this.controller = undefined
+    this.loading = false
+  }
+  private async loadMonth(month: string): Promise<void> {
+    this.controller?.abort()
+    const generation = ++this.generation
+    const team = this.app.team
+    const identity = this.app.status?.identity
+    this.calendarMonth = month
     this.app.invalidateDay()
-    void this.app.run(
-      async signal => {
-        const days: MissingDay[] = []
-        let cursor: string | undefined
-        do {
-          const result = await request<{ days: MissingDay[]; nextCursor: string | null; total: number }>(
-            'hours.scan', { team: this.app.team, months: Number(this.months), mappingConfirmed: this.mapping, ...(cursor ? { cursor } : {}) }, signal)
-          days.push(...result.days)
-          this.app.info = `正在核对考勤：${days.length} / ${result.total} 天；尚未完成，不作为缺报结论。`
-          this.app.render()
-          cursor = result.nextCursor ?? undefined
-        } while (cursor)
-        this.app.info = '扫描完成；选择日期后会重新读取当日考勤与工时。'
-        return days.reverse()
-      },
-      result => {
-        this.scan = result
-        this.calendarMonth = calendarMonths(result).at(-1) ?? ''
+    this.scan = null
+    this.loadError = ''
+    this.progress = ''
+    this.savedAt = null
+    this.cached = false
+    if (!team || !this.app.status?.ones.connected || !this.app.status.coho.connected) {
+      this.loading = false
+      this.app.render()
+      return
+    }
+    const controller = new AbortController()
+    this.controller = controller
+    const current = () => this.active && this.generation === generation && team === this.app.team && identity === this.app.status?.identity && !controller.signal.aborted
+    this.loading = true
+    this.app.render()
+    try {
+      try {
+        const cached = await request<HoursMonth | null>('hours.cache', { team, month }, controller.signal)
+        if (!current()) return
+        if (cached) { this.scan = cached.days; this.savedAt = cached.savedAt; this.cached = true; this.app.render() }
+      } catch { if (!current()) return /* Cache failure does not prevent a fresh query. */ }
+      const days: MissingDay[] = []
+      let cursor: string | undefined
+      let savedAt: number | null = null
+      do {
+        const result = await request<{ days: MissingDay[]; nextCursor: string | null; total: number; savedAt: number | null }>(
+          'hours.scan', { team, month, ...(cursor ? { cursor } : {}) }, controller.signal)
+        if (!current()) return
+        days.push(...result.days)
+        this.progress = `正在更新 ${month}：${days.length} / ${result.total} 天`
+        this.app.render()
+        cursor = result.nextCursor ?? undefined
+        savedAt = result.savedAt
+      } while (cursor)
+      this.scan = days
+      this.savedAt = savedAt
+      this.cached = false
+      this.progress = savedAt ? '已更新并保存到插件数据库' : '已更新，数据库保存失败；下次将重新查询'
+    } catch (error) {
+      if (current()) {
+        const failure = error instanceof UIError ? message(error) : '月份数据读取失败，请检查连接后重试。'
+        this.loadError = this.cached ? '更新失败，当前显示上次缓存；' + failure : failure
+        this.progress = ''
       }
-    )
+    } finally {
+      if (current()) { this.loading = false; this.controller = undefined; this.app.render() }
+    }
   }
   private generate(): void {
     this.app.invalidate()
@@ -201,9 +258,13 @@ export class HoursView {
       (value) => {
         this.app.invalidateDay()
         if (value) {
-          this.date = value.date
-          this.allocations = value.allocations
-          this.app.info = '草稿已恢复，请重新读取考勤和任务。'
+          this.app.info = '正在恢复草稿并重读考勤。'
+          queueMicrotask(() => { void this.loadMonth(value.date.slice(0, 7)).then(() => {
+            if (!this.active || this.calendarMonth !== value.date.slice(0, 7)) return
+            this.date = value.date
+            this.allocations = value.allocations
+            this.loadDay()
+          }) })
         } else this.app.info = '当前身份没有草稿。'
       }
     )
@@ -211,56 +272,25 @@ export class HoursView {
   render(): HTMLElement {
     const app = this.app,
       authenticated = app.status?.ones.connected && app.status?.coho.connected
-    const content = stack(
-      notice('扫描缺报 → 考勤交叉核对 → 按任务生成草稿。考勤额度只是上限，不自动填满或提交。'),
-      app.teamSelect(),
-      input('业务日期（YYYY-MM-DD）', this.date, (v) => this.changeDate(v), { disabled: app.busy }),
-      check(
-        '已确认 ONES 与 Coho 均为本人账号',
-        this.mapping,
-        (v) => {
-          this.mapping = v
-          this.scan = null
-          app.invalidateDay()
-          app.render()
-        },
-        app.busy
-      ),
-      row(
-        button(
-          '读取考勤与已有工时',
-          () => this.loadDay(),
-          app.busy || !authenticated || !this.mapping || !app.team
-        ),
-        button(
-          '读取可分配任务',
-          () => this.loadTasks(),
-          app.busy || !app.status?.ones.connected || !app.team
-        )
-      ),
-      this.next
-        ? button('加载更多工作项（列表尚未完整）', () => this.loadTasks(true), app.busy)
-        : null
-    )
-    content.append(card(
-      '查找缺少工时的日期',
-      select('查询范围', this.months, [
-        { value: '1', label: '近一个月' }, { value: '2', label: '近两个月' },
-        { value: '3', label: '近三个月' }, { value: '6', label: '近半年' }, { value: '12', label: '近一年' }
-      ], value => { this.months = value; this.scan = null; app.render() }, app.busy),
-      text('按上海时区查询至昨天；逐日核对考勤，长范围可能耗时较久。失败不视为缺报。', true),
-      button('扫描工时与考勤', () => this.scanMissing(), app.busy || !authenticated || !this.mapping || !app.team)
-    ))
-    if (this.scan) {
-      content.append(hoursCalendar({
-        days: this.scan,
-        month: this.calendarMonth,
-        selected: this.day?.date ?? null,
-        busy: app.busy,
-        changeMonth: month => { this.calendarMonth = month; app.render() },
-        chooseDate: date => { this.changeDate(date); this.loadDay() }
-      }))
+    const content = stack()
+    if (!authenticated || !app.team) {
+      content.append(notice('请在登录页连接 ONES、Coho 并选择团队。'))
+      return content
     }
+    content.append(hoursCalendar({
+      days: this.scan ?? [], month: this.calendarMonth, selected: this.day?.date ?? null,
+      busy: app.busy, loading: this.loading,
+      changeMonth: month => { this.allocations = []; this.description = ''; void this.loadMonth(month) },
+      chooseDate: date => { this.changeDate(date); this.loadDay() }
+    }))
+    const stamp = this.savedAt ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(this.savedAt) : ''
+    content.append(row(
+      text(this.loading ? (this.progress || '正在读取当月考勤与工时…') : this.progress || (this.cached ? '显示本机缓存' : ''), true),
+      stamp ? text((this.cached ? '缓存于 ' : '更新于 ') + stamp, true) : null,
+      button('刷新', () => { void this.loadMonth(this.calendarMonth) }, app.busy || this.loading)
+    ))
+    if (this.loadError) content.append(notice(this.loadError, true))
+    if (this.next && this.day) content.append(button('加载更多任务', () => this.loadTasks(true), app.busy))
     let attendanceValid = false
     if (this.day) {
       try {
