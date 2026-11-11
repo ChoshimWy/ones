@@ -1,5 +1,5 @@
 import { AppError, type Attendance, type Allocation, type Task, requireThat, validDate } from './model.ts'
-import { attendanceBudget, checkAllocations } from './attendance.ts'
+import { resolveAttendance, checkAllocations } from './attendance.ts'
 
 export type MissingDay = {
   date: string
@@ -34,10 +34,8 @@ export function classifyDay(attendance: Attendance, existing: number): MissingDa
   validDate(attendance.date)
   if (attendance.punches.length === 0) return { ...base, budget: 0, remaining: 0, state: 'not_required', reason: '该日无考勤，无需填写工时。' }
   try {
-    // Pairing here is a read-only estimate, never a human confirmation for submission.
-    const sorted = attendance.punches.map((p, i) => ({ time: p.time, i })).sort((a, b) => a.time.localeCompare(b.time))
-    const budget = attendanceBudget(attendance, { start: sorted[0]?.i ?? -1, end: sorted[1]?.i ?? -1, confirmed: true })
-    return { ...base, attendanceTime: { start: sorted[0]!.time, end: sorted[1]!.time }, budget, remaining: Math.max(0, budget - existing),
+    const { start, end, budget } = resolveAttendance(attendance)
+    return { ...base, attendanceTime: { start, end }, budget, remaining: Math.max(0, budget - existing),
       state: existing === 0 ? 'missing' : existing < budget ? 'partial' : 'covered',
       reason: existing > budget ? '已有工时超过考勤额度，请核对；不自动修改。' : '考勤额度仅为上限，不代表实际任务投入。' }
   } catch (error) {

@@ -645,7 +645,7 @@ export class Workbench {
     await this.ensureOnesReady()
     const snapshot = this.day
     requireThat(snapshot && snapshot.data.id === input.dayId && snapshot.identity === this.identity() && Date.now() - snapshot.data.attendance.fetchedAt < 300000, 'stale', '考勤或身份已过期，请重新读取。')
-    const budget = attendanceBudget(snapshot.data.attendance, input.selection)
+    const budget = attendanceBudget(snapshot.data.attendance)
     const allocations = structuredClone(input.allocations)
     const proposed = checkAllocations(allocations, budget, snapshot.data.existing)
     const client = this.ones(snapshot.input.team)
@@ -670,7 +670,7 @@ export class Workbench {
       const client = this.ones(confirmation.snapshot.input.team)
       const fresh = await this.fetchDay(confirmation.snapshot.input)
       requireThat(fresh.stamp === confirmation.snapshot.stamp && fresh.identity === confirmation.identity, 'stale', '考勤或已登记工时发生变化，请重新分配。')
-      const budget = attendanceBudget(fresh.data.attendance, confirmation.input.selection)
+      const budget = attendanceBudget(fresh.data.attendance)
       checkAllocations(confirmation.input.allocations, budget, fresh.data.existing)
       const scope = digest([ONES, client.team, client.session.userId])
       const ledger = this.ledger()

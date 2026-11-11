@@ -18,17 +18,17 @@ function memory() {
   return { data, store, vault }
 }
 const attendance = (start='09:00', end='21:00'): Attendance => ({ date:'2026-01-05', fetchedAt:Date.now(), punches:[start,end].map(time=>({date:'2026-01-05',realDate:'2026-01-05',time,isNext:false,outFence:false})) })
-const selected = { start:0,end:1,confirmed:true }
 const row = {taskId:'task-fixture',start:'09:00',minutes:480,description:'虚构测试工作说明'}
 
 test('TC-PLUGIN-003: attendance boundaries and no attendance bypass', () => {
-  for (const [end,minutes] of [['18:30',480],['19:29',480],['19:30',510],['19:59',510],['20:00',540],['20:29',540],['20:30',570],['21:00',600]] as const) assert.equal(attendanceBudget(attendance('09:00',end),selected),minutes)
-  assert.equal(attendanceBudget(attendance('09:15','21:00'),selected),600)
-  for (const value of [attendance('09:15','20:00'),attendance('09:00','18:29'),attendance('09:00','21:01'),{...attendance(),punches:[]},{...attendance(),punches:[...attendance().punches,...attendance().punches]}]) assert.throws(()=>attendanceBudget(value,selected))
-  assert.throws(()=>attendanceBudget(attendance(),{...selected,confirmed:false}))
-  assert.throws(()=>attendanceBudget(attendance(),{...selected,start:1,end:0}))
+  for (const [end,minutes] of [['18:30',480],['19:29',480],['19:30',510],['19:59',510],['20:00',540],['20:29',540],['20:30',570],['21:00',600]] as const) assert.equal(attendanceBudget(attendance('09:00',end)),minutes)
+  assert.equal(attendanceBudget(attendance('09:15','21:00')),600)
+  for (const value of [attendance('09:15','20:00'),attendance('09:00','18:29'),attendance('09:00','21:01'),{...attendance(),punches:[]},{...attendance(),punches:[...attendance().punches,...attendance().punches]}]) assert.throws(()=>attendanceBudget(value))
+  assert.equal(attendanceBudget(attendance('08:50','18:31')),480)
+  assert.equal(attendanceBudget({ ...attendance('08:50','18:31'), punches: attendance('08:50','18:31').punches.reverse() }),480)
+  assert.throws(()=>attendanceBudget(attendance('09:01','18:31')))
   for (const changed of [{isNext:true},{outFence:undefined},{outFence:'false'},{realDate:'2026-01-06'}]) {
-    const input=attendance();Object.assign(input.punches[0],changed);assert.throws(()=>attendanceBudget(input,selected))
+    const input=attendance();Object.assign(input.punches[0],changed);assert.throws(()=>attendanceBudget(input))
   }
   assert.equal(apiHours(480),800000);assert.equal(apiHours(30),50000);assert.throws(()=>apiHours(1))
   assert.throws(()=>checkAllocations([{...row,description:'  '}],480,0))
@@ -96,14 +96,14 @@ test('TC-PLUGIN-003/004: service authority survives stale preview and refuses di
   const mem=memory();const now=Date.now()
   mem.data.set('session.ones',JSON.stringify({token:'fixture-access',userId:'user-fixture',label:'虚构',teams:[{id:'team-fixture',name:'虚构团队'}],expiresAt:now+600000}))
   mem.data.set('session.coho',JSON.stringify({token:'fixture-coho',principal:'principal-fixture',label:'虚构',expiresAt:now+600000}))
-  let mutated=0;let total=0;let dayEnd='21:00'
+  let mutated=0;let total=0;let dayEnd='18:31'
   const fetcher:Fetcher=async(url,init={})=>{
     const path=new URL(String(url)).pathname
     if(path.endsWith('/users/me'))return json({uuid:'user-fixture'})
     if(path.endsWith('/info'))return json({timezone:'Asia/Shanghai',workhours_unit:'hour',configs:[{type:'manhour_mode',data:'simple'}]})
     if(path.endsWith('/getCurrentUser'))return json({code:200,data:{tenantCode:'ATS',globalId:'principal-fixture'}})
     if(path.endsWith('/getInfoByDateAndUser'))return json({code:200,data:{kqqsId:'period-fixture',kqqs:'period-label'}})
-    if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'}],dkList:attendance('09:00',dayEnd).punches}})
+    if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'}],dkList:attendance('08:50',dayEnd).punches}})
     const {query}=JSON.parse(String(init.body))
     if(query.includes('mutation')){mutated++;throw Error('test must not write')}
     if(query.includes('PluginTask'))return json({data:{tasks:[{uuid:'task-fixture',number:1,name:'虚构任务',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:'type-fixture',name:'缺陷'},status:{uuid:'status-fixture',name:'待处理'}}]}})
@@ -112,19 +112,19 @@ test('TC-PLUGIN-003/004: service authority survives stale preview and refuses di
   const deps={store:mem.store,vault:mem.vault,protection:async()=>true,fetcher}
   const service=new Workbench(deps)
   await assert.rejects(()=>service.submit('invented',true))
-  await assert.rejects(()=>service.makePreview({dayId:'invented',selection:selected,allocations:[row]}))
+  await assert.rejects(()=>service.makePreview({dayId:'invented',allocations:[row]}))
   const input={team:'team-fixture',date:'2026-01-05',mappingConfirmed:true}
   const day=await service.readDay(input)
-  const preview=await service.makePreview({dayId:day.id,selection:selected,allocations:[row]})
-  assert.equal(preview.budget,600);assert.equal(preview.remaining,120)
+  const preview=await service.makePreview({dayId:day.id,allocations:[row]})
+  assert.equal(preview.budget,480);assert.equal(preview.remaining,0)
   await assert.rejects(()=>service.submit(preview.id,true));assert.equal(mutated,0)
   // The test-only write gate exposes the real write-time revalidation, without a mutation.
   const verified=new Workbench({...deps,writesVerified:true})
-  const day2=await verified.readDay(input);const preview2=await verified.makePreview({dayId:day2.id,selection:selected,allocations:[row]})
+  const day2=await verified.readDay(input);const preview2=await verified.makePreview({dayId:day2.id,allocations:[row]})
   total=300000
   await assert.rejects(()=>verified.submit(preview2.id,true));assert.equal(mutated,0)
   total=0
-  const day3=await verified.readDay(input);const preview3=await verified.makePreview({dayId:day3.id,selection:selected,allocations:[row]})
+  const day3=await verified.readDay(input);const preview3=await verified.makePreview({dayId:day3.id,allocations:[row]})
   dayEnd='20:00'
   await assert.rejects(()=>verified.submit(preview3.id,true));assert.equal(mutated,0)
   await service.logout('coho')
@@ -173,7 +173,7 @@ test('TC-PLUGIN-004-positive: confirmed synthetic batch writes and reads each or
   }
   const service=new Workbench({store:mem.store,vault:mem.vault,protection:async()=>true,fetcher,writesVerified:true})
   const day=await service.readDay({team:'team-fixture',date:'2026-01-05',mappingConfirmed:true})
-  const preview=await service.makePreview({dayId:day.id,selection:selected,allocations:[row,{...row,minutes:120,start:'19:00',description:'另一条虚构描述'}]})
+  const preview=await service.makePreview({dayId:day.id,allocations:[row,{...row,minutes:120,start:'19:00',description:'另一条虚构描述'}]})
   assert.deepEqual(await service.submit(preview.id,true),{count:2})
   assert.equal(writes,2)
   assert.equal(logs[0].startTime,startSeconds('2026-01-05','09:00'))

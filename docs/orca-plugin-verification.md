@@ -538,3 +538,11 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 本机截图（chat-scratch，可能清理）：
   - /Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/calendar-dark.png
   - /Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/calendar-wide.png
+
+### 2026-11-11：正常早到考勤自动识别
+
+- 修正正常出勤上班时间必须恰好 09:00 的错误：两条正常同日打卡，09:00 或更早上班、18:30～21:00 下班自动按原规则折算；08:50～18:31 为 8 小时，早到不额外加时。原 09:15～21:00 例外、晚餐扣除和加班半小时取整保持。
+- 移除正常记录的上下班选择器和人工确认框；PreviewInput 不再传 selection/confirmed 打卡声明。扫描、UI、预览及提交前重读共用 resolveAttendance；缺卡、多卡、跨日、外勤/未知标志、未知迟到/早退仍阻断，不接受勾选绕过。任务及最终提交确认保留，生产写闸未开放。
+- protections 12 项、missing-hours 6 项、hours-request 2 项共 20/20；调整服务fixture后，attendance/service authority/positive 对应4项通过。覆盖早到正常8小时、反序输入自动排序、迟到/早退及异常拒绝、考勤/已有工时变化后拒绝提交、虚构逐笔写入回读。类型检查、diff-check 通过。
+- 实际 HoursView 虚构浏览器交互：08:50—18:31 自动显示8小时，配对选择器和确认框不存在，开始时间自动为08:50，无打卡确认即可生成及预览，生产提交按钮仍禁用。460px截图已打开检查，无遮挡或横向溢出。真实账号未在本次执行扫描或工时写入。
+- 截图本地绝对路径：/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/automatic-attendance.png（虚构渲染预览；chat-scratch可能清理）。

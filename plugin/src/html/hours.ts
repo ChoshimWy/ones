@@ -1,5 +1,5 @@
 import { calendarMonths, hoursCalendar } from './hours-calendar.ts'
-import { attendanceBudget } from '../domain/attendance.ts'
+import { attendanceBudget, resolveAttendance } from '../domain/attendance.ts'
 import { taskDraft, type MissingDay } from '../domain/missing-hours.ts'
 import { safeFailure } from '../domain/model.ts'
 import type { Allocation, Preview, Task, TaskPage } from '../domain/model.ts'
@@ -37,9 +37,6 @@ export class HoursView {
   private next: string | null = null
   private cursors = new Set<string>()
   private selected = ''
-  private startPunch = ''
-  private endPunch = ''
-  private punchesConfirmed = false
   private start = '09:00'
   private minutes = '480'
   private description = ''
@@ -49,9 +46,6 @@ export class HoursView {
     this.day = null
     this.preview = null
     this.confirmed = false
-    this.startPunch = ''
-    this.endPunch = ''
-    this.punchesConfirmed = false
   }
   clear(): void {
     this.clearDay()
@@ -111,6 +105,7 @@ export class HoursView {
         ),
       (day) => {
         this.day = day
+        try { this.start = resolveAttendance(day.attendance).start } catch { /* Anomalous days remain blocked. */ }
       }
     )
   }
@@ -165,8 +160,8 @@ export class HoursView {
     this.app.invalidate()
     try {
       const task = this.tasks.find(t => t.id === this.selected)
-      if (!task || !this.day || this.startPunch === '' || this.endPunch === '') throw new Error()
-      const budget = attendanceBudget(this.day.attendance, { start: Number(this.startPunch), end: Number(this.endPunch), confirmed: this.punchesConfirmed })
+      if (!task || !this.day) throw new Error()
+      const budget = attendanceBudget(this.day.attendance)
       this.allocations.push(taskDraft(task, this.start, Number(this.minutes), this.description, budget, this.day.existing, this.allocations))
       this.description = ''
       this.app.info = '已生成待确认草稿；任务标题不是完成证据，请核对实际时长和描述后预览。'
@@ -183,11 +178,6 @@ export class HoursView {
           'hours.preview',
           {
             dayId: day.id,
-            selection: {
-              start: Number(this.startPunch),
-              end: Number(this.endPunch),
-              confirmed: this.punchesConfirmed
-            },
             allocations: this.allocations
           },
           signal
@@ -271,47 +261,23 @@ export class HoursView {
         chooseDate: date => { this.changeDate(date); this.loadDay() }
       }))
     }
+    let attendanceValid = false
     if (this.day) {
-      const choices = [
-        { value: '', label: '请选择实际记录' },
-        ...this.day.attendance.punches.map((p, index) => ({
-          value: String(index),
-          label: `${p.date} ${p.time}${p.isNext ? ' · 跨日' : ''}${p.outFence !== false ? ' · 外勤标志待核对' : ''}`
-        }))
-      ]
-      const choose = (which: 'start' | 'end', value: string) => {
-        if (which === 'start') {
-          this.startPunch = value
-          const punch = value === '' ? undefined : this.day?.attendance.punches[Number(value)]
-          if (punch) this.start = punch.time
-        }
-        else this.endPunch = value
-        this.punchesConfirmed = false
-        app.invalidate()
-        app.render()
+      try {
+        const calculated = resolveAttendance(this.day.attendance)
+        attendanceValid = true
+        content.append(card('考勤已自动识别',
+          text(this.day.date + ' · ' + calculated.start + '—' + calculated.end),
+          text('折算工时：' + hours(calculated.budget) + ' · 已登记：' + hours(this.day.existing)),
+          text('符合正常考勤规则，无需手动配对或确认。', true)))
+      } catch (error) {
+        content.append(card('考勤异常，暂不可分配',
+          text(this.day.date + ' · ' + this.day.attendance.punches.length + ' 条打卡'),
+          ...this.day.attendance.punches.map(p => text(p.date + ' ' + p.time)),
+          notice(safeFailure(error).message, true)))
       }
-      content.append(
-        card(
-          '核对考勤依据',
-          text(`${this.day.attendance.date} · ${this.day.attendance.punches.length} 条打卡`),
-          select('上班打卡', this.startPunch, choices, (v) => choose('start', v), app.busy),
-          select('下班打卡', this.endPunch, choices, (v) => choose('end', v), app.busy),
-          check(
-            '已核对本人当日上下班记录，无缺卡、跨日或外勤异常',
-            this.punchesConfirmed,
-            (v) => {
-              this.punchesConfirmed = v
-              app.invalidate()
-              app.render()
-            },
-            app.busy
-          ),
-          text('不自动配对；异常记录不默认计 8 小时。', true),
-          text('当日已登记：' + hours(this.day.existing))
-        )
-      )
     } else {
-      content.append(notice('选择日历中的日期，再核对考勤与分配工时。'))
+      content.append(notice('选择日历中的日期，自动识别考勤后分配工时。'))
       content.append(button('恢复草稿', () => this.restore(), app.busy || !authenticated))
       return content
     }
@@ -358,12 +324,12 @@ export class HoursView {
           { multiline: true, disabled: app.busy }
         ),
         button('按所选任务生成草稿', () => this.generate(),
-          app.busy || !this.day || !this.selected || !this.punchesConfirmed || this.startPunch === '' || this.endPunch === ''),
+          app.busy || !attendanceValid || !this.selected),
         text('使用所填时长生成，不自动推断投入；空描述按任务标题建议，提交前须人工确认。', true),
         button(
           '加入分配草稿',
           () => this.add(),
-          app.busy || !this.day || this.allocations.length >= 20
+          app.busy || !attendanceValid || this.allocations.length >= 20
         ),
         text('用整数分钟记录，API 精确编码为 3 分钟的倍数。半小时取整仅用于考勤额度。', true)
       )
@@ -402,9 +368,7 @@ export class HoursView {
           () => this.makePreview(),
           app.busy ||
             !this.day ||
-            !this.punchesConfirmed ||
-            this.startPunch === '' ||
-            this.endPunch === '' ||
+            !attendanceValid ||
             !this.allocations.length
         )
       )

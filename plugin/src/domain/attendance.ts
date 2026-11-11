@@ -1,22 +1,24 @@
 import { type Allocation, type Attendance, type Worklog, requireThat, minuteOfDay, validDate } from './model.ts'
 
-export function attendanceBudget(attendance: Attendance, selected: { start: number; end: number; confirmed: boolean }): number {
+export function resolveAttendance(attendance: Attendance): { start: string; end: string; budget: number } {
   validDate(attendance.date)
-  requireThat(selected.confirmed === true, 'attendance', '请先核对本人考勤与上下班打卡。')
-  requireThat(attendance.punches.length === 2, 'attendance', '缺卡、多次打卡或异常记录尚未支持自动折算，请先核实考勤。')
-  requireThat(Number.isInteger(selected.start) && Number.isInteger(selected.end) && selected.start !== selected.end, 'attendance', '请明确选择上班和下班打卡。')
-  const start = attendance.punches[selected.start]
-  const end = attendance.punches[selected.end]
-  requireThat(start && end, 'attendance', '所选打卡已失效，请重新读取。')
-  for (const punch of [start, end]) {
+  requireThat(attendance.punches.length === 2, 'attendance', '缺卡、多次打卡或异常记录不能自动折算，请先处理考勤异常。')
+  for (const punch of attendance.punches) {
     requireThat(punch.date === attendance.date && punch.realDate === attendance.date && punch.isNext === false, 'attendance', '跨日或日期不明的打卡不能自动折算。')
-    // Unknown types/values must not silently become an in-fence punch.
     requireThat(punch.outFence === false, 'attendance', '外勤标志未知或异常，需先核实接口与考勤。')
+    minuteOfDay(punch.time)
   }
-  const a = minuteOfDay(start.time)
-  const b = minuteOfDay(end.time)
-  requireThat((a === 540 || (a === 555 && b === 1260)) && b >= 1110 && b <= 1260, 'attendance', '此上下班时段不在已确认工时规则内，不能自动套用 8 小时。')
-  return 480 + Math.floor(Math.max(0, b - 1140) / 30) * 30
+  // Exactly two verified same-day punches: ordering is deterministic, never pick
+  // extrema from an ambiguous multi-punch day or trust a caller confirmation flag.
+  const [start, end] = [...attendance.punches].sort((a, b) => a.time.localeCompare(b.time))
+  const a = minuteOfDay(start!.time)
+  const b = minuteOfDay(end!.time)
+  requireThat((a <= 540 || (a === 555 && b === 1260)) && b >= 1110 && b <= 1260, 'attendance', '此上下班时段不在已确认工时规则内，不能自动套用 8 小时。')
+  return { start: start!.time, end: end!.time, budget: 480 + Math.floor(Math.max(0, b - 1140) / 30) * 30 }
+}
+
+export function attendanceBudget(attendance: Attendance): number {
+  return resolveAttendance(attendance).budget
 }
 
 export function apiHours(minutes: number): number {
