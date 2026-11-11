@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { AppError, id, record, requireThat, text, validDate, type Attendance, type Punch } from '../domain/model.ts'
+import { AppError, id, record, requireThat, text, validDate, minuteOfDay, type Attendance, type Punch } from '../domain/model.ts'
 import { COHO, Transport, jsonBody } from './http.ts'
 export type CohoSession = { token: string; principal: string; label: string; expiresAt: number | null }
 const TENANT = 'ATS'
@@ -52,6 +52,35 @@ function signed(data: Record<string, unknown>, token: string) {
   const key = md5(`${token}&${timeStamp}`)
   return { encodeData: randomBytes(6).toString('hex'), timeStamp, data, key, sign: md5(`${key}&${timeStamp}&${JSON.stringify(data)}`) }
 }
+/// 已验证整期覆盖与打卡归属；仅日期可归属的字段异常允许日级隔离。
+type Calendar = { dates: Set<string>; punches: Record<string, unknown>[] }
+
+/// 整体结构或归属不明时停止扫描，不能将未知记录当作无考勤。
+function parseCalendar(value: Record<string, unknown>): Calendar {
+  requireThat(Array.isArray(value.dateList) && Array.isArray(value.dkList), 'schema', 'Coho 考勤日历：dateList 或 dkList 结构无效，已停止整月更新。')
+  try {
+    const dates = new Set(value.dateList.map(day => validDate(record(day).date)))
+    const punches = value.dkList.map(record)
+    for (const punch of punches) {
+      validDate(punch.date)
+    }
+    return { dates, punches }
+  } catch {
+    throw new AppError('schema', 'Coho 考勤日历：dateList.date 或 dkList.date 无法确定打卡归属，已停止整月更新。')
+  }
+}
+
+/// 仅解析明确属于请求日期的字段；错误不含原始值，也不制造默认时间。
+function parsePunch(value: Record<string, unknown>, date: string): Punch {
+  let realDate: string
+  try { realDate = validDate(value.realDate) }
+  catch { throw new AppError('attendance', `${date}：打卡 realDate 缺失或格式无效，不能计算考勤时间。`) }
+  try { minuteOfDay(value.time) }
+  catch { throw new AppError('attendance', `${date}：打卡 time 缺失或格式无效，不能计算考勤时间。`) }
+  requireThat(typeof value.isNext === 'boolean', 'attendance', `${date}：打卡 isNext 缺失或格式无效，不能计算考勤时间。`)
+  return { date, realDate, time: value.time as string, isNext: value.isNext, outFence: typeof value.outFence === 'boolean' ? value.outFence : null }
+}
+
 export class CohoClient {
   constructor(private transport: Transport, readonly session: CohoSession) {}
   async assertIdentity(signal?: AbortSignal): Promise<void> {
@@ -64,7 +93,7 @@ export class CohoClient {
   }
   /// 单次只读同步内复用已明确覆盖日期的整期响应，避免重复下载同一期。
   attendanceReader(): (date: string, signal?: AbortSignal) => Promise<Attendance> {
-    const calendars = new Map<string, Record<string, unknown>>()
+    const calendars = new Map<string, Calendar>()
     let verified = false
     return async (date, signal) => {
       validDate(date)
@@ -73,21 +102,19 @@ export class CohoClient {
         verified = true
       }
       const request = async (path: string, data: Record<string, unknown>) => dataOf(await this.transport.json(path, { ...jsonBody(signed(data, this.session.token)), headers: headers(this.session.token), signal }))
-      let calendar = [...calendars.values()].find(value => Array.isArray(value.dateList) && value.dateList.some(day => record(day).date === date))
+      let calendar = [...calendars.values()].find(value => value.dates.has(date))
       if (!calendar) {
         const period = await request('/gateway/wtspro-attendance/attQishu/getInfoByDateAndUser', { curDate: date, empId: this.session.principal })
-        const kqqs = text(period.kqqs, 100)
+        requireThat(typeof period.kqqs === 'string' && period.kqqs.length > 0 && period.kqqs.length <= 100, 'schema', `Coho 考勤期间查询（${date}）：kqqs 缺失或格式无效，已停止整月更新。`)
+        const kqqs = period.kqqs
         calendar = calendars.get(kqqs)
         if (!calendar) {
-          calendar = await request('/gateway/wtspro-attendance/attSummaryComfirm/attCalendar', { userId: this.session.principal, kqqsId: kqqs, kqqs })
+          calendar = parseCalendar(await request('/gateway/wtspro-attendance/attSummaryComfirm/attCalendar', { userId: this.session.principal, kqqsId: kqqs, kqqs }))
           calendars.set(kqqs, calendar)
         }
       }
-      requireThat(Array.isArray(calendar.dateList) && calendar.dateList.some(v => record(v).date === date) && Array.isArray(calendar.dkList), 'attendance', '考勤响应未覆盖所选日期，不能生成额度。')
-      const punches: Punch[] = calendar.dkList.map(record).filter(v => v.date === date).map(v => {
-        requireThat(typeof v.isNext === 'boolean', 'attendance', '考勤跨日标志不明。')
-        return { date: text(v.date, 10), realDate: text(v.realDate, 10), time: text(v.time, 5), isNext: v.isNext, outFence: typeof v.outFence === 'boolean' ? v.outFence : null }
-      })
+      requireThat(calendar.dates.has(date), 'attendance', `${date}：考勤 dateList 未覆盖该日，覆盖未知，不能计算考勤时间。`)
+      const punches = calendar.punches.filter(value => value.date === date).map(value => parsePunch(value, date))
       requireThat(punches.length > 0, 'no_attendance', '所选日期无打卡记录，禁止默认填入 8 小时。')
       return { date, punches, fetchedAt: Date.now() }
     }

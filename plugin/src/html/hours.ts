@@ -292,7 +292,7 @@ export class HoursView {
           else this.monthErrors.set(month, '云端已更新，但数据库保存失败；重启后需重新查询。')
         } catch (error) {
           if (!current()) return
-          this.monthErrors.set(month, '更新失败，保留本地结果；' + message(error))
+          this.monthErrors.set(month, (this.months.has(month) ? '更新失败，保留本地结果；' : '更新失败，本月尚无本地结果；') + message(error))
         }
         this.scanningMonth = null
         this.showMonth()

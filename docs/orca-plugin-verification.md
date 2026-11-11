@@ -572,3 +572,12 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 覆盖年度跨界/异常月份输入、已齐跳云/强制刷新、SQLite重开与身份隔离、普通任务混入/重复分页拒绝、批量冻结输入/team/身份失效、fake逐日回读、预算或类型变化、未知第二笔阻断重试、后台读取不废弃单日及批量预览、写入期间旧扫描重建及迟到发布竞态、同月正在扫描时强制刷新最终重排。
 - 实际编译后的 `WorkbenchUI` 在 Orca 本地浏览器虚构 host 上操作验证：后台扫描期间月导航/日期/复选仍可用；跨月保留两日选择；普通任务字段；输入值/焦点/光标在后台刷新后保留；编辑时旧预览 DOM 立即移除，旧确认闭包不能提交；生产写闸保持禁用。初次 360px 批量日期输入过窄，已修为响应式双列，最终输入宽度 148px 且值完整，无横向溢出。
 - 截图均实际打开检查，来源为虚构数据渲染预览，不是账号或生产写入证明：`/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/year-calendar-360.png`、同目录 `year-batch-360.png`、`year-batch-1100.png`。360 暗色日历选择和双列输入、1100 浅色统计/批量预览的布局、文字及资源无遮挡；会话缓存可能清理。
+
+### 月度考勤日级解析异常修复（2026-11-11）
+
+- 风险范围：明确归属日期的坏打卡字段不再中断整月；整体结构/身份/网络及分页故障继续 fail-closed。覆盖未知与无考勤不混淆，异常日无额度、不可批选，缺报统计同时列待核实数量，不表示已齐。
+- 定向命令：`ORCA_PLUGIN_TEST_ROOT="$PWD/plugin" node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs --test plugin/tests/coho-day-isolation.test.ts`，21/21 通过。真实 adapter/Workbench/SQLite 合成验证 30 天摘要、坏日期/时间/跨日标志、无打卡与外勤未知、重开与旧缓存保留、正常日期后续预览、异常日期单日及批量拒绝、整级故障不发布；生产写闸不变、无真实业务请求。首轮 auth 场景断言忽略认证失效会清会话，修正为断言未发布且缓存身份读取拒绝后通过。
+- `plugin/node_modules/.bin/tsc -p plugin`、`git diff --check` 通过。仅执行上述受影响测试文件，未跑全套。
+- Orca 本地合成 `WorkbenchUI` 操作：异常日期 2026-04-11 无批选框，点击显示日期和 `realDate` 固定字段错误；正常日期仍能读取。月统计独立显示待核实 1 天。模拟无缓存网络故障显示“本月尚无本地结果”，已有缓存才显示“保留本地结果”。这不证明线上 4 月 11 日具体坏字段是 `realDate`。
+- 1100 与 360px 截图已实际打开：日期/字段错误完整换行、月导航同一行、异常与正常日期区分清晰、统计独立、无横向溢出。来源为本地虚构渲染预览，非真实账号/云端验证。路径：`/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/april-review-1100.png`、同目录 `april-review-360.png`；会话缓存可能清理。
+- 未覆盖：线上异常字段真实形态、修复后正式插件 4 月及另一未缓存月份只读扫描，由 Main 在集成重载后执行；未修改 `writesVerified:false`，未提交工时。

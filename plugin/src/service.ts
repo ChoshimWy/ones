@@ -757,8 +757,8 @@ export class Workbench {
           requireThat(attendance.date === date, 'schema', '考勤日期不匹配。')
           days.push(classifyDay(attendance, existing))
         } catch (error) {
-          // Only an explicitly covered day with zero punches is exempt. Unknown coverage
-          // and malformed punches remain review items; transport failures abort the scan.
+          // Only an explicitly covered day with zero punches is exempt. A requested-day
+          // coverage gap or attributable field error needs review; unassignable structure aborts the scan.
           if (!(error instanceof AppError)) throw error
           if (error.code === 'no_attendance') {
             days.push(classifyDay({ date, punches: [], fetchedAt: Date.now() }, existing))
