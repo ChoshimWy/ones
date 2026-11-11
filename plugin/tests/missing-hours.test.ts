@@ -19,6 +19,11 @@ test('missing hours: calendar-month bounds and current day are explicit', () => 
   assert.throws(() => monthDates('2026-04', now))
 })
 test('missing hours: absent, partial, covered and ambiguous attendance remain distinct', () => {
+  const overtime = { ...attendance, punches: attendance.punches.map((p, i) => ({ ...p, time: i === 0 ? '21:02' : '08:53' })) }
+  assert.equal(classifyDay(overtime, 0).budget, 600)
+  assert.equal(classifyDay(overtime, 0).state, 'missing')
+  assert.equal(classifyDay(overtime, 480).remaining, 120)
+  assert.equal(classifyDay(overtime, 600).state, 'covered')
   assert.equal(classifyDay(attendance, 0).state, 'missing')
   assert.equal(classifyDay(attendance, 120).remaining, 360)
   assert.deepEqual(classifyDay(attendance, 120).attendanceTime, { start: '09:00', end: '18:30' })

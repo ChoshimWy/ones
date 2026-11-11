@@ -554,3 +554,10 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 实际 WorkbenchUI 虚构数据浏览器旅程通过：进入自动加载、切月读取、离线保留缓存、快速切月迟到响应丢弃、退出取消、重新进入当月、选日自动读任务。未访问真实业务账号，不能代证真实整月查询性能或生产写入。
 - 月份导航改为同一行三列布局（左上一月、中央年月、右下一月）；360px 和 1100px 几何断言显示三者纵向中心一致、无横向溢出。已实际打开检查两个尺寸截图：文字不截断、无遮挡，年月居中。布局修改后重跑 hours-calendar 2 个定向用例及类型检查通过，未重复无关测试。
 - 虚构数据渲染截图：`/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/month-navigation-360.png`、同目录 `month-navigation-1100.png`；属于本机会话证据，可能随缓存清理。此前深浅色检查与生命周期证据复用；截图不作为真实账户或业务写入验收。
+
+### 同日加班从 19:00 起按半小时取整（2026-11-11）
+
+- 取消正常同日出勤的 21:00 下班上限：基础 8 小时，19:00 起每满半小时计入，不足半小时舍弃；不封顶 10 小时。迟到既有例外不扩展，缺卡、多卡、跨日、外勤与未明确日期保护保持。
+- 月度缓存命名空间升级，旧规则生成的异常摘要不再被读取，下一次打开月份重新查询；不删除历史数据库文件。
+- TypeScript 与 diff-check 通过；protections 的 TC-PLUGIN-003/004 选择器 5 项、missing-hours 的分类与缓存隔离选择器 2 项通过。覆盖 18:30/19:00/19:29/19:30、20:00、21:02/21:29/21:30、22:00、23:59，及权威预览、提交前重读、虚构写入回读。未运行全量测试，未写入真实工时。
+- 实际 WorkbenchUI 渲染预览输入虚构打卡 08:53～21:02，操作选日后显示“考勤已自动识别”“折算工时：10 小时”；截图已打开检查，卡片文字完整，无异常提示和遮挡。截图：`/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/overtime-2102.png`。此为虚构数据渲染及交互证据，会话缓存可能清理，不代证真实接口/工时写入。

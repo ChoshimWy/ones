@@ -13,7 +13,7 @@ export function resolveAttendance(attendance: Attendance): { start: string; end:
   const [start, end] = [...attendance.punches].sort((a, b) => a.time.localeCompare(b.time))
   const a = minuteOfDay(start!.time)
   const b = minuteOfDay(end!.time)
-  requireThat((a <= 540 || (a === 555 && b === 1260)) && b >= 1110 && b <= 1260, 'attendance', '此上下班时段不在已确认工时规则内，不能自动套用 8 小时。')
+  requireThat((a <= 540 || (a === 555 && b === 1260)) && b >= 1110, 'attendance', '此上下班时段不在已确认工时规则内，不能自动折算。')
   return { start: start!.time, end: end!.time, budget: 480 + Math.floor(Math.max(0, b - 1140) / 30) * 30 }
 }
 

@@ -575,7 +575,7 @@ export class Workbench {
     return { input: { ...input }, data, identity, stamp }
   }
   private hoursCacheScope(team: string): string {
-    return digest(['hours-v1', team, this.ones(team).session.userId, this.coho().session.principal])
+    return digest(['hours-v2', team, this.ones(team).session.userId, this.coho().session.principal])
   }
   async cachedHours(team: string, month: string): Promise<HoursMonth | null> {
     monthDates(month)

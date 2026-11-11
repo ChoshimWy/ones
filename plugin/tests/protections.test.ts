@@ -21,9 +21,10 @@ const attendance = (start='09:00', end='21:00'): Attendance => ({ date:'2026-01-
 const row = {taskId:'task-fixture',start:'09:00',minutes:480,description:'虚构测试工作说明'}
 
 test('TC-PLUGIN-003: attendance boundaries and no attendance bypass', () => {
-  for (const [end,minutes] of [['18:30',480],['19:29',480],['19:30',510],['19:59',510],['20:00',540],['20:29',540],['20:30',570],['21:00',600]] as const) assert.equal(attendanceBudget(attendance('09:00',end)),minutes)
+  for (const [end,minutes] of [['18:30',480],['18:59',480],['19:00',480],['19:29',480],['19:30',510],['19:59',510],['20:00',540],['20:29',540],['20:30',570],['21:00',600],['21:02',600],['21:29',600],['21:30',630],['21:59',630],['22:00',660],['23:59',750]] as const) assert.equal(attendanceBudget(attendance('09:00',end)),minutes)
   assert.equal(attendanceBudget(attendance('09:15','21:00')),600)
-  for (const value of [attendance('09:15','20:00'),attendance('09:00','18:29'),attendance('09:00','21:01'),{...attendance(),punches:[]},{...attendance(),punches:[...attendance().punches,...attendance().punches]}]) assert.throws(()=>attendanceBudget(value))
+  for (const value of [attendance('09:15','20:00'),attendance('09:00','18:29'),{...attendance(),punches:[]},{...attendance(),punches:[...attendance().punches,...attendance().punches]}]) assert.throws(()=>attendanceBudget(value))
+  assert.equal(attendanceBudget(attendance('08:53','21:02')),600)
   assert.equal(attendanceBudget(attendance('08:50','18:31')),480)
   assert.equal(attendanceBudget({ ...attendance('08:50','18:31'), punches: attendance('08:50','18:31').punches.reverse() }),480)
   assert.throws(()=>attendanceBudget(attendance('09:01','18:31')))
@@ -161,7 +162,7 @@ test('TC-PLUGIN-004-positive: confirmed synthetic batch writes and reads each or
     if(path.endsWith('/info'))return json({timezone:'Asia/Shanghai',workhours_unit:'hour',configs:[{type:'manhour_mode',data:'simple'}]})
     if(path.endsWith('/getCurrentUser'))return json({code:200,data:{tenantCode:'ATS',globalId:'principal-fixture'}})
     if(path.endsWith('/getInfoByDateAndUser'))return json({code:200,data:{kqqsId:'period-fixture',kqqs:'period-label'}})
-    if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'}],dkList:attendance().punches}})
+    if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'}],dkList:attendance('08:53','21:02').punches}})
     const {query,variables:v}=JSON.parse(String(init.body))
     if(query.includes('PluginAdd')){
       writes++;const key=`log-${writes}`;logs.push({key,hours:v.hours,startTime:v.start_time,type:v.type,description:v.description,owner:{uuid:v.owner},task:{uuid:v.task}})
@@ -174,6 +175,7 @@ test('TC-PLUGIN-004-positive: confirmed synthetic batch writes and reads each or
   const service=new Workbench({store:mem.store,vault:mem.vault,protection:async()=>true,fetcher,writesVerified:true})
   const day=await service.readDay({team:'team-fixture',date:'2026-01-05'})
   const preview=await service.makePreview({dayId:day.id,allocations:[row,{...row,minutes:120,start:'19:00',description:'另一条虚构描述'}]})
+  assert.equal(preview.budget,600)
   assert.deepEqual(await service.submit(preview.id,true),{count:2})
   assert.equal(writes,2)
   assert.equal(logs[0].startTime,startSeconds('2026-01-05','09:00'))
@@ -286,7 +288,7 @@ test('TC-PLUGIN-003-self-attendance: ATS binds employee and period to authoritat
       return json({code:200,data:missingPeriod?{}:{kqqs:'period-fixture'}})
     }
     assert.deepEqual(data,{userId:'principal-fixture',kqqsId:'period-fixture',kqqs:'period-fixture'})
-    return json({code:200,data:{dateList:[{date:'2026-01-05'}],dkList:attendance().punches}})
+    return json({code:200,data:{dateList:[{date:'2026-01-05'}],dkList:attendance('08:53','21:02').punches}})
   }),{token:'fixture-coho',principal:'principal-fixture',label:'虚构',expiresAt:Date.now()+60000})
   assert.equal((await client.attendance('2026-01-05')).punches.length,2)
   missingPeriod=true;await assert.rejects(()=>client.attendance('2026-01-05'))
