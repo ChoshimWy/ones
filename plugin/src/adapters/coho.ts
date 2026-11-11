@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { id, record, requireThat, text, validDate, type Attendance, type Punch } from '../domain/model.ts'
+import { AppError, id, record, requireThat, text, validDate, type Attendance, type Punch } from '../domain/model.ts'
 import { COHO, Transport, jsonBody } from './http.ts'
 export type CohoSession = { token: string; principal: string; label: string; expiresAt: number | null }
 const TENANT = 'ATS'
@@ -15,6 +15,9 @@ function headers(token?: string): Record<string, string> {
   }
 }
 function dataOf(result: Record<string, unknown>): Record<string, unknown> {
+  // The official ATS client treats JSON code 401 as revoked authentication,
+  // even when HTTP itself succeeded. Never treat ordinary business errors as logout.
+  if (result.code === 401 || result.code === '401') throw new AppError('auth', 'Coho 认证已失效，请重新登录。')
   requireThat(result.code === 200, 'coho', 'Coho 认证或业务校验未通过，请重新核对账号和租户。')
   return record(result.data)
 }
@@ -23,16 +26,25 @@ export async function loginCoho(transport: Transport, account: string, password:
   // Instance-specific ATS encoding, not a default for other tenants.
   const credential = createHash('sha1').update(password, 'utf8').digest('hex').toUpperCase()
   const init = jsonBody({ sign: '', timeStamp: '', data: { tenantCode: TENANT, identifier: account, credential } })
+  const requestedAt = Date.now()
   const result = dataOf(await transport.json('/gateway/auth/account/requestToken', { ...init, headers: headers(), signal }))
   const token = text(result.token, 16000)
+  // Verified official login client: Date.now() + expTime * 1000.
+  // Older/missing expiry stays unknown; never manufacture a refresh token or TTL.
+  let expiresAt: number | null = null
+  if (result.expTime !== undefined && result.expTime !== null) {
+    const seconds = typeof result.expTime === 'string' && /^\d+$/.test(result.expTime)
+      ? Number(result.expTime) : result.expTime
+    requireThat(typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 && Number.isSafeInteger(requestedAt + seconds * 1000), 'auth_contract', 'Coho 令牌有效期格式无效，未保存会话。')
+    expiresAt = requestedAt + seconds * 1000
+  }
   const user = dataOf(await transport.json('/gateway/auth/user/getCurrentUser', { headers: headers(token), signal }))
   requireThat(user.tenantCode === TENANT, 'identity', 'Coho 租户与配置不一致。')
   // ATS WorkbenchCalendar uses this authenticated USER_INFO.globalId as its employee key.
   // Verified from the instance frontend; not a rule for other tenants.
   const principal = id(user.globalId)
-  // expTime units/refresh semantics are not verified. Do not invent a local TTL.
-  // Every attendance read validates this token and tenant with the server first.
-  return { token, principal, label: `Coho · ${TENANT}`, expiresAt: null }
+  // Every attendance read still checks server identity; no verified renewal API exists.
+  return { token, principal, label: `Coho · ${TENANT}`, expiresAt }
 }
 function signed(data: Record<string, unknown>, token: string) {
   const timeStamp = Math.round(Date.now() / 1000)

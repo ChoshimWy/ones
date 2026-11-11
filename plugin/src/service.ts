@@ -7,7 +7,7 @@ import { apiHours, attendanceBudget, checkAllocations, existingMinutes, startSec
 import { Submission, assertNoPending, createReceipt, parseReceipts, protectedDayHash, receiptCandidates, type Ledger, type Receipt } from './domain/submission.ts'
 import { type Day, type DayInput, type Draft, type ImplementationBrief, type LoginInput, type PreviewInput, type PendingWrite, type RecoveryPreview } from './protocol.ts'
 import { COHO, ONES, Transport, type Fetcher } from './adapters/http.ts'
-import { loginOnes, type OnesSession } from './adapters/ones-auth.ts'
+import { refreshOnes, loginOnes, type OnesSession } from './adapters/ones-auth.ts'
 import { CohoClient, loginCoho, type CohoSession } from './adapters/coho.ts'
 import { OnesClient, worklogWriter } from './adapters/ones.ts'
 import { BugMediaStore } from './adapters/bug-media.ts'
@@ -17,6 +17,7 @@ import type { BugContent } from './domain/bug-content.ts'
 export interface Store { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void>; delete(key: string): Promise<void> }
 export interface Vault { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; delete(key: string): Promise<void> }
 export interface Dependencies { store: Store; vault: Vault; protection(): Promise<boolean>; fetcher?: Fetcher; writesVerified?: boolean }
+type SavedLogin = { account: string; password: string; principal: string; httpAcknowledged: boolean; paused: boolean; retryAfter: number }
 type Snapshot = { input: DayInput; data: Day; identity: string; stamp: string }
 type Confirmation = { view: Preview; snapshot: Snapshot; input: PreviewInput; identity: string }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -24,6 +25,9 @@ const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(va
 export class Workbench {
   private sessions: { ones?: OnesSession; coho?: CohoSession } = {}
   private epochs = { ones: 0, coho: 0 }
+  private saved: Partial<Record<Site, SavedLogin>> = {}
+  private manualLogins: Partial<Record<Site, number>> = {}
+  private autoFlights: Partial<Record<Site, { epoch: number; promise: Promise<void>; controller: AbortController }>> = {}
   private authQueues: Record<Site, Promise<unknown>> = { ones: Promise.resolve(), coho: Promise.resolve() }
   private ready?: Promise<void>
   private day?: Snapshot
@@ -46,15 +50,166 @@ export class Workbench {
     })
     return this.ready
   }
+  private renewal?: { session: OnesSession; epoch: number; promise: Promise<void> }
+  private async ensureOnesReady(): Promise<void> {
+    await this.ensureReady()
+    try { await this.renewOnes() } catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'auth' || !this.saved.ones) throw error
+    }
+    if (!this.connected('ones')) await this.autoLogin('ones')
+  }
+  private async ensureCohoReady(): Promise<void> {
+    await this.ensureReady()
+    if (!this.connected('coho')) await this.autoLogin('coho')
+  }
+  private connected(site: Site): boolean {
+    const session = this.sessions[site]
+    return !!session && (session.expiresAt === null || session.expiresAt > Date.now())
+  }
+  private principal(site: Site, session: OnesSession | CohoSession): string {
+    return site === 'ones' ? (session as OnesSession).userId : (session as CohoSession).principal
+  }
+  private stopAutoLogin(site: Site): void {
+    ++this.epochs[site]
+    this.autoFlights[site]?.controller.abort()
+    this.invalidate()
+  }
+  private async autoLogin(site: Site): Promise<void> {
+    requireThat(this.manualLogins[site] === undefined, 'auto_login', '正在手动登录，未使用旧凭据自动登录。')
+    const epoch = this.epochs[site]
+    const existing = this.autoFlights[site]
+    if (existing?.epoch === epoch) return existing.promise
+    let saved = this.saved[site]
+    if (!saved) return
+    requireThat(!saved.paused, 'auto_login', '自动登录已暂停，请手动登录以更新保存的凭据。')
+    requireThat(saved.retryAfter <= Date.now(), 'auto_login', '自动登录暂缓，请稍后重试。')
+    const controller = new AbortController()
+    const current = () => this.epochs[site] === epoch && this.saved[site] === saved && !controller.signal.aborted
+    const promise = (async () => {
+      try {
+        requireThat(await this.deps.protection(), 'secrets', '系统安全凭证存储不可用，未发送保存的密码。')
+        await this.queue(site, async () => {
+          requireThat(current(), 'cancelled', '自动登录已取消。')
+          // A persisted claim prevents worker restarts from retrying an uncertain password attempt.
+          const claimed = { ...saved!, paused: true, retryAfter: 0 }
+          await this.deps.vault.set(`credentials.${site}`, JSON.stringify(claimed))
+          requireThat(current(), 'cancelled', '自动登录已取消。')
+          this.saved[site] = saved = claimed
+        })
+        requireThat(current(), 'cancelled', '自动登录已取消。')
+        const session = site === 'ones'
+          ? await loginOnes(this.onesTransport, saved!.account, saved!.password, saved!.httpAcknowledged, controller.signal)
+          : await loginCoho(this.cohoTransport, saved!.account, saved!.password, controller.signal)
+        requireThat(this.principal(site, session) === saved!.principal, 'identity', '自动登录身份与保存凭据不一致，请手动登录。')
+        await this.queue(site, async () => {
+          requireThat(current(), 'cancelled', '自动登录已取消。')
+          const enabled = { ...saved!, paused: false, retryAfter: 0 }
+          await this.persistLogin(site, session, enabled, current)
+          this.saved[site] = saved = enabled
+          if (site === 'ones') this.sessions.ones = session as OnesSession
+          else this.sessions.coho = session as CohoSession
+          ++this.epochs[site]
+          this.invalidate()
+        })
+      } catch (error) {
+        if (current()) {
+          await this.queue(site, async () => {
+            if (!current()) return
+            if (error instanceof AppError && error.code === 'secrets') {
+              // Protection unavailable: do not rewrite any password-bearing record.
+              this.saved[site] = saved = { ...saved!, paused: true }
+              return
+            }
+            const transient = error instanceof AppError && ['network', 'rate_limit'].includes(error.code)
+            const failed = { ...saved!, paused: !transient, retryAfter: transient ? Date.now() + 60000 : 0 }
+            await this.deps.vault.set(`credentials.${site}`, JSON.stringify(failed))
+            if (current()) this.saved[site] = saved = failed
+          })
+        }
+        throw new AppError('auto_login', '自动登录未完成，请检查连接；密码错误、验证码或账号锁定请手动处理。')
+      }
+    })()
+    const flight = { epoch, promise, controller }
+    this.autoFlights[site] = flight
+    try { await promise } finally { if (this.autoFlights[site] === flight) delete this.autoFlights[site] }
+  }
+  // Vault has no multi-key transaction. Publish memory only after both writes; on
+  // cancellation/failure restore the previous pair under the same per-site queue.
+  private async persistLogin(site: Site, session: OnesSession | CohoSession, saved: SavedLogin | undefined, current: () => boolean): Promise<void> {
+    const sessionKey = `session.${site}`, savedKey = `credentials.${site}`
+    const oldSession = await this.deps.vault.get(sessionKey), oldSaved = await this.deps.vault.get(savedKey)
+    requireThat(current(), 'cancelled', '登录已取消。')
+    try {
+      await this.deps.vault.set(sessionKey, JSON.stringify(session))
+      if (saved) await this.deps.vault.set(savedKey, JSON.stringify(saved))
+      else await this.deps.vault.delete(savedKey)
+      requireThat(current(), 'cancelled', '登录已取消，未保留该次凭据。')
+    } catch (error) {
+      await this.restoreVault(sessionKey, oldSession)
+      await this.restoreVault(savedKey, oldSaved)
+      throw error
+    }
+  }
+  private async restoreVault(key: string, value: string | null): Promise<void> {
+    if (value === null) await this.deps.vault.delete(key)
+    else await this.deps.vault.set(key, value)
+  }
+  private async renewOnes(): Promise<void> {
+    const session = this.sessions.ones, epoch = this.epochs.ones
+    if (!session?.refreshToken || session.expiresAt > Date.now() + 60000) return
+    if (this.renewal?.session === session && this.renewal.epoch === epoch) return this.renewal.promise
+    const current = () => this.sessions.ones === session && this.epochs.ones === epoch
+    const promise = (async () => {
+      try {
+        requireThat(await this.deps.protection(), 'secrets', '系统安全凭证存储不可用，未发送续期令牌。')
+        const renewed = await refreshOnes(this.onesTransport, session)
+        await this.queue('ones', async () => {
+          requireThat(current(), 'stale', '续期期间账号已变化。')
+          await this.deps.vault.set('session.ones', JSON.stringify(renewed))
+          // Logout/login can advance the epoch while the vault write is pending.
+          if (!current()) {
+            await this.deps.vault.set('session.ones', JSON.stringify(session))
+            throw new AppError('stale', '续期期间账号已变化。')
+          }
+          this.sessions.ones = renewed
+        })
+      } catch (error) {
+        if (error instanceof AppError && error.code === 'auth') {
+          await this.queue('ones', async () => {
+            if (!current()) return
+            ++this.epochs.ones
+            delete this.sessions.ones
+            this.invalidate()
+            await this.deps.vault.delete('session.ones')
+          })
+        }
+        throw error
+      }
+    })()
+    const flight = { session, epoch, promise }
+    this.renewal = flight
+    try { await promise } finally { if (this.renewal === flight) this.renewal = undefined }
+  }
   private async restore(): Promise<void> {
     const restored: typeof this.sessions = {}
+    const saved: typeof this.saved = {}
     for (const site of ['ones', 'coho'] as const) {
+      const credentials = await this.deps.vault.get(`credentials.${site}`)
+      if (credentials) {
+        try {
+          const value = record(JSON.parse(credentials))
+          text(value.account, 254); text(value.password, 256); id(value.principal)
+          requireThat(typeof value.httpAcknowledged === 'boolean' && (site !== 'ones' || value.httpAcknowledged === true) && typeof value.paused === 'boolean' && typeof value.retryAfter === 'number' && Number.isSafeInteger(value.retryAfter) && value.retryAfter >= 0, 'schema', '保存的登录选项无效。')
+          saved[site] = value as SavedLogin
+        } catch { /* Malformed saved credentials are never sent. */ }
+      }
       const raw = await this.deps.vault.get(`session.${site}`)
       if (!raw) continue
       try {
         const stored = record(JSON.parse(raw)); text(stored.token, 16000); text(stored.label)
         requireThat((site === 'coho' && stored.expiresAt === null) || (typeof stored.expiresAt === 'number' && Number.isFinite(stored.expiresAt)), 'schema', '保存的有效期格式无效。')
         if (site === 'ones') {
+          if (stored.refreshToken !== undefined) text(stored.refreshToken, 16000)
           id(stored.userId); requireThat(Array.isArray(stored.teams), 'schema', '团队信息无效。')
           stored.teams.forEach(t => { id(record(t).id); text(record(t).name) })
           restored.ones = stored as unknown as OnesSession
@@ -64,6 +219,7 @@ export class Workbench {
       }
     }
     this.sessions = restored
+    this.saved = saved
   }
   private queue<T>(site: Site, action: () => Promise<T>): Promise<T> {
     const next = this.authQueues[site].then(action, action)
@@ -76,41 +232,68 @@ export class Workbench {
   }
   async status(): Promise<Status> {
     await this.ensureReady()
-    const ones = this.sessions.ones; const coho = this.sessions.coho
-    return { ones: { connected: !!ones && ones.expiresAt > Date.now(), label: ones?.label ?? '未登录' }, coho: { connected: !!coho && (coho.expiresAt === null || coho.expiresAt > Date.now()), label: coho?.label ?? '未登录' }, teams: ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, blockers: ['工时写入尚待插件端到端验证，当前仅开放预览。', 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建与内容修改尚未开放；状态更新按详情中的独立能力闸与字段配置校验，工时写闸不受影响。'] }
+    // Status must still be available after a failed automatic attempt.
+    await Promise.allSettled([this.ensureOnesReady(), this.ensureCohoReady()])
+    return this.statusView()
+  }
+  private statusView(): Status {
+    const connection = (site: Site) => {
+      const saved = this.saved[site]
+      return { connected: this.connected(site), label: this.sessions[site]?.label ?? '未登录',
+        ...(saved ? { savedLogin: { account: saved.account, paused: saved.paused, retryAfter: saved.retryAfter } } : {}) }
+    }
+    return { identity: this.identity(), ones: connection('ones'), coho: connection('coho'), teams: this.sessions.ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, blockers: ['工时写入尚待插件端到端验证，当前仅开放预览。', 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建与内容修改尚未开放；状态更新按详情中的独立能力闸与字段配置校验，工时闸不受影响。'] }
   }
   async login(input: LoginInput, signal?: AbortSignal): Promise<Status> {
     await this.ensureReady()
     requireThat(input.site === 'ones' || input.site === 'coho', 'input', '登录站点无效。')
-    const site = input.site; const epoch = ++this.epochs[site]
-    this.invalidate()
+    requireThat(input.remember === undefined || typeof input.remember === 'boolean', 'input', '保存登录选项无效。')
+    const site = input.site
+    this.stopAutoLogin(site)
+    const epoch = this.epochs[site]
     const account = text(input.account, 254).trim(); let password = text(input.password, 256)
+    this.manualLogins[site] = epoch
     try {
       requireThat(await this.deps.protection(), 'secrets', '系统安全凭证存储不可用，未发送密码。')
       const session = site === 'ones' ? await loginOnes(this.onesTransport, account, password, input.httpAcknowledged, signal) : await loginCoho(this.cohoTransport, account, password, signal)
       await this.queue(site, async () => {
-        requireThat(this.epochs[site] === epoch && !signal?.aborted, 'cancelled', '登录已取消或身份已切换。')
-        const previous = await this.deps.vault.get(`session.${site}`)
-        await this.deps.vault.set(`session.${site}`, JSON.stringify(session))
-        if (this.epochs[site] !== epoch || signal?.aborted) {
-          if (previous === null) await this.deps.vault.delete(`session.${site}`)
-          else await this.deps.vault.set(`session.${site}`, previous)
-          throw new AppError('cancelled', '登录已取消，未保留该次令牌。')
-        }
+        const current = () => this.epochs[site] === epoch && !signal?.aborted
+        requireThat(current(), 'cancelled', '登录已取消或身份已切换。')
+        const saved = input.remember === true ? { account, password, principal: this.principal(site, session), httpAcknowledged: site === 'ones' && input.httpAcknowledged === true, paused: false, retryAfter: 0 } : undefined
+        await this.persistLogin(site, session, saved, current)
+        if (saved) this.saved[site] = saved
+        else delete this.saved[site]
         ++this.epochs[site]
         this.invalidate()
         if (site === 'ones') this.sessions.ones = session as OnesSession
         else this.sessions.coho = session as CohoSession
       })
-      return this.status()
-    } finally { password = ''; input.password = '' }
+      return this.statusView()
+    } finally {
+      password = ''; input.password = ''
+      if (this.manualLogins[site] === epoch) delete this.manualLogins[site]
+    }
+  }
+  async forgetLogin(site: Site): Promise<Status> {
+    await this.ensureReady()
+    requireThat(site === 'ones' || site === 'coho', 'input', '站点无效。')
+    this.stopAutoLogin(site)
+    delete this.saved[site]
+    await this.queue(site, () => this.deps.vault.delete(`credentials.${site}`))
+    return this.statusView()
   }
   async logout(site: Site): Promise<Status> {
     await this.ensureReady()
     requireThat(site === 'ones' || site === 'coho', 'input', '站点无效。')
-    ++this.epochs[site]; delete this.sessions[site]; this.invalidate()
-    await this.queue(site, () => this.deps.vault.delete(`session.${site}`))
-    return this.status()
+    this.stopAutoLogin(site)
+    delete this.sessions[site]
+    delete this.saved[site]
+    await this.queue(site, async () => {
+      // Remove the reusable password first; no logout can silently re-enable it.
+      await this.deps.vault.delete(`credentials.${site}`)
+      await this.deps.vault.delete(`session.${site}`)
+    })
+    return this.statusView()
   }
   private ones(team: string): OnesClient {
     const session = this.sessions.ones
@@ -129,16 +312,21 @@ export class Workbench {
         await this.queue(site, async () => {
           if (this.epochs[site] !== epoch || this.sessions[site] !== session) return
           ++this.epochs[site]
-          delete this.sessions[site]
           this.invalidate()
-          await this.deps.vault.delete(`session.${site}`)
+          if (site === 'ones' && this.sessions.ones?.refreshToken) {
+            this.sessions.ones = { ...this.sessions.ones, expiresAt: 0 }
+            await this.deps.vault.set('session.ones', JSON.stringify(this.sessions.ones))
+          } else {
+            delete this.sessions[site]
+            await this.deps.vault.delete(`session.${site}`)
+          }
         })
       }
       throw error
     }
   }
   async bugStatuses(team: string, signal?: AbortSignal) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     return this.authenticated('ones', async () => {
       const identity = this.identity()
       const client = this.ones(team)
@@ -149,7 +337,7 @@ export class Workbench {
     })
   }
   async bugs(team: string, after = '', signal?: AbortSignal) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     return this.authenticated('ones', async () => {
       const identity = this.identity()
       const client = this.ones(team)
@@ -160,7 +348,7 @@ export class Workbench {
     })
   }
   async tasks(team: string, after = '', signal?: AbortSignal) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     return this.authenticated('ones', async () => {
       const identity = this.identity(); const client = this.ones(team)
       await client.assertIdentity(signal)
@@ -180,7 +368,7 @@ export class Workbench {
     media.allow(content.flatMap(block => block.kind === 'media' ? [block.resourceId] : []))
   }
   async bugDetail(team: string, taskId: string, signal?: AbortSignal, requestId?: string): Promise<BugDetail & {detailId:string}> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     this.closeDetail()
     if (requestId !== undefined) this.detailRequest = id(requestId)
     const epoch = this.detailEpoch
@@ -206,7 +394,7 @@ export class Workbench {
     })
   }
   async projectFilter(team: string, localProject: Option | null, projects: Option[]) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     const client = this.ones(team), identity = this.identity()
     requireThat(Array.isArray(projects) && projects.length <= 2000, 'input', '项目筛选范围过大。')
     const candidates = projects.map(p => ({ id: id(p.id), name: text(p.name, 500) }))
@@ -225,7 +413,7 @@ export class Workbench {
   }
   /// 本地缓存只绑定仍有效的登录身份；首屏不联网，所有远端动作另外鉴权。
   async repairCacheContext(team: string, signal?: AbortSignal) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     const identity = this.identity(), client = this.ones(team)
     const check = () => {
       signal?.throwIfAborted()
@@ -235,7 +423,7 @@ export class Workbench {
     return { scope: this.scope(client), check }
   }
   async repairListContext(team: string, signal?: AbortSignal) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     const identity = this.identity(), client = this.ones(team)
     const check = () => {
       signal?.throwIfAborted()
@@ -262,7 +450,7 @@ export class Workbench {
   }
   /// 状态业务上下文固定在当前详情，关闭或切身份立即撤销未发送确认。
   async transitionContext(detailId: string) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     const detail = this.currentDetail(detailId), client = this.ones(detail.team)
     await client.assertIdentity()
     const check = () => { requireThat(this.currentDetail(detailId) === detail, 'stale', '详情或身份已变化，请重新打开。') }
@@ -273,7 +461,7 @@ export class Workbench {
     return { scope: this.scope(client), task, adapter: new OnesTransitions(this.onesTransport, client.session, detail.team), check }
   }
   async repairContext(detailId: string) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     const detail = this.currentDetail(detailId)
     const client = this.ones(detail.team)
     await client.assertIdentity()
@@ -281,7 +469,7 @@ export class Workbench {
     return { scope: this.scope(client), task: detail.view.task }
   }
   async collectRepair(detailId: string, signal?: AbortSignal) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     const detail = this.currentDetail(detailId)
     const client = this.ones(detail.team)
     const check = () => {
@@ -320,7 +508,7 @@ export class Workbench {
     return detail
   }
   async detailComments(detailId: string, before: number | undefined, signal?: AbortSignal): Promise<DetailPage<Discussion>> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     return this.authenticated('ones',async()=>{
       const detail = this.currentDetail(detailId)
       const client = this.ones(detail.team)
@@ -335,7 +523,7 @@ export class Workbench {
     })
   }
   async detailAttachments(detailId: string, before: number | undefined, signal?: AbortSignal): Promise<DetailPage<Attachment>> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     return this.authenticated('ones',async()=>{
       const detail = this.currentDetail(detailId)
       const client = this.ones(detail.team)
@@ -350,7 +538,7 @@ export class Workbench {
     })
   }
   async detailMedia(detailId: string, resourceId: string, offset: number, signal?: AbortSignal) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     return this.authenticated('ones',async()=>{
       const detail = this.currentDetail(detailId)
       const result = await detail.media.read(detailId,resourceId,offset,signal)
@@ -359,7 +547,7 @@ export class Workbench {
     })
   }
   async brief(team: string, taskId: string, signal?: AbortSignal): Promise<ImplementationBrief> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     return this.authenticated('ones', async () => {
       const identity = this.identity(); const client = this.ones(team)
       await client.assertIdentity(signal); const task = await client.task(taskId, signal)
@@ -384,13 +572,15 @@ export class Workbench {
     return { input: { ...input }, data, identity, stamp }
   }
   async readDay(input: DayInput, signal?: AbortSignal): Promise<Day> {
-    await this.ensureReady(); this.invalidate()
+    await this.ensureOnesReady()
+    await this.ensureCohoReady()
+    this.invalidate()
     const snapshot = await this.fetchDay(input, signal)
     this.day = snapshot
     return snapshot.data
   }
   async makePreview(input: PreviewInput, signal?: AbortSignal): Promise<Preview> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     const snapshot = this.day
     requireThat(snapshot && snapshot.data.id === input.dayId && snapshot.identity === this.identity() && Date.now() - snapshot.data.attendance.fetchedAt < 300000, 'stale', '考勤或身份已过期，请重新读取。')
     const budget = attendanceBudget(snapshot.data.attendance, input.selection)
@@ -408,7 +598,7 @@ export class Workbench {
     return view
   }
   async submit(previewId: string, confirmed: boolean): Promise<{ count: number }> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     requireThat(this.deps.writesVerified === true, 'not_verified', '插件工时写入尚未完成端到端验证，当前禁止提交。')
     requireThat(!this.writeBusy, 'busy', '另一个写入尚未结束。'); this.writeBusy = true
     try {
@@ -445,7 +635,7 @@ export class Workbench {
   }
   private scope(client: OnesClient): string { return digest([ONES, client.team, client.session.userId]) }
   async worklogs(team: string, date: string, signal?: AbortSignal): Promise<Worklog[]> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     validDate(date)
     return this.authenticated('ones', async () => {
       const identity = this.identity()
@@ -458,7 +648,7 @@ export class Workbench {
     })
   }
   async pending(team: string): Promise<PendingWrite[]> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     const client = this.ones(team)
     return (await this.ledger().load()).filter(row => row.scope === this.scope(client) && row.state !== 'verified').map(row => ({
       id: row.id, kind: row.kind, date: row.intent.date, minutes: row.intent.hours * 60 / 100000,
@@ -466,7 +656,7 @@ export class Workbench {
     }))
   }
   async previewRecovery(team: string, receiptId: string, signal?: AbortSignal): Promise<RecoveryPreview> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     requireThat(!this.writeBusy, 'busy', '写入或核对仍在进行。')
     this.recovery = undefined
     const identity = this.identity()
@@ -483,7 +673,7 @@ export class Workbench {
     return { id: view.id, receiptId, matchCount: 1, candidate, message: '请核对该记录确属本次操作。确认只更新本地核对状态，不新增或修改 ONES 工时。' }
   }
   async confirmRecovery(previewId: string, confirmed: boolean): Promise<{ verified: true }> {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     requireThat(confirmed === true && !this.writeBusy, 'confirmation', '请确认匹配记录属于本次操作。')
     const view = this.recovery
     requireThat(view && view.id === previewId && view.identity === this.identity() && view.expiresAt > Date.now(), 'stale', '核对预览已失效，请重新回读。')
@@ -506,7 +696,7 @@ export class Workbench {
     } finally { this.writeBusy = false }
   }
   async describe(input: { team: string; date: string; key: string; description: string; confirmed: boolean }) {
-    await this.ensureReady()
+    await this.ensureOnesReady()
     requireThat(this.deps.writesVerified === true, 'not_verified', '插件描述更新尚未完成端到端验证，当前禁止提交。')
     requireThat(input.confirmed === true && !this.writeBusy, 'confirmation', '请确认更新且等待其它写入结束。')
     validateDescription(input.description)

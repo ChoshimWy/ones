@@ -478,3 +478,34 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 首次 producer 测试残留“remaining 为空”旧期望，按新合同修正后通过；UI 旅程分别修正刷新数据、tab 角色与重复按钮定位，未改业务行为或放宽断言。
 - 已实际打开 [360px 2/3](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/unit-test-gate/completion-three-items-360.png>)、[460px 3/3](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/unit-test-gate/completion-unit-passed-460.png>)、[460px 实施列表](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/unit-test-gate/unit-list-460.png>)、[360px 修复详情](</Users/choshim/Library/Application Support/orca/chat-scratch/d0d93ac6da7f8104049ca55fa4ae7fed/unit-test-gate/repair-detail-unit-count-360.png>)：短计数、按钮与三项说明布局正常，无横向溢出或遮挡；编辑区保持既有滚动，不截断存储内容。来源为 Chrome + 完整生产 HTML/虚构 Worker，非正式插件或真实 ONES 验收；chat-scratch 可能清理。
 - 单元测试结果仍为 Agent 结构化报告，不是插件独立重跑/核验测试真实性；旧会话 v2 私有协议不自动改写，继续时需明确提供 v3 合同和原绑定后以更高序号回报，不能只改版本号伪造计数。未触及真实运行文件、真实 Bug、正式插件加载或 Git 交付。
+
+## 2026-11-11 ONES 续期与解锁状态同步
+
+- 隔离范围：基线 main@562d65b5c05ee95bc8f0bb4d22beca45c972c4af；任务分支 agent/ones-refresh-token；Git root 为 /Users/choshim/.agent-worktrees/aputure-ones/agent/ones-refresh-token。Main 为唯一 writer；ownership 为认证 adapter/service、HTML 认证同步、对应测试和认证说明（含 plugin/README.md）。原主工作区未修改，未提交、合并或部署。
+- 协议事实：只读获取该实例公开 Identity 脚本 main-3ce87560.js，确认 /identity/oauth/token、refresh_token 表单、ones.v1、轮换及 invalid_grant 分支。未读取真实账号凭证、未执行真实 refresh grant。
+- 行为：接近有效期 60 秒内按需续期，业务请求前及前台恢复均检查；单 Worker 并发合并、令牌轮换只存 secrets，校验 keyring。退出/换号使用代次及 session 引用阻止迟到续期污染新账号；同身份轮换不改变业务身份代次。无业务操作自动重放。网络/服务/未知响应错误保留凭据，明确失效只清除对应站点。
+- UI：focus/visibilitychange 触发权威状态同步；任意面板的 auth 错误统一通知状态同步，失效时清理业务展示；dispose 移除监听并拒绝迟到状态。不是依靠锁屏计时器保持登录。
+- 定向单元验证：auth-refresh.test.ts 10/10、auth-lifecycle.test.ts 9/9、protections.test.ts 中 TC-PLUGIN-001 与 TC-PLUGIN-004 系列 8/8，以及 service authority survives stale preview 1/1；共 28 个不同用例通过。初次新增 fixture 缺少 issue_types 回包导致 2 项失败，补齐虚构配置后通过。最终 OAuth HTTP-400 解析收窄后，重验续期 10 项与登录/脱敏 2 项通过，其余未受影响证据复用；未运行全量测试。
+- 交互验证：auth-refresh.browser.mjs 使用生产 HTML + Workbench、虚构 HTTP/Vault、Headless Chrome。跨过有效期后 focus 自动续期且下一次缺陷读取成功；visibility 下网络失败保留 Vault，后续恢复成功；401 后 ONES 未登录、私有列表清除、Coho 已认证；dispose 无后续请求。pageErrors=[]。
+- 视觉验证：实际打开 auth-resumed-dark.png（900px）与 auth-expired-light-360.png（360px），认证徽标/列表/禁用按钮一致，正文无新增截断或遮挡、无页面横向溢出；窄屏顶部导航沿用横向滚动。来源为渲染预览，不代表真实 Orca 或物理锁屏实测。截图后仅收窄 OAuth 400 解析和恢复本地草稿原行为，均不改变被测页面、成功续期及401路径，因此复用截图。
+- 证据目录：/Users/choshim/Library/Application Support/orca/chat-scratch/6bd22500e7f0300e1f445df210027159/auth-refresh/，含 auth-browser-evidence.json 及上述 PNG；临时缓存可能被清理。
+- 静态验证：使用已有 Orca 宿主类型和本机 TypeScript，对任务 Worktree 的 src/tests 执行 noEmit 检查通过；git diff --check 通过。浏览器 bundle 曾提示任务 Worktree 尚未生成 .orca/types，未阻止编译/运行；独立 noEmit 使用原工作区已有类型解析通过，未安装依赖。
+- 未覆盖：真实账号 refresh grant、宿主凭据库轮换写入、真实锁屏/解锁及部署后的端到端。旧版本没有保存 refresh token，部署后需登录 ONES 一次；不从浏览器或其它 profile 导入凭据。Coho 不新增未经核实的刷新协议。
+
+## 2026-11-11 双平台显式保存凭据与过期自动登录
+
+本节替代上一节“密码不保存/Coho 不自动登录”的旧边界；不改变 refresh token 与密码重登的区别。继续复用 agent/ones-refresh-token 独占 Worktree，基线 main@562d65b5c05ee95bc8f0bb4d22beca45c972c4af。新增 ownership 为 Coho adapter、认证 DTO/Worker handler、保存登录 UI、定向 fixtures/tests、plugin/README.md 与两站认证说明；Main 单 writer，主工作区仍未修改。
+
+- 两站独立、默认关闭；仅成功登录且 remember=true 才保存。credentials.ones/coho 仅在宿主 secrets；Status 只含保存账号及暂停/退避状态，不含密码/令牌。ONES 保存固定实例的 HTTP 风险同意，自动登录核对原 userId，Coho 核对 ATS/globalId。
+- ONES refresh 优先；明确 grant 失效或无 refresh 才回退保存密码。Coho 使用 expTime 秒有效期、识别 HTTP/业务401，以保存密码重新登录，不伪造 refresh endpoint。
+- 每站共享自动登录 flight；发送前持久化暂停 claim，Worker 中断后不循环发密码。验证码/密码错误/身份变化/未知失败暂停；网络/限流至少退避60秒。系统保护不可用时零密码发送与零密码记录写入。
+- 手动登录阻止旧凭据自动登录竞争；取消保存/退出中止旧 flight，旧回包与写入不恢复凭据。双 key 写入先完整持久化再发布内存，失败/取消在串行队列中回滚，底层不可写/不可删时明确报错，不宣称删除成功。自动重登改变身份代次，使旧确认及展示失效；无业务自动重放。
+- 定向单测：auth-lifecycle 9、auth-refresh 10、coho-auth 5、remember-login 15、protections 中认证与写保护9，共48个不同用例通过。补充系统保护零写、验证码暂停、手动登录竞争、配对写失败回滚、取消/退出时持久化与单平台恢复边界。最后局部变更仅复验相关用例，未执行全套测试。
+- UI：remember-login.browser.mjs（生产 HTML + Workbench，虚构 HTTP/Vault，Headless Chrome）通过双勾选默认关闭、成功保存/不回填密码、过期focus双站恢复、ONES refresh失败回退、业务401后恢复并清除矛盾错误、单平台恢复、取消勾选删除、失败暂停、未登录时退出删除、360px无横向溢出。pageErrors=[]。auth-refresh.browser.mjs 未保存凭据旅程回归通过，401 fixture 同时令 refresh grant 失效，避免错误模拟“有效 refresh 不可恢复”。
+- 已实际打开检查 saved-login-both-dark.png（900px）、saved-login-paused-light-360.png（360px）：勾选框、说明、暂停提示、密码空输入、按钮均完整，无新增遮挡；窄屏顶部导航仍为既有横向滚动。证据目录 /Users/choshim/Library/Application Support/orca/chat-scratch/6bd22500e7f0300e1f445df210027159/remember-login/，含 remember-browser-evidence.json 与 saved-login-recovered.png。均为虚构账号渲染预览，缓存可能清理。
+- noEmit 类型检查及 git diff --check 通过，plugin validate valid=true。类型检查复用已有宿主类型；浏览器打包的未生成本地 .orca/types 提示不作为类型验证通过证据。
+- 真实验证（用户批准后）：任务 Worktree 开发版获准加载；Orca 重启后确认仍为 running / needsReconsent=false，未重复加载。通过原生登录表单完成 ONES 与 Coho 真实认证，两站均显示已认证与凭据已保存、密码输入框为空。随后重启 Worker，status 脱敏结果均为 connected=true / saved=true / paused=false，证实宿主凭据保存与恢复。未直接读取 secrets，密码未放入命令行/源码/测试；未执行工时或缺陷写入。
+- 现场追加修复：无变化的 focus 状态同步原先也重建表单，导致单击标签/保存选项可能丢失。新增回归先复现失败，再改为仅展示状态变化或认证错误恢复时重绘；无变化时保留控件与键盘焦点。保存登录浏览器旅程共11项通过、pageErrors=[]；类型检查与 diff 检查通过。真实 Orca 单击切页正常，确认 Coho 已勾选后完成保存。
+- 真实视觉：实际打开检查 [登录后效果](</Users/choshim/Library/Application Support/orca/chat-scratch/6bd22500e7f0300e1f445df210027159/remember-login/live-auth-saved.png>)（Orca 开发版，781×1350，深色）。两站徽标、保存勾选与空密码框一致，说明和按钮无遮挡/截断；截图命令 errors=[]。该截图只证明所示状态，不代证过期恢复；chat-scratch 可能清理。
+- 仍未覆盖：真实账号自然过期后的 refresh grant/密码自动重登、物理锁屏解锁。自动过期与失效恢复路径已由虚构 HTTP/Vault 定向测试覆盖；不改真实令牌有效期或注入测试后门来冒充线上验收。
+- 交付：任务开发版保持获准加载，未提交、合并或发布正式版本；保留 Worktree。最终 Source Identity 由 native session-source-identity 写入同证据目录 source-identity.json，不以测试 fixture 成功代称真实账号恢复成功。

@@ -1,5 +1,5 @@
 export type Site = 'ones' | 'coho'
-export type Connection = { connected: boolean; label: string }
+export type Connection = { connected: boolean; label: string; savedLogin?: { account: string; paused: boolean; retryAfter: number } }
 export type Option = { id: string; name: string }
 export type Task = { id: string; number: number; name: string; project: Option; issueType: Option; status: Option }
 export type TaskPage = { items: Task[]; nextCursor: string | null }
@@ -8,7 +8,7 @@ export type Attendance = { date: string; punches: Punch[]; fetchedAt: number }
 export type Worklog = { key: string; task: string; owner: string; hours: number; startTime: number; description: string; type: string }
 export type Allocation = { taskId: string; start: string; minutes: number; description: string }
 export type Preview = { id: string; date: string; budget: number; existing: number; proposed: number; remaining: number; rows: (Allocation & { taskName: string })[]; expiresAt: number }
-export type Status = { ones: Connection; coho: Connection; teams: Option[]; writeEnabled: boolean; blockers: string[] }
+export type Status = { identity?: string; ones: Connection; coho: Connection; teams: Option[]; writeEnabled: boolean; blockers: string[] }
 export class AppError extends Error {
   constructor(public code: string, message: string) { super(message); this.name = 'AppError' }
 }

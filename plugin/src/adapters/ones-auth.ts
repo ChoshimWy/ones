@@ -1,7 +1,7 @@
 import { constants, createHash, publicEncrypt, randomBytes } from 'node:crypto'
 import { AppError, id, record, requireThat, text, type Option } from '../domain/model.ts'
-import { ONES, Transport, jsonBody, readJSON } from './http.ts'
-export type OnesSession = { token: string; userId: string; label: string; teams: Option[]; expiresAt: number }
+import { ONES, Transport, jsonBody, readJSON, readRefreshResponse } from './http.ts'
+export type OnesSession = { token: string; userId: string; label: string; teams: Option[]; expiresAt: number; refreshToken?: string }
 
 // A transient, host-only cookie jar for the identity flow. Never stored or sent to Project API.
 class LoginCookies {
@@ -93,5 +93,20 @@ export async function loginOnes(transport: Transport, account: string, password:
   const info = await transport.json('/project/api/project/auth/token_info', { headers: { Authorization: `Bearer ${token}` }, signal })
   requireThat(Array.isArray(info.teams), 'auth_contract', '登录成功，但团队信息接口尚未匹配。')
   const teams = info.teams.map(v => { const t = record(v); return { id: id(t.uuid), name: text(t.name) } })
-  return { token, userId: user, label: text(me.name ?? me.email), teams, expiresAt: Date.now() + tokens.expires_in * 1000 }
+  return { token, userId: user, label: text(me.name ?? me.email), teams, expiresAt: Date.now() + tokens.expires_in * 1000, ...(tokens.refresh_token === undefined ? {} : { refreshToken: text(tokens.refresh_token, 16000) }) }
+}
+
+// Verified against this instance's Identity client. Never replay a business operation here.
+export async function refreshOnes(transport: Transport, session: OnesSession): Promise<OnesSession> {
+  const refreshToken = text(session.refreshToken, 16000)
+  const started = Date.now()
+  const response = await transport.response('/identity/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: 'ones.v1' }).toString()
+  })
+  const data = await readRefreshResponse(response)
+  const token = text(data.access_token, 16000)
+  requireThat(String(data.token_type).toLowerCase() === 'bearer' && typeof data.expires_in === 'number' && Number.isFinite(data.expires_in) && data.expires_in > 0 && Number.isSafeInteger(started + data.expires_in * 1000), 'auth_contract', '续期令牌类型或有效期不受支持。')
+  return { ...session, token, refreshToken: data.refresh_token === undefined ? refreshToken : text(data.refresh_token, 16000), expiresAt: started + data.expires_in * 1000 }
 }

@@ -59,7 +59,7 @@ POST https://w.coho.net.cn/gateway/auth/account/requestToken
 
 - 本次提供的密码与登录报文 `credential` 经本地比较，符合 **SHA-1(password) 的大写十六进制**；随后独立登录成功。
 - 前端模块 9138 的通用逻辑会读取租户认证配置，对 `password + secretKey` 使用配置的 SHA-1／SHA-256／MD5，再转大写。不能把本次 SHA-1、空附加串的结果推广到全部租户。
-- `data.token` 是后续 Token；前端还读取 `data.expTime`，但到期、刷新和失效行为未实测。
+- `data.token` 是后续 Token；2026-11-11 核实官方登录脚本以 `Date.now() + expTime * 1000` 保存，单位为秒。HTTP 200 的 JSON `code=401` 同样表示认证失效。未发现 refresh token 接入合同；经用户显式勾选后，插件可用 secrets 保存的密码重新认证，不把它称为令牌续期。
 - `credential` 虽是摘要，仍可能用于直接登录，必须按密码保护。不得输出、硬编码、落库或提交它。
 
 ### 2.3 当前用户与员工 ID
@@ -316,3 +316,10 @@ def allocatable_minutes(end_minutes, base_day_confirmed=False):
 | Orca 集成 | 核对受支持插件 API、后台请求、安全存储和 UI 确认流程 |
 
 文档自检：区分已验证接口、用户决策和待验证项；未将“出勤工时”误作最终额度，未将摘要当作非敏感信息，未把完整示例或插件标为已运行。N/A：本次不实现生产代码、不改变业务状态、不包含 UI 验证。
+
+
+### 2026-11-11 会话恢复补充
+
+只读核实来源：`https://w.coho.net.cn/js/app.f94d29ae.js` 的认证接口模块、token 保存与业务401分支，以及 `https://w.coho.net.cn/js/user.f017c521.js` 的密码登录成功分支。公开资源需 ATS 租户上下文；未用账号 token 读取。已检查的正式登录路径仅使用 token/expTime，认证失效回到登录页，没有发现可复用的 refresh token 或续期调用；这不构成整个后端绝无其它私有接口的证明。
+
+实现按 expTime 秒数校验有限、安全的正有效期；缺失保留 null，非法值拒绝保存，旧记录不反推有效期。Coho HTTP/JSON401 触发对应会话失效；普通业务错误、403、网络/503 不清除身份。用户勾选保存后可重新执行原已核实密码登录协议，并回读 ATS/globalId 核对原身份；不保存密码摘要代替密码，也不通过猜测端点实现续期。详细保存/暂停/撤销合同见 plugin/README.md。

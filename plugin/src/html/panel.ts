@@ -39,6 +39,8 @@ export class WorkbenchUI {
   private accounts: Record<Site, string> = { ones: '', coho: '' }
   private passwords: Record<Site, string> = { ones: '', coho: '' }
   private httpConsent = false
+  private rememberChoice: Partial<Record<Site, boolean>> = {}
+  private authRecovery = false
   /// 已读取的游标缓存；筛选后再按固定大小分页。
   private bugs: Task[] = []
   /// 已确认显示的页码，翻页读取失败时保持不变。
@@ -66,7 +68,59 @@ export class WorkbenchUI {
   private statuses: string[] | null = ['待处理', '重新打开', '修复中']
   private catalog: Option[] | null = null
   private expanded = false
+  private statusSync?: Promise<void>
+  private syncAgain = false
+  private readonly onResume = () => {
+    if (document.visibilityState === 'visible') void this.syncStatus()
+  }
+  private readonly onAuthInvalid = () => { this.authRecovery = true; void this.syncStatus() }
+  private syncStatus(): Promise<void> {
+    if (this.disposed) return Promise.resolve()
+    if (this.statusSync) {
+      this.syncAgain = true
+      return this.statusSync
+    }
+    const epoch = this.epoch
+    this.statusSync = (async () => {
+      try {
+        const status = await request<Status>('status')
+        if (!this.disposed && epoch === this.epoch) {
+          // Focus can arrive between pointerdown and click in the host WebView.
+          // Preserve live controls when the authoritative display state is unchanged.
+          const changed = JSON.stringify(this.status) !== JSON.stringify(status) || this.authRecovery
+          this.acceptStatus(status)
+          if (this.authRecovery) {
+            this.authRecovery = false
+            this.error = ''
+            this.bugError = ''
+            this.info = status.ones.connected && status.coho.connected
+              ? '登录已恢复，请重新读取数据；未自动重试任何写入。'
+              : '登录状态已更新，请检查未登录的平台；未自动重试任何写入。'
+          }
+          if (changed) this.render()
+        }
+      } catch (error) {
+        if (!this.disposed && epoch === this.epoch) {
+          const nextError = message(error)
+          if (this.error !== nextError) {
+            this.error = nextError
+            this.render()
+          }
+        }
+      }
+    })().finally(() => {
+      this.statusSync = undefined
+      if (this.syncAgain) {
+        this.syncAgain = false
+        void this.syncStatus()
+      }
+    })
+    return this.statusSync
+  }
   constructor(private root: HTMLElement) {
+    window.addEventListener('focus', this.onResume)
+    document.addEventListener('visibilitychange', this.onResume)
+    window.addEventListener('workbench-auth-invalid', this.onAuthInvalid)
     try {
       this.workspaceSubscription = orca.on('workspace.changed', ({ context }) => {
         const key = JSON.stringify(context ? [context.displayName, context.branch, context.terminals.map(t => t.id).sort()] : null)
@@ -196,6 +250,7 @@ export class WorkbenchUI {
         : ''
     if (
       team !== this.team ||
+      this.status?.identity !== status.identity ||
       this.status?.ones.label !== status.ones.label ||
       this.status?.ones.connected !== status.ones.connected ||
       this.status?.coho.label !== status.coho.label ||
@@ -204,6 +259,9 @@ export class WorkbenchUI {
       this.clearBusiness()
     this.team = team
     this.status = status
+    for (const site of ['ones', 'coho'] as const) {
+      if (!this.accounts[site] && status[site].savedLogin) this.accounts[site] = status[site].savedLogin!.account
+    }
   }
   private async refresh(): Promise<void> {
     await this.run(
@@ -221,10 +279,11 @@ export class WorkbenchUI {
         (signal) =>
           request<Status>(
             'auth.login',
-            { site, account: this.accounts[site], password, httpAcknowledged: this.httpConsent },
+            { site, account: this.accounts[site], password, httpAcknowledged: this.httpConsent, remember: this.rememberChoice[site] ?? !!this.status?.[site].savedLogin },
             signal
           ),
         (value) => {
+          delete this.rememberChoice[site]
           this.acceptStatus(value)
           this.info = '已完成认证与身份回读。'
         }
@@ -240,8 +299,19 @@ export class WorkbenchUI {
     this.passwords[site] = ''
     void this.run(
       (signal) => request<Status>('auth.logout', { site }, signal),
-      (value) => this.acceptStatus(value)
+      (value) => { delete this.rememberChoice[site]; this.acceptStatus(value) }
     )
+  }
+  private async remember(site: Site, enabled: boolean): Promise<void> {
+    this.rememberChoice[site] = enabled
+    if (!enabled && this.status?.[site].savedLogin) {
+      await this.run(
+        signal => request<Status>('auth.forget', { site }, signal),
+        value => { this.acceptStatus(value); this.info = '已删除该平台保存的账号密码。' }
+      )
+      delete this.rememberChoice[site]
+    }
+    this.render()
   }
   private cancel(): void {
     this.epoch++
@@ -439,6 +509,15 @@ export class WorkbenchUI {
           },
           { type: 'password', disabled: this.busy }
         ),
+        check(
+          name + ' 保存账号密码并自动登录',
+          this.rememberChoice[site] ?? !!connection?.savedLogin,
+          value => { void this.remember(site, value) },
+          this.busy
+        ),
+        connection?.savedLogin
+          ? text(connection.savedLogin.paused ? '自动登录已暂停，请手动登录更新凭据。' : connection.savedLogin.retryAfter > Date.now() ? '自动登录暂缓，稍后恢复前台或刷新状态可重试。' : '账号密码已保存于系统保护的凭据库；密码不会回填。', true)
+          : text('默认不保存；勾选后在本次登录成功时保存。', true),
         site === 'ones'
           ? check(
               '我确认仅在可信内网使用 HTTP，了解密码及令牌的传输风险',
@@ -459,12 +538,12 @@ export class WorkbenchUI {
               !this.passwords[site] ||
               (site === 'ones' && !this.httpConsent)
           ),
-          button('退出 ' + name, () => this.logout(site), this.busy || !connection?.connected)
+          button('退出 ' + name, () => this.logout(site), this.busy || (!connection?.connected && !connection?.savedLogin))
         )
       )
     }
     return stack(
-      text('密码仅用于本次登录，不保存；令牌由 Worker 存入系统保护的插件凭证库。', true),
+      text('仅勾选的平台保存账号密码，用于过期后自动登录；取消勾选或退出会删除。凭据仅存系统保护的插件凭据库，不自动重试业务写入。', true),
       login('ones'),
       (this.status?.teams.length ?? 0) > 1 ? this.teamSelect() : null,
       login('coho'),
@@ -783,6 +862,9 @@ export class WorkbenchUI {
     window.scrollTo(0, scroll)
   }
   dispose(): void {
+    window.removeEventListener('focus', this.onResume)
+    document.removeEventListener('visibilitychange', this.onResume)
+    window.removeEventListener('workbench-auth-invalid', this.onAuthInvalid)
     this.implementation?.dispose()
     this.disposed = true
     this.projectGeneration++

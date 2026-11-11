@@ -18,7 +18,10 @@ export async function request<T>(name: string, input?: unknown, signal?: AbortSi
   )
   signal?.throwIfAborted()
   const result = response.output as Answer<T>
-  if (!result.ok) throw new UIError(result.error.message, result.error.code)
+  if (!result.ok) {
+    if (result.error.code === 'auth' && name !== 'status') window.dispatchEvent(new Event('workbench-auth-invalid'))
+    throw new UIError(result.error.message, result.error.code)
+  }
   return result.value
 }
 export function message(error: unknown): string {

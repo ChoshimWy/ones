@@ -46,6 +46,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('repair.start', input => answer(() => repairActions.start(input.previewId,input.confirmed)))
   orca.panels.handle('status', () => answer(() => service.status()))
   orca.panels.handle('auth.login', (input, context) => answer(() => service.login(input, context.signal)))
+  orca.panels.handle('auth.forget', input => answer(() => service.forgetLogin(input.site)))
   orca.panels.handle('auth.logout', input => answer(() => service.logout(input.site)))
   orca.panels.handle('bugs.statuses', (input, context) => answer(() => service.bugStatuses(input.team, context.signal)))
   orca.panels.handle('bugs.list', (input, context) => answer(() => service.bugs(input.team, input.after, context.signal)))

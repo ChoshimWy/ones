@@ -8,7 +8,7 @@ import type { BugDetail, Discussion, Attachment, DetailPage } from './adapters/b
 import type { MediaChunk } from './adapters/bug-media.ts'
 import type { Allocation, Attendance, Option, Preview, Site, Status, Task, TaskPage, Worklog } from './domain/model.ts'
 export type Answer<T> = { ok: true; value: T } | { ok: false; error: { code: string; message: string } }
-export type LoginInput = { site: Site; account: string; password: string; httpAcknowledged: boolean }
+export type LoginInput = { site: Site; account: string; password: string; httpAcknowledged: boolean; remember?: boolean }
 export type DayInput = { team: string; date: string; mappingConfirmed: boolean }
 export type Day = { id: string; date: string; attendance: Attendance; existing: number; worklogs: Worklog[] }
 export type PreviewInput = { dayId: string; selection: { start: number; end: number; confirmed: boolean }; allocations: Allocation[] }
@@ -33,6 +33,7 @@ declare module 'orca' {
     'bugs.businessSubmit': { input: { previewId:string;confirmed:boolean }; output: Answer<BusinessResult> }
     'status': { output: Answer<Status> }
     'auth.login': { input: LoginInput; output: Answer<Status> }
+    'auth.forget': { input: { site: Site }; output: Answer<Status> }
     'auth.logout': { input: { site: Site }; output: Answer<Status> }
     'bugs.statuses': { input: { team: string }; output: Answer<Option[]> }
     'bugs.detail': { input: { team: string; taskId: string; requestId?: string }; output: Answer<BugDetail & {detailId:string}> }

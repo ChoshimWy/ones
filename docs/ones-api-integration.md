@@ -70,7 +70,7 @@ Accept: application/json
 | --- | --- |
 | 浏览器已登录会话 → 访问令牌 → 只读 API | `LIVE-READ`；令牌只在认证组件内使用，不进入模型上下文/业务 DTO |
 | 直接账号密码登录 | 2026-11-09 插件独立登录并回读身份成功，用户确认；实际使用下述 Identity OAuth 链路，不使用旧 `auth/v2/login` |
-| 过期/刷新 | `GAP`；首版停止请求并提示重新认证，不猜 refresh endpoint，不循环尝试密码 |
+| 过期/刷新 | 2026-11-11 核实实例官方 Identity 静态实现：`POST /identity/oauth/token`，表单 `grant_type=refresh_token&refresh_token=<secret>&client_id=ones.v1`；rotation 仅存 secrets，invalid_grant/401 停止，未知/网络错误保留会话；真实账号续期仍待验 |
 | 旧认证头 | `REFERENCE`：旧文档使用 `Ones-User-Id`、`Ones-Auth-Token`；不得和当前 Bearer 方案混用或自动降级 |
 
 旧认证协议参见[官方旧式 API 概述](https://docs.ones.cn/project/open-api-doc/)。当前浏览器存储实现不构成插件公开认证 API；不要依赖读取全部 localStorage，正式插件需单独闭合安全授权/凭证提供通道。
@@ -87,7 +87,7 @@ Accept: application/json
 4. 若进入固定 `/identity/organization_select?id=...`，`GET /identity/api/auth_request/{id}` 核对 scopes；`POST /identity/api/auth_request/finalize` 仅发送 `auth_request_id/region_uuid/org_uuid/org_user_uuid`。其 `callback_url` 是 Identity 相对地址，按官方 `getFullIDSUrl` 加 `/identity` 前缀，只执行受限同源认证 continuation，不自动跟随其它页面。
 5. 最终回调 origin/path/state 完全匹配且无 error 后，`POST /identity/oauth/token` 用 authorization_code 与 verifier 换 token；`users/me` 回读用户/邮箱，`auth/token_info` 回读团队。
 
-临时 Cookie 只属于本次 Identity 会话，不持久化或转发给 Project API。正常登录通过不代表验证码、MFA、密码过期或刷新分支已支持；未知步骤停止。密码及 token/code/state 不输出到日志。实现见 [ones-auth.ts](../plugin/src/adapters/ones-auth.ts)，完整现场边界见 [验证报告](orca-plugin-verification.md)。
+临时 Cookie 只属于本次 Identity 会话，不持久化或转发给 Project API。正常登录通过不代表验证码、MFA、密码过期等分支已支持；未知步骤停止。续期合同来源为该实例公开脚本 `http://aputureones.com:8088/identity/main-3ce87560.js`，未读取浏览器账号凭据；实现与虚构接口验证不等于真实账号续期验收。密码及 token/code/state 不输出到日志。实现见 [ones-auth.ts](../plugin/src/adapters/ones-auth.ts)，完整现场边界见 [验证报告](orca-plugin-verification.md)。
 
 ### 2.3 不混用 API 家族
 
@@ -560,3 +560,8 @@ Main 工具回执：首步骤 `9c3bf1`、第二步 `2bc423`、最终只读核对
 富文本用 parse5 解析为纯文字和受控资源引用，不运行脚本、事件属性、iframe，也不把原始 URL/HTML 交给 renderer。实测图片用 `data-uuid/data-mime`；视频同样要求受控资源标识，实际 ONES 视频标记尚无样本，不能把虚构 WebM 播放通过扩大为真实 ONES 视频全链路通过。
 
 Worker 媒体会话绑定当前账号/团队/任务及打开代次，10 分钟有效；关闭/换 Bug/身份变化后拒绝旧 handle。只存内存，分块、格式、大小和预算规则见 [插件开发说明](../plugin/README.md) 与 [仅插件 HTML 方案](orca-plugin-plan.md#10-仅插件-html-面板方案取代-9-宿主扩展交付)。详情容量保守计入正文、当前评论/附件页及展示开销；超过容量明确要求查看原单，不静默截断。所有接口保持只读，未开放 Bug 或工时 mutation。
+
+
+### 2026-11-11 用户授权自动登录
+
+ONES 优先沿用 refresh token；明确 invalid_grant/401 或无可用 refresh token 时，仅在用户勾选且曾成功保存凭据后，才重走已核实的密码/RSA/PKCE 流程并核对绑定 userId。保存的 ONES HTTP 风险同意仅对应固定实例，不跨 origin。密码只在系统保护的插件 secrets 中保存，Status 仅返回保存开关、账号和暂停/退避状态。自动登录不自动重放任何业务请求；验证码、错误密码、身份变化与未知失败暂停，网络失败退避。取消勾选或退出删除保存凭据。详见 plugin/README.md。
