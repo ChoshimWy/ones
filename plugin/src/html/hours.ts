@@ -256,12 +256,13 @@ export class HoursView {
       button('扫描工时与考勤', () => this.scanMissing(), app.busy || !authenticated || !this.mapping || !app.team)
     ))
     if (this.scan) {
-      const labels = { missing: '未填写', partial: '未达考勤额度', covered: '已覆盖', review: '待核实考勤' }
+      const labels = { missing: '未填写', partial: '未达考勤额度', covered: '已覆盖', review: '待核实考勤', not_required: '无考勤，无需工时' }
       content.append(card('扫描结果',
-        text(`已核对 ${this.scan.length} 天 · 未填写 ${this.scan.filter(d => d.state === 'missing').length} 天 · 未达额度 ${this.scan.filter(d => d.state === 'partial').length} 天 · 待核实 ${this.scan.filter(d => d.state === 'review').length} 天`),
-        ...this.scan.filter(d => d.state !== 'covered' || d.existing > (d.budget ?? 0)).map(day => stack(
+        text(`已核对 ${this.scan.length} 天 · 未填写 ${this.scan.filter(d => d.state === 'missing').length} 天 · 未达额度 ${this.scan.filter(d => d.state === 'partial').length} 天 · 待核实 ${this.scan.filter(d => d.state === 'review').length} 天 · 无考勤跳过 ${this.scan.filter(d => d.state === 'not_required').length} 天`),
+        ...this.scan.filter(d => d.state !== 'not_required' && (d.state !== 'covered' || d.existing > (d.budget ?? 0))).map(day => stack(
           text(day.date + ' · ' + labels[day.state]),
-          text('已有 ' + hours(day.existing) + (day.remaining === null ? '' : ' · 可分配上限 ' + hours(day.remaining))),
+          day.attendanceTime ? text(`考勤 ${day.attendanceTime.start}—${day.attendanceTime.end} · 折算工时 ${hours(day.budget ?? 0)}`) : null,
+          text('已有 ' + hours(day.existing) + (day.remaining === null ? '' : ' · 距考勤折算工时差额 ' + hours(day.remaining))),
           text(day.reason, true),
           button('核对 ' + day.date, () => { this.changeDate(day.date); this.loadDay() }, app.busy)
         ))
@@ -276,7 +277,11 @@ export class HoursView {
         }))
       ]
       const choose = (which: 'start' | 'end', value: string) => {
-        if (which === 'start') this.startPunch = value
+        if (which === 'start') {
+          this.startPunch = value
+          const punch = value === '' ? undefined : this.day?.attendance.punches[Number(value)]
+          if (punch) this.start = punch.time
+        }
         else this.endPunch = value
         this.punchesConfirmed = false
         app.invalidate()

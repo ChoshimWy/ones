@@ -23,10 +23,13 @@ test('missing hours: calendar months, leap day and Shanghai midnight', () => {
 test('missing hours: absent, partial, covered and ambiguous attendance remain distinct', () => {
   assert.equal(classifyDay(attendance, 0).state, 'missing')
   assert.equal(classifyDay(attendance, 120).remaining, 360)
+  assert.deepEqual(classifyDay(attendance, 120).attendanceTime, { start: '09:00', end: '18:30' })
+  assert.equal(classifyDay({ ...attendance, punches: [] }, 120).remaining, 0)
+  assert.equal(classifyDay({ ...attendance, punches: attendance.punches.slice(0, 1) }, 0).state, 'review')
   assert.equal(classifyDay(attendance, 120).state, 'partial')
   assert.equal(classifyDay(attendance, 480).state, 'covered')
   assert.equal(classifyDay(attendance, 600).remaining, 0)
-  assert.equal(classifyDay({ ...attendance, punches: [] }, 0).state, 'review')
+  assert.equal(classifyDay({ ...attendance, punches: [] }, 0).state, 'not_required')
   assert.equal(classifyDay({ ...attendance, punches: attendance.punches.map(p => ({ ...p, outFence: null })) }, 0).state, 'review')
 })
 test('missing hours: draft uses chosen duration, rejects duplicates and budget overflow', () => {
@@ -65,7 +68,7 @@ function fixture() {
     }
     if (path.endsWith('/attCalendar')) {
       if (fail) return new Response('', { status: 503 })
-      return json({ code: 200, data: { dateList: [{ date: requested }], dkList: requested.endsWith('01') ? [] : ['09:00', '18:30'].map(time => ({ date: requested, realDate: requested, time, isNext: false, outFence: false })) } })
+      return json({ code: 200, data: { dateList: requested.endsWith('02') ? [] : [{ date: requested }], dkList: requested.endsWith('01') ? [] : ['09:00', '18:30'].map(time => ({ date: requested, realDate: requested, time, isNext: false, outFence: false })) } })
     }
     throw new Error('unexpected endpoint')
   } })
@@ -75,15 +78,22 @@ const input = { team: 'team', months: 1, mappingConfirmed: true }
 test('missing hours: service batches all dates, reads worklogs first and re-reads selected day', async () => {
   const f = fixture()
   let result = await f.service.scanHours(input)
+  const scanned = [...result.days]
   const dates = result.days.map(d => d.date)
   assert.equal(result.days.length, 7)
   assert.ok(f.calls.findIndex(p => p.endsWith('/items/graphql')) < f.calls.findIndex(p => p.endsWith('/attCalendar')))
   while (result.nextCursor) {
     result = await f.service.scanHours({ ...input, cursor: result.nextCursor })
     dates.push(...result.days.map(d => d.date))
+    scanned.push(...result.days)
   }
   assert.deepEqual(dates, scanDates(1))
-  const selected = dates.find(d => !d.endsWith('01'))!
+  const absent = scanned.filter(d => d.date.endsWith('01'))
+  assert.ok(absent.length > 0)
+  assert.ok(absent.every(d => d.state === 'not_required' && d.remaining === 0))
+  await assert.rejects(f.service.readDay({ team: 'team', date: absent[0]!.date, mappingConfirmed: true }), { code: 'no_attendance' })
+  assert.ok(scanned.filter(d => d.date.endsWith('02')).every(d => d.state === 'review'))
+  const selected = dates.find(d => !d.endsWith('01') && !d.endsWith('02'))!
   const data = await f.service.readDay({ team: 'team', date: selected, mappingConfirmed: true })
   assert.equal(data.date, selected)
   assert.equal(data.existing, 0)

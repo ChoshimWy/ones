@@ -520,3 +520,11 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
   - /Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/scan.png
   - /Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/draft.png
 - 真实全年查询耗时、完整宿主集成及生产工时提交未验证；写入闸保持关闭。自动生成只辅助任务描述和待确认记录，不推断实际投入或自动填满额度。范围工时超过既有 20 页保护上限会明确失败，需改选较短范围。
+
+### 2026-11-11：以实际考勤确认缺失工时
+
+- 明确覆盖该日但无打卡：标记无需工时，从缺失列表排除；日期覆盖未知、缺卡和异常仍待核实。新增 no_attendance 业务码，不吞掉认证/网络失败；单日读取依然禁止无考勤新增。
+- 有效考勤展示真实上下班时间、原规则折算工时、已有工时及差额；选定上班打卡同步草稿开始时间。未按连续打卡跨度计入午休，也不自动提交。
+- 定向结果：missing-hours 6/6、hours-request 2/2、protections 中 attendance 两项 2/2，类型检查和 diff-check 通过。覆盖无考勤跳过、未知日期仍待核实、原日新增保护、分批完整性和宿主 JSON 请求边界。
+- 虚构数据实际 HoursView 的 Orca 浏览器交互确认无考勤日期无核对按钮、打卡时间与六小时差额可见、选择 09:15 打卡后开始时间为 09:15。460×950 截图已打开检查，文字完整、无横向溢出；此为渲染预览而非真实账号扫描验收。
+- 代表截图本地路径：/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/attendance-based.png（chat-scratch 可能被清理）。真实服务扫描及写入仍未在本次执行。

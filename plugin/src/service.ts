@@ -612,9 +612,14 @@ export class Workbench {
           requireThat(attendance.date === date, 'schema', '考勤日期不匹配。')
           days.push(classifyDay(attendance, existing))
         } catch (error) {
-          // Missing punches/unsupported calendars are review items, not missing worklogs.
-          if (!(error instanceof AppError) || error.code !== 'attendance') throw error
-          days.push({ date, existing, budget: null, remaining: null, state: 'review', reason: error.message })
+          // Only an explicitly covered day with zero punches is exempt. Unknown coverage
+          // and malformed punches remain review items; transport failures abort the scan.
+          if (!(error instanceof AppError)) throw error
+          if (error.code === 'no_attendance') {
+            days.push(classifyDay({ date, punches: [], fetchedAt: Date.now() }, existing))
+          } else if (error.code === 'attendance') {
+            days.push({ date, existing, budget: null, remaining: null, state: 'review', reason: error.message })
+          } else throw error
         }
         check()
         requireThat(this.hoursScan === scan, 'stale', '扫描已被新的查询替换。')
