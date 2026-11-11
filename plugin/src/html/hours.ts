@@ -143,7 +143,7 @@ export class HoursView {
         let cursor: string | undefined
         do {
           const result = await request<{ days: MissingDay[]; nextCursor: string | null; total: number }>(
-            'hours.scan', { team: this.app.team, months: Number(this.months), mappingConfirmed: this.mapping, cursor }, signal)
+            'hours.scan', { team: this.app.team, months: Number(this.months), mappingConfirmed: this.mapping, ...(cursor ? { cursor } : {}) }, signal)
           days.push(...result.days)
           this.app.info = `正在核对考勤：${days.length} / ${result.total} 天；尚未完成，不作为缺报结论。`
           this.app.render()
