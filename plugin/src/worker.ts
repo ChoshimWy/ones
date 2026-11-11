@@ -57,6 +57,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('bugs.close', input => answer(async () => { service.closeDetail(input.detailId); return {closed:true as const} }))
   orca.panels.handle('tasks.list', (input, context) => answer(() => service.tasks(input.team, input.after, context.signal)))
   orca.panels.handle('tasks.brief', (input, context) => answer(() => service.brief(input.team, input.taskId, context.signal)))
+  orca.panels.handle('hours.scan', (input, context) => answer(() => service.scanHours(input, context.signal)))
   orca.panels.handle('day.read', (input, context) => answer(() => service.readDay(input, context.signal)))
   orca.panels.handle('hours.preview', (input, context) => answer(() => service.makePreview(input, context.signal)))
   orca.panels.handle('hours.submit', input => answer(() => service.submit(input.previewId, input.confirmed)))

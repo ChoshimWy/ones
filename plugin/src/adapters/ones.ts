@@ -134,6 +134,11 @@ export class OnesClient {
     const task = parseTask(data.tasks[0]); requireThat(task.id === taskId, 'identity', '任务身份不匹配。')
     return task
   }
+  async worklogsRange(from: string, to: string, signal?: AbortSignal): Promise<Worklog[]> {
+    const rows = (await this.pages('manhours', { owner_in: [this.session.userId], type_equal: 'recorded', startTime_range: { from, to } }, signal)).map(parseWorklog)
+    requireThat(new Set(rows.map(row => row.key)).size === rows.length, 'partial', '工时列表存在重复记录，不能计算额度。')
+    return rows
+  }
   async worklogs(date: string, signal?: AbortSignal): Promise<Worklog[]> {
     const rows = (await this.pages('manhours', { owner_in: [this.session.userId], type_equal: 'recorded', startTime_range: { from: date, to: date } }, signal)).map(parseWorklog)
     requireThat(new Set(rows.map(row => row.key)).size === rows.length, 'partial', '工时列表存在重复记录，不能计算额度。')

@@ -44,6 +44,7 @@ declare module 'orca' {
     'bugs.list': { input: { team: string; after?: string }; output: Answer<TaskPage> }
     'tasks.list': { input: { team: string; after?: string }; output: Answer<TaskPage> }
     'tasks.brief': { input: { team: string; taskId: string }; output: Answer<ImplementationBrief> }
+    'hours.scan': { input: { team: string; months: number; mappingConfirmed: boolean; cursor?: string }; output: Answer<{ days: import('./domain/missing-hours.ts').MissingDay[]; nextCursor: string | null; total: number }> }
     'day.read': { input: DayInput; output: Answer<Day> }
     'hours.preview': { input: PreviewInput; output: Answer<Preview> }
     'hours.submit': { input: { previewId: string; confirmed: boolean }; output: Answer<{ count: number }> }

@@ -1,3 +1,4 @@
+import { classifyDay, scanDates, type MissingDay } from './domain/missing-hours.ts'
 import { OnesTransitions } from './adapters/ones-transitions.ts'
 import { filterProject, projectMappingKey, type ProjectMapping } from './domain/project-mapping.ts'
 import type { Option } from './domain/model.ts'
@@ -30,6 +31,7 @@ export class Workbench {
   private autoFlights: Partial<Record<Site, { epoch: number; promise: Promise<void>; controller: AbortController }>> = {}
   private authQueues: Record<Site, Promise<unknown>> = { ones: Promise.resolve(), coho: Promise.resolve() }
   private ready?: Promise<void>
+  private hoursScan?: { cursor: string; identity: string; team: string; months: number; dates: string[]; groups: Map<string, Worklog[]>; offset: number }
   private day?: Snapshot
   private preview?: Confirmation
   private recovery?: { id: string; receiptId: string; team: string; identity: string; key: string; stamp: string; expiresAt: number }
@@ -226,7 +228,7 @@ export class Workbench {
     this.authQueues[site] = next.catch(() => {})
     return next
   }
-  private invalidate(): void { this.day = undefined; this.preview = undefined; this.recovery = undefined; this.closeDetail() }
+  private invalidate(): void { this.hoursScan = undefined; this.day = undefined; this.preview = undefined; this.recovery = undefined; this.closeDetail() }
   private identity(): string {
     return digest([this.sessions.ones?.userId, this.sessions.coho?.principal, this.epochs.ones, this.epochs.coho])
   }
@@ -570,6 +572,61 @@ export class Workbench {
     // Discard volatile timestamps/ordering from the comparison, not business fields.
     const stamp = digest([attendance.date, attendance.punches, [...worklogs].sort((a,b) => a.key.localeCompare(b.key))])
     return { input: { ...input }, data, identity, stamp }
+  }
+  async scanHours(input: { team: string; months: number; mappingConfirmed: boolean; cursor?: string }, signal?: AbortSignal) {
+    requireThat(input.mappingConfirmed === true, 'identity', '请确认两站均为本人账号。')
+    const dates = scanDates(input.months)
+    await this.ensureOnesReady()
+    await this.ensureCohoReady()
+    const identity = this.identity()
+    const ones = this.ones(input.team)
+    const coho = this.coho()
+    const check = () => requireThat(identity === this.identity() && !signal?.aborted, 'stale', '查询已取消或账号变化，请重新读取。')
+    if (!input.cursor) {
+      this.invalidate()
+      await this.authenticated('ones', async () => { await ones.assertIdentity(signal); await ones.config(signal) }, ones.session)
+      const worklogs = await this.authenticated('ones', () => ones.worklogsRange(dates[0]!, dates[dates.length - 1]!, signal), ones.session)
+      check()
+      const groups = new Map(dates.map(date => [date, [] as Worklog[]]))
+      for (const row of worklogs) {
+        requireThat(Number.isFinite(row.startTime), 'schema', '工时日期无效。')
+        const date = new Date((row.startTime + 28800) * 1000).toISOString().slice(0, 10)
+        const group = groups.get(date)
+        requireThat(group, 'schema', '接口返回了查询范围外的工时。')
+        group.push(row)
+      }
+      this.hoursScan = { cursor: randomUUID(), identity, team: input.team, months: input.months, dates, groups, offset: 0 }
+    }
+    const scan = this.hoursScan
+    requireThat(scan && scan.identity === identity && scan.team === input.team && scan.months === input.months &&
+      (!input.cursor || input.cursor === scan.cursor), 'stale', '扫描已失效，请重新查询。')
+    // Consume the cursor before I/O: concurrent retries cannot duplicate a chunk.
+    scan.cursor = randomUUID()
+    const days: MissingDay[] = []
+    try {
+      for (const date of scan.dates.slice(scan.offset, scan.offset + 7)) {
+        check()
+        const existing = existingMinutes(scan.groups.get(date)!, date, ones.session.userId)
+        try {
+          const attendance = await this.authenticated('coho', () => coho.attendance(date, signal), coho.session)
+          requireThat(attendance.date === date, 'schema', '考勤日期不匹配。')
+          days.push(classifyDay(attendance, existing))
+        } catch (error) {
+          // Missing punches/unsupported calendars are review items, not missing worklogs.
+          if (!(error instanceof AppError) || error.code !== 'attendance') throw error
+          days.push({ date, existing, budget: null, remaining: null, state: 'review', reason: error.message })
+        }
+        check()
+        requireThat(this.hoursScan === scan, 'stale', '扫描已被新的查询替换。')
+      }
+      scan.offset += days.length
+      const nextCursor = scan.offset < scan.dates.length ? scan.cursor : null
+      if (!nextCursor) this.hoursScan = undefined
+      return { days, nextCursor, total: scan.dates.length }
+    } catch (error) {
+      if (this.hoursScan === scan) this.hoursScan = undefined
+      throw error
+    }
   }
   async readDay(input: DayInput, signal?: AbortSignal): Promise<Day> {
     await this.ensureOnesReady()

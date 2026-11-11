@@ -1,3 +1,6 @@
+import { attendanceBudget } from '../domain/attendance.ts'
+import { taskDraft, type MissingDay } from '../domain/missing-hours.ts'
+import { safeFailure } from '../domain/model.ts'
 import type { Allocation, Preview, Task, TaskPage } from '../domain/model.ts'
 import type { Day, Draft } from '../protocol.ts'
 import type { WorkbenchUI } from './panel.ts'
@@ -22,6 +25,8 @@ export class HoursView {
     month: '2-digit',
     day: '2-digit'
   }).format(new Date())
+  private months = '1'
+  private scan: MissingDay[] | null = null
   preview: Preview | null = null
   confirmed = false
   private mapping = false
@@ -54,9 +59,12 @@ export class HoursView {
     this.selected = ''
     this.allocations = []
     this.mapping = false
+    this.scan = null
     this.description = ''
   }
   changeDate(value: string): void {
+    this.allocations = []
+    this.description = ''
     this.date = value
     this.app.invalidateDay()
     this.app.render()
@@ -126,6 +134,39 @@ export class HoursView {
     this.app.error = ''
     this.app.render()
   }
+  private scanMissing(): void {
+    this.scan = null
+    this.app.invalidateDay()
+    void this.app.run(
+      async signal => {
+        const days: MissingDay[] = []
+        let cursor: string | undefined
+        do {
+          const result = await request<{ days: MissingDay[]; nextCursor: string | null; total: number }>(
+            'hours.scan', { team: this.app.team, months: Number(this.months), mappingConfirmed: this.mapping, cursor }, signal)
+          days.push(...result.days)
+          this.app.info = `正在核对考勤：${days.length} / ${result.total} 天；尚未完成，不作为缺报结论。`
+          this.app.render()
+          cursor = result.nextCursor ?? undefined
+        } while (cursor)
+        this.app.info = '扫描完成；选择日期后会重新读取当日考勤与工时。'
+        return days.reverse()
+      },
+      result => { this.scan = result }
+    )
+  }
+  private generate(): void {
+    this.app.invalidate()
+    try {
+      const task = this.tasks.find(t => t.id === this.selected)
+      if (!task || !this.day || this.startPunch === '' || this.endPunch === '') throw new Error()
+      const budget = attendanceBudget(this.day.attendance, { start: Number(this.startPunch), end: Number(this.endPunch), confirmed: this.punchesConfirmed })
+      this.allocations.push(taskDraft(task, this.start, Number(this.minutes), this.description, budget, this.day.existing, this.allocations))
+      this.description = ''
+      this.app.info = '已生成待确认草稿；任务标题不是完成证据，请核对实际时长和描述后预览。'
+    } catch (error) { this.app.error = safeFailure(error).message }
+    this.app.render()
+  }
   private makePreview(): void {
     const day = this.day
     if (!day) return
@@ -175,7 +216,7 @@ export class HoursView {
     const app = this.app,
       authenticated = app.status?.ones.connected && app.status?.coho.connected
     const content = stack(
-      notice('先考勤，再分配：有效额度只是上限，任务时长由你手动确认，不自动填满。'),
+      notice('扫描缺报 → 考勤交叉核对 → 按任务生成草稿。考勤额度只是上限，不自动填满或提交。'),
       app.teamSelect(),
       input('业务日期（YYYY-MM-DD）', this.date, (v) => this.changeDate(v), { disabled: app.busy }),
       check(
@@ -183,6 +224,7 @@ export class HoursView {
         this.mapping,
         (v) => {
           this.mapping = v
+          this.scan = null
           app.invalidateDay()
           app.render()
         },
@@ -204,6 +246,27 @@ export class HoursView {
         ? button('加载更多工作项（列表尚未完整）', () => this.loadTasks(true), app.busy)
         : null
     )
+    content.append(card(
+      '查找缺少工时的日期',
+      select('查询范围', this.months, [
+        { value: '1', label: '近一个月' }, { value: '2', label: '近两个月' },
+        { value: '3', label: '近三个月' }, { value: '6', label: '近半年' }, { value: '12', label: '近一年' }
+      ], value => { this.months = value; this.scan = null; app.render() }, app.busy),
+      text('按上海时区查询至昨天；逐日核对考勤，长范围可能耗时较久。失败不视为缺报。', true),
+      button('扫描工时与考勤', () => this.scanMissing(), app.busy || !authenticated || !this.mapping || !app.team)
+    ))
+    if (this.scan) {
+      const labels = { missing: '未填写', partial: '未达考勤额度', covered: '已覆盖', review: '待核实考勤' }
+      content.append(card('扫描结果',
+        text(`已核对 ${this.scan.length} 天 · 未填写 ${this.scan.filter(d => d.state === 'missing').length} 天 · 未达额度 ${this.scan.filter(d => d.state === 'partial').length} 天 · 待核实 ${this.scan.filter(d => d.state === 'review').length} 天`),
+        ...this.scan.filter(d => d.state !== 'covered' || d.existing > (d.budget ?? 0)).map(day => stack(
+          text(day.date + ' · ' + labels[day.state]),
+          text('已有 ' + hours(day.existing) + (day.remaining === null ? '' : ' · 可分配上限 ' + hours(day.remaining))),
+          text(day.reason, true),
+          button('核对 ' + day.date, () => { this.changeDate(day.date); this.loadDay() }, app.busy)
+        ))
+      ))
+    }
     if (this.day) {
       const choices = [
         { value: '', label: '请选择实际记录' },
@@ -242,7 +305,7 @@ export class HoursView {
     } else content.append(notice('尚无有效考勤依据；未读取成功前，新增工时不可提交。'))
     content.append(
       card(
-        '手动分配',
+        '按任务生成草稿 / 手动分配',
         select(
           '目标任务 / Bug',
           this.selected,
@@ -282,6 +345,9 @@ export class HoursView {
           },
           { multiline: true, disabled: app.busy }
         ),
+        button('按所选任务生成草稿', () => this.generate(),
+          app.busy || !this.day || !this.selected || !this.punchesConfirmed || this.startPunch === '' || this.endPunch === ''),
+        text('使用所填时长生成，不自动推断投入；空描述按任务标题建议，提交前须人工确认。', true),
         button(
           '加入分配草稿',
           () => this.add(),

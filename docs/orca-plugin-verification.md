@@ -509,3 +509,14 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 真实视觉：实际打开检查 [登录后效果](</Users/choshim/Library/Application Support/orca/chat-scratch/6bd22500e7f0300e1f445df210027159/remember-login/live-auth-saved.png>)（Orca 开发版，781×1350，深色）。两站徽标、保存勾选与空密码框一致，说明和按钮无遮挡/截断；截图命令 errors=[]。该截图只证明所示状态，不代证过期恢复；chat-scratch 可能清理。
 - 仍未覆盖：真实账号自然过期后的 refresh grant/密码自动重登、物理锁屏解锁。自动过期与失效恢复路径已由虚构 HTTP/Vault 定向测试覆盖；不改真实令牌有效期或注入测试后门来冒充线上验收。
 - 交付：任务开发版保持获准加载，未提交、合并或发布正式版本；保留 Worktree。最终 Source Identity 由 native session-source-identity 写入同证据目录 source-identity.json，不以测试 fixture 成功代称真实账号恢复成功。
+
+### 2026-11-11：历史工时扫描与辅助任务草稿
+
+- 隔离基线：main / 927d2bcc3e1ae5c731a0708050bd2565339dcd7c；任务分支 agent/attendance-hours，Worktree 为 /Users/choshim/.agent-worktrees/ones/agent/attendance-hours。原主工作区未修改，未提交或集成。
+- 定向结果：新增 missing-hours.test.ts 6/6；protections.test.ts 与 auth-lifecycle.test.ts 共 21/21。覆盖月份月底/闰日/上海时区、五档范围、分页及重复 key、缺报/部分/异常分离、七日分批及失效游标、网络失败/取消、选日重读、重复草稿及额度保护。使用安装版 Orca 官方测试 loader，无真实服务请求。
+- tsc -p plugin、git diff --check、orca plugin validate 通过；未执行全量测试。Node 26 不再接受 experimental-transform-types，初次测试命令未运行用例，随后改用项目规定的宿主 loader 完成验证。
+- 视觉与交互：实际 HoursView 编译输出配合虚构宿主请求在 Orca 浏览器渲染，非正式插件安装验收。默认一月、五档选项、一年请求参数、扫描分类、选日/读任务/确认打卡、两小时草稿、重复任务拦截、预览和写入禁用均经交互断言。460 × 950 单屏截图已打开检查，列表和预览文字可读，无遮挡或横向溢出；长截图存在拼接重复，已弃用。未新增样式，暗色主题未另行截图验证。
+- 截图（本机 chat-scratch，可能被清理）：
+  - /Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/scan.png
+  - /Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/draft.png
+- 真实全年查询耗时、完整宿主集成及生产工时提交未验证；写入闸保持关闭。自动生成只辅助任务描述和待确认记录，不推断实际投入或自动填满额度。范围工时超过既有 20 页保护上限会明确失败，需改选较短范围。
