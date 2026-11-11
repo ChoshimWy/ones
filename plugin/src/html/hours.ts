@@ -1,3 +1,4 @@
+import { calendarMonths, hoursCalendar } from './hours-calendar.ts'
 import { attendanceBudget } from '../domain/attendance.ts'
 import { taskDraft, type MissingDay } from '../domain/missing-hours.ts'
 import { safeFailure } from '../domain/model.ts'
@@ -26,6 +27,7 @@ export class HoursView {
     day: '2-digit'
   }).format(new Date())
   private months = '1'
+  private calendarMonth = ''
   private scan: MissingDay[] | null = null
   preview: Preview | null = null
   confirmed = false
@@ -60,6 +62,7 @@ export class HoursView {
     this.allocations = []
     this.mapping = false
     this.scan = null
+    this.calendarMonth = ''
     this.description = ''
   }
   changeDate(value: string): void {
@@ -152,7 +155,10 @@ export class HoursView {
         this.app.info = '扫描完成；选择日期后会重新读取当日考勤与工时。'
         return days.reverse()
       },
-      result => { this.scan = result }
+      result => {
+        this.scan = result
+        this.calendarMonth = calendarMonths(result).at(-1) ?? ''
+      }
     )
   }
   private generate(): void {
@@ -256,17 +262,14 @@ export class HoursView {
       button('扫描工时与考勤', () => this.scanMissing(), app.busy || !authenticated || !this.mapping || !app.team)
     ))
     if (this.scan) {
-      const labels = { missing: '未填写', partial: '未达考勤额度', covered: '已覆盖', review: '待核实考勤', not_required: '无考勤，无需工时' }
-      content.append(card('扫描结果',
-        text(`已核对 ${this.scan.length} 天 · 未填写 ${this.scan.filter(d => d.state === 'missing').length} 天 · 未达额度 ${this.scan.filter(d => d.state === 'partial').length} 天 · 待核实 ${this.scan.filter(d => d.state === 'review').length} 天 · 无考勤跳过 ${this.scan.filter(d => d.state === 'not_required').length} 天`),
-        ...this.scan.filter(d => d.state !== 'not_required' && (d.state !== 'covered' || d.existing > (d.budget ?? 0))).map(day => stack(
-          text(day.date + ' · ' + labels[day.state]),
-          day.attendanceTime ? text(`考勤 ${day.attendanceTime.start}—${day.attendanceTime.end} · 折算工时 ${hours(day.budget ?? 0)}`) : null,
-          text('已有 ' + hours(day.existing) + (day.remaining === null ? '' : ' · 距考勤折算工时差额 ' + hours(day.remaining))),
-          text(day.reason, true),
-          button('核对 ' + day.date, () => { this.changeDate(day.date); this.loadDay() }, app.busy)
-        ))
-      ))
+      content.append(hoursCalendar({
+        days: this.scan,
+        month: this.calendarMonth,
+        selected: this.day?.date ?? null,
+        busy: app.busy,
+        changeMonth: month => { this.calendarMonth = month; app.render() },
+        chooseDate: date => { this.changeDate(date); this.loadDay() }
+      }))
     }
     if (this.day) {
       const choices = [
@@ -307,7 +310,11 @@ export class HoursView {
           text('当日已登记：' + hours(this.day.existing))
         )
       )
-    } else content.append(notice('尚无有效考勤依据；未读取成功前，新增工时不可提交。'))
+    } else {
+      content.append(notice('选择日历中的日期，再核对考勤与分配工时。'))
+      content.append(button('恢复草稿', () => this.restore(), app.busy || !authenticated))
+      return content
+    }
     content.append(
       card(
         '按任务生成草稿 / 手动分配',

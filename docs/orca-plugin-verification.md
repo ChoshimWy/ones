@@ -528,3 +528,13 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 定向结果：missing-hours 6/6、hours-request 2/2、protections 中 attendance 两项 2/2，类型检查和 diff-check 通过。覆盖无考勤跳过、未知日期仍待核实、原日新增保护、分批完整性和宿主 JSON 请求边界。
 - 虚构数据实际 HoursView 的 Orca 浏览器交互确认无考勤日期无核对按钮、打卡时间与六小时差额可见、选择 09:15 打卡后开始时间为 09:15。460×950 截图已打开检查，文字完整、无横向溢出；此为渲染预览而非真实账号扫描验收。
 - 代表截图本地路径：/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/attendance-based.png（chat-scratch 可能被清理）。真实服务扫描及写入仍未在本次执行。
+
+### 2026-11-11：月历式考勤工时展示
+
+- 以用户日历参考图替代逐日大卡片，展示日期、考勤折算时长和登记状态；含已登记日期、无考勤无需工时、范围外未查询及考勤待核实。跨月分页只切换展示，不触发额外数据读取；选日仍重读权威记录，随后展开分配表单。
+- hours-calendar 与 hours-request 定向测试 4/4；类型检查、diff-check 通过。覆盖周一首列、月底及闰年、月份排序、各登记状态、首批/续批 JSON 参数及读取失败不发布部分结果。
+- 实际 HoursView 虚构预览交互验证：默认最近月、上/下月边界、已登记/部分/未登记均可见、无考勤不可选、选日触发原日期 day.read、表单仅选日后展开及选中态。没有真实账号扫描或工时提交。
+- 已打开检查 460×950 浅色/深色与 1100×950 浅色截图：七列结构完整，无横向溢出或遮挡；窄面板文字换行，宽屏单行显示。主题预览使用虚构宿主 token，不等于所有正式主题均已验收。
+- 本机截图（chat-scratch，可能清理）：
+  - /Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/calendar-dark.png
+  - /Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/calendar-wide.png

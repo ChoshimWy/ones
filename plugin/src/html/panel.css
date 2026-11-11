@@ -475,3 +475,25 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
   .pagination-controls { grid-column: 1 / -1; width: 100%; justify-content: flex-end; }
   .pagination-arrows button { width: 40px; height: 40px; }
 }
+
+/* Monthly attendance overview: keep seven weekday columns even in the sidebar. */
+.hours-calendar { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.hours-calendar > .row { justify-content: space-between; }
+.hours-calendar-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.hours-calendar-table caption { font-size: 16px; font-weight: 650; padding: 4px 0 14px; text-align: center; }
+.hours-calendar-table th { color: var(--orca-muted-foreground); font-size: 12px; font-weight: 500; padding: 8px 0; }
+.hours-calendar-table td { padding: 0; border: 1px solid var(--orca-border); vertical-align: top; }
+.hours-calendar-table .calendar-day { display: flex; flex-direction: column; align-items: stretch; gap: 7px; width: 100%; min-height: 104px; height: 100%; padding: 8px 5px; border: 0; border-radius: 0; text-align: left; font-size: 12px; font-weight: 400; background: transparent; color: var(--orca-foreground); white-space: normal; overflow-wrap: anywhere; }
+.calendar-date { text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
+.calendar-attendance, .calendar-registration { display: block; line-height: 1.4; }
+.calendar-missing .calendar-registration { color: var(--orca-destructive, #d84b4b); font-weight: 650; }
+.calendar-partial .calendar-registration, .calendar-review .calendar-attendance { color: var(--orca-primary, #b38132); font-weight: 650; }
+.calendar-covered .calendar-registration { color: var(--orca-success, #328565); }
+.hours-calendar-table .calendar-not_required, .hours-calendar-table .calendar-unqueried { color: var(--orca-muted-foreground); }
+.hours-calendar-table .calendar-selected { box-shadow: inset 0 0 0 2px var(--orca-ring, var(--orca-primary)); }
+.hours-calendar-table button.calendar-day:hover:not(:disabled) { background: var(--wb-hover, var(--orca-card)); }
+.hours-calendar-table button.calendar-day:focus-visible { outline: 2px solid var(--orca-ring, var(--orca-primary)); outline-offset: -2px; }
+@media (max-width: 600px) {
+  .hours-calendar-table .calendar-day { font-size: 10px; min-height: 100px; padding: 6px 3px; gap: 6px; }
+  .hours-calendar-table th { font-size: 11px; }
+}
