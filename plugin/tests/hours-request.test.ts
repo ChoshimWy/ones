@@ -2,71 +2,144 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { HoursView } from '../src/html/hours.ts'
 import type { WorkbenchUI } from '../src/html/panel.ts'
+import { recentHoursMonths } from '../src/domain/hours-year.ts'
+import { monthDates } from '../src/domain/missing-hours.ts'
+import type { HoursMonth } from '../src/hours-cache.ts'
 
-const day = { date: '2026-02-01', existing: 0, budget: 480, remaining: 480, state: 'missing', reason: 'fixture' }
-function viewFixture() {
-  const app = { team: 'fixture-team', status: { identity: 'owner', ones: { connected: true }, coho: { connected: true } },
+/// 只替换 host transport，真实 HoursView 负责队列、代次与缓存选择。
+function fixture() {
+  const app = { team: 'team', status: { identity: 'owner', ones: { connected: true }, coho: { connected: true } }, busy: false,
     invalidateDay() { view.clearDay() }, render() {} }
   const view = new HoursView(app as unknown as WorkbenchUI)
-  const internal = view as unknown as { active: boolean; scan: typeof day[] | null; cached: boolean; loadError: string; calendarMonth: string; loading: boolean; loadMonth(month: string): Promise<void> }
-  internal.active = true
+  const internal = view as unknown as { active: boolean; scan: HoursMonth['days'] | null; loadError: string; calendarMonth: string; loading: boolean; pumping: boolean; queue: string[]; scanningMonth: string; months: Map<string, HoursMonth>; loadMonth(month: string, force?: boolean): Promise<void> }
   return { app, view, internal }
 }
-for (const failSecond of [false, true]) test('hours month transport: ' + (failSecond ? 'failed refresh retains cached snapshot' : 'cache first and JSON-safe continuation'), async () => {
+const months = recentHoursMonths()
+const snapshot = (month: string, covered = false): HoursMonth => ({ month, savedAt: 1, days: monthDates(month).map(date => ({ date, existing: covered ? 480 : 0, budget: 480, remaining: covered ? 0 : 480, state: covered ? 'covered' : 'missing', reason: 'fixture' })) })
+const wait = async (predicate: () => boolean) => {
+  for (let i = 0; i < 200 && !predicate(); i++) await new Promise(resolve => setImmediate(resolve))
+  assert.ok(predicate(), 'async state settled')
+}
+const answer = (value: unknown) => ({ output: { ok: true, value } })
+
+test('hours year transport: twelve-month bootstrap skips balanced history and keeps task queries separate', async () => {
   const previous = globalThis.orca
-  const calls: Record<string, unknown>[] = []
-  const { internal } = viewFixture()
-  globalThis.orca = { host: { call: async (method: string, params: Record<string, unknown>) => {
-    assert.equal(method, 'plugin.request')
+  const f = fixture()
+  const scans: string[] = []
+  globalThis.orca = { host: { call: async (_: string, params: { name: string; input: { month: string } }) => {
     assert.deepEqual(structuredClone(params), JSON.parse(JSON.stringify(params)))
-    if (params.name === 'hours.cache') return { output: { ok: true, value: { month: '2026-02', days: [{ ...day, existing: 60 }], savedAt: 1 } } }
-    assert.equal(params.name, 'hours.scan')
-    assert.equal(internal.scan?.[0]?.existing, 60)
-    const input = params.input as Record<string, unknown>
-    assert.equal(input.month, '2026-02')
-    calls.push(input)
-    if (calls.length === 1) assert.equal(Object.hasOwn(input, 'cursor'), false)
-    else {
-      assert.equal(input.cursor, 'next-fixture')
-      if (failSecond) throw Error('fixture transport unavailable')
+    if (params.name === 'hours.yearCache') return answer([snapshot(months[1]!, true)])
+    if (params.name === 'hours.tasksCache' || params.name === 'hours.batchResult') return answer(null)
+    if (params.name === 'hours.tasksSync') return answer({ typeId: 'ordinary', items: [], savedAt: 1 })
+    if (params.name === 'hours.scan') {
+      scans.push(params.input.month)
+      const value = snapshot(params.input.month)
+      return answer({ days: value.days, nextCursor: null, total: value.days.length, savedAt: 2 })
     }
-    return { output: { ok: true, value: { days: [{ ...day, date: '2026-02-0' + calls.length }], total: 2, nextCursor: calls.length === 1 ? 'next-fixture' : null, savedAt: calls.length === 1 ? null : 2 } } }
+    throw Error('unexpected request')
   } } } as unknown as typeof globalThis.orca
   try {
-    await internal.loadMonth('2026-02')
-    assert.equal(calls.length, 2)
-    if (failSecond) {
-      assert.equal(internal.scan?.length, 1)
-      assert.equal(internal.scan?.[0]?.existing, 60)
-      assert.match(internal.loadError, /缓存/)
-    } else {
-      assert.equal(internal.loadError, '')
-      assert.deepEqual(internal.scan?.map(d => d.date), ['2026-02-01', '2026-02-02'])
-    }
-    assert.equal(internal.loading, false)
-  } finally { globalThis.orca = previous }
+    f.view.enter()
+    await wait(() => f.internal.months.size === 12 && !f.internal.pumping)
+    assert.equal(scans.length, 11)
+    assert.equal(scans[0], months[0])
+    assert.ok(!scans.includes(months[1]!))
+    assert.equal(f.app.busy, false)
+    await f.internal.loadMonth(months[1]!)
+    assert.equal(scans.length, 11)
+    await f.internal.loadMonth(months[1]!, true)
+    await wait(() => !f.internal.pumping)
+    assert.equal(scans.at(-1), months[1])
+  } finally { f.view.leave(); globalThis.orca = previous }
 })
 
-test('hours month transport: late prior month and leave cannot publish stale data', async () => {
+test('hours year transport: month switch uses cache during scan; failed background result never replaces it', async () => {
   const previous = globalThis.orca
-  const { internal, view } = viewFixture()
-  let release!: (value: unknown) => void
-  let reached!: () => void
-  const started = new Promise<void>(resolve => { reached = resolve })
+  const f = fixture()
+  let release!: () => void
+  const hold = new Promise<void>(resolve => { release = resolve })
+  const scans: string[] = []
   globalThis.orca = { host: { call: async (_: string, params: { name: string; input: { month: string } }) => {
-    if (params.name === 'hours.cache') return { output: { ok: true, value: null } }
-    if (params.input.month === '2026-01') { reached(); return await new Promise(resolve => { release = resolve }) }
-    return { output: { ok: true, value: { days: [day], nextCursor: null, total: 1, savedAt: 1 } } }
+    if (params.name === 'hours.yearCache') return answer(months.map(month => snapshot(month)))
+    if (params.name === 'hours.tasksCache' || params.name === 'hours.batchResult') return answer(null)
+    if (params.name === 'hours.tasksSync') return answer({ typeId: 'ordinary', items: [], savedAt: 1 })
+    if (params.name === 'hours.scan') {
+      scans.push(params.input.month)
+      if (scans.length === 1) await hold
+      if (params.input.month === months[1]) throw Error('offline')
+      const value = snapshot(params.input.month, true)
+      return answer({ days: value.days, nextCursor: null, total: value.days.length, savedAt: 2 })
+    }
+    throw Error('unexpected request')
   } } } as unknown as typeof globalThis.orca
   try {
-    const old = internal.loadMonth('2026-01')
-    await started
-    await internal.loadMonth('2026-02')
-    release({ output: { ok: true, value: { days: [{ ...day, date: '2026-01-01' }], nextCursor: null, total: 1, savedAt: 1 } } })
-    await old
-    assert.equal(internal.calendarMonth, '2026-02')
-    assert.equal(internal.scan?.[0]?.date, day.date)
-    view.leave()
-    assert.equal(internal.active, false)
-  } finally { globalThis.orca = previous }
+    f.view.enter()
+    await wait(() => scans.length === 1)
+    await f.internal.loadMonth(months[1]!)
+    assert.equal(f.internal.calendarMonth, months[1])
+    assert.equal(f.internal.scan?.[0]?.existing, 0)
+    assert.equal(f.app.busy, false)
+    release()
+    await wait(() => !f.internal.pumping)
+    assert.equal(scans[1], months[1])
+    assert.equal(f.internal.calendarMonth, months[1])
+    assert.equal(f.internal.scan?.[0]?.existing, 0)
+    assert.match(f.internal.loadError, /保留本地/)
+  } finally { release(); f.view.leave(); globalThis.orca = previous }
+})
+
+test('hours year transport: leaving cancels lifetime and late response cannot publish another identity', async () => {
+  const previous = globalThis.orca
+  const f = fixture()
+  let release!: (value: unknown) => void
+  let reached = false
+  globalThis.orca = { host: { call: async (_: string, params: { name: string }) => {
+    if (params.name === 'hours.yearCache') return answer([])
+    if (params.name === 'hours.tasksCache' || params.name === 'hours.batchResult') return answer(null)
+    if (params.name === 'hours.tasksSync') return answer({ typeId: 'ordinary', items: [], savedAt: 1 })
+    reached = true
+    return await new Promise(resolve => { release = resolve })
+  } } } as unknown as typeof globalThis.orca
+  try {
+    f.view.enter()
+    await wait(() => reached)
+    f.view.leave()
+    f.app.status.identity = 'different-owner'
+    release(answer({ days: snapshot(months[0]!).days, nextCursor: null, total: 1, savedAt: 2 }))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(f.internal.months.size, 0)
+    assert.equal(f.internal.active, false)
+    assert.equal(f.internal.loading, false)
+  } finally { f.view.leave(); globalThis.orca = previous }
+})
+
+test('hours year transport: forced write refresh queues after the same active scan fails', async () => {
+  const previous = globalThis.orca
+  const f = fixture()
+  let release!: () => void
+  const hold = new Promise<void>(resolve => { release = resolve })
+  let scans = 0
+  globalThis.orca = { host: { call: async (_: string, params: { name: string; input: { month: string; force?: boolean } }) => {
+    if (params.name === 'hours.yearCache') return answer(months.map(month => snapshot(month, month !== months[0])))
+    if (params.name === 'hours.tasksCache' || params.name === 'hours.batchResult') return answer(null)
+    if (params.name === 'hours.tasksSync') return answer({ typeId: 'ordinary', items: [], savedAt: 1 })
+    if (params.name === 'hours.scan') {
+      scans++
+      if (scans === 1) { await hold; throw Error('old scan invalidated by write') }
+      assert.equal(params.input.force, true)
+      const value = snapshot(params.input.month, true)
+      return answer({ days: value.days, nextCursor: null, total: value.days.length, savedAt: 2 })
+    }
+    throw Error('unexpected request')
+  } } } as unknown as typeof globalThis.orca
+  try {
+    f.view.enter()
+    await wait(() => scans === 1)
+    await f.internal.loadMonth(months[0]!, true)
+    release()
+    await wait(() => !f.internal.pumping)
+    assert.equal(scans, 2)
+    assert.equal(f.internal.scan?.[0]?.existing, 480)
+    assert.equal(f.internal.loadError, '')
+  } finally { release(); f.view.leave(); globalThis.orca = previous }
 })

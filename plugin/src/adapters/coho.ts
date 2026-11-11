@@ -58,23 +58,38 @@ export class CohoClient {
     const user = dataOf(await this.transport.json('/gateway/auth/user/getCurrentUser', { headers: headers(this.session.token), signal }))
     requireThat(user.globalId === this.session.principal && user.tenantCode === TENANT, 'identity', 'Coho 登录身份已变化。')
   }
+  /// 单日业务读取始终使用新会话，不复用扫描中的原始考勤快照。
   async attendance(date: string, signal?: AbortSignal): Promise<Attendance> {
-    validDate(date)
-    const employeeId = this.session.principal
-    await this.assertIdentity(signal)
-    const request = async (path: string, data: Record<string, unknown>) => dataOf(await this.transport.json(path, { ...jsonBody(signed(data, this.session.token)), headers: headers(this.session.token), signal }))
-    const period = await request('/gateway/wtspro-attendance/attQishu/getInfoByDateAndUser', { curDate: date, empId: employeeId })
-    // Match ATS WorkbenchCalendar: the resolved kqqs initializes both calendar arguments.
-    // Never fall back to the current month if the API omits the period.
-    const kqqs = text(period.kqqs, 100)
-    const kqqsId = kqqs
-    const calendar = await request('/gateway/wtspro-attendance/attSummaryComfirm/attCalendar', { userId: employeeId, kqqsId, kqqs })
-    requireThat(Array.isArray(calendar.dateList) && calendar.dateList.some(v => record(v).date === date) && Array.isArray(calendar.dkList), 'attendance', '考勤响应未覆盖所选日期，不能生成额度。')
-    const punches: Punch[] = calendar.dkList.map(record).filter(v => v.date === date).map(v => {
-      requireThat(typeof v.isNext === 'boolean', 'attendance', '考勤跨日标志不明。')
-      return { date: text(v.date, 10), realDate: text(v.realDate, 10), time: text(v.time, 5), isNext: v.isNext, outFence: typeof v.outFence === 'boolean' ? v.outFence : null }
-    })
-    requireThat(punches.length > 0, 'no_attendance', '所选日期无打卡记录，禁止默认填入 8 小时。')
-    return { date, punches, fetchedAt: Date.now() }
+    return this.attendanceReader()(date, signal)
+  }
+  /// 单次只读同步内复用已明确覆盖日期的整期响应，避免重复下载同一期。
+  attendanceReader(): (date: string, signal?: AbortSignal) => Promise<Attendance> {
+    const calendars = new Map<string, Record<string, unknown>>()
+    let verified = false
+    return async (date, signal) => {
+      validDate(date)
+      if (!verified) {
+        await this.assertIdentity(signal)
+        verified = true
+      }
+      const request = async (path: string, data: Record<string, unknown>) => dataOf(await this.transport.json(path, { ...jsonBody(signed(data, this.session.token)), headers: headers(this.session.token), signal }))
+      let calendar = [...calendars.values()].find(value => Array.isArray(value.dateList) && value.dateList.some(day => record(day).date === date))
+      if (!calendar) {
+        const period = await request('/gateway/wtspro-attendance/attQishu/getInfoByDateAndUser', { curDate: date, empId: this.session.principal })
+        const kqqs = text(period.kqqs, 100)
+        calendar = calendars.get(kqqs)
+        if (!calendar) {
+          calendar = await request('/gateway/wtspro-attendance/attSummaryComfirm/attCalendar', { userId: this.session.principal, kqqsId: kqqs, kqqs })
+          calendars.set(kqqs, calendar)
+        }
+      }
+      requireThat(Array.isArray(calendar.dateList) && calendar.dateList.some(v => record(v).date === date) && Array.isArray(calendar.dkList), 'attendance', '考勤响应未覆盖所选日期，不能生成额度。')
+      const punches: Punch[] = calendar.dkList.map(record).filter(v => v.date === date).map(v => {
+        requireThat(typeof v.isNext === 'boolean', 'attendance', '考勤跨日标志不明。')
+        return { date: text(v.date, 10), realDate: text(v.realDate, 10), time: text(v.time, 5), isNext: v.isNext, outFence: typeof v.outFence === 'boolean' ? v.outFence : null }
+      })
+      requireThat(punches.length > 0, 'no_attendance', '所选日期无打卡记录，禁止默认填入 8 小时。')
+      return { date, punches, fetchedAt: Date.now() }
+    }
   }
 }

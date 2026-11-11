@@ -104,6 +104,27 @@ export class OnesClient {
     requireThat(new Set(statuses.map(status => status.id)).size === statuses.length, 'schema', '状态配置存在重复身份，请重新读取。')
     return statuses
   }
+  /// 从当前团队配置唯一解析普通“任务”，不将其它非缺陷类型猜作任务。
+  async ordinaryTaskType(signal?: AbortSignal): Promise<string> {
+    const data = await this.transport.json(`${this.base}/issue_types`, { headers: { Authorization: `Bearer ${this.session.token}` }, signal })
+    requireThat(Array.isArray(data.issue_types), 'schema', '工作项类型配置缺失。')
+    const matches = data.issue_types.map(record).filter(type => type.name === '任务')
+    requireThat(matches.length === 1, 'scope', '无法唯一确认普通“任务”类型，请检查团队配置。')
+    return id(matches[0]!.uuid)
+  }
+  /// 普通任务目录按类型及负责人分页，复用已确认的分页协议。
+  async ordinaryTasks(typeId: string, after = '', signal?: AbortSignal): Promise<TaskPage> {
+    const page = await this.assignedTaskPage(after, signal, id(typeId))
+    requireThat(page.items.every(task => task.issueType.name === '任务'), 'scope', '接口返回非普通任务，已停止读取。')
+    return page
+  }
+  /// 预览和提交前重新验证任务存在、可访问且仍为普通任务。
+  async ordinaryTask(taskId: string, signal?: AbortSignal): Promise<Task> {
+    const typeId = await this.ordinaryTaskType(signal)
+    const task = await this.task(taskId, signal)
+    requireThat(task.issueType.id === typeId && task.issueType.name === '任务', 'scope', '只能登记到普通任务，不能登记到缺陷或其它工作项。')
+    return task
+  }
   async tasks(after = '', signal?: AbortSignal): Promise<TaskPage> {
     return this.assignedTaskPage(after, signal)
   }
@@ -116,7 +137,7 @@ export class OnesClient {
     const meta = record(bucket.pageInfo)
     requireThat(Array.isArray(bucket.tasks) && meta.unstable === false && typeof meta.hasNextPage === 'boolean', 'partial', '任务分页不稳定，请重新读取。')
     const items = bucket.tasks.map(parseTask)
-    requireThat(!issueTypeId || items.every(task => task.issueType.id === issueTypeId), 'scope', '服务端返回非缺陷工作项，已停止展示。')
+    requireThat(!issueTypeId || items.every(task => task.issueType.id === issueTypeId), 'scope', '服务端返回其它类型工作项，已停止展示。')
     requireThat(new Set(items.map(task => task.id)).size === items.length, 'partial', '任务分页存在重复身份。')
     const nextCursor = meta.hasNextPage ? text(meta.endCursor, 8192) : null
     requireThat(nextCursor === null || (nextCursor !== after && items.length > 0), 'partial', '任务分页游标未推进。')

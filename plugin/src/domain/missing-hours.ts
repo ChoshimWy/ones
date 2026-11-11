@@ -14,6 +14,7 @@ export function businessDate(now = new Date()): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now)
 }
 export function monthDates(month: string, now = new Date()): string[] {
+  requireThat(typeof month === 'string' && /^\d{4}-\d{2}$/.test(month) && month >= '1970-01', 'input', '月份格式无效或早于支持范围。')
   validDate(month + '-01')
   const today = businessDate(now)
   requireThat(month <= today.slice(0, 7), 'input', '不能查询未来月份。')

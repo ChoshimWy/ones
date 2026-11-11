@@ -1,4 +1,6 @@
-import type { HoursMonth, HoursMonthStore } from './hours-cache.ts'
+import { HoursBatch, type HoursBatchRow, type HoursBatchResult } from './hours-batch.ts'
+import { recentHoursMonths, alignedHoursMonth } from './domain/hours-year.ts'
+import type { HoursMonth, HoursMonthStore, HoursTasks } from './hours-cache.ts'
 import { classifyDay, monthDates, businessDate, type MissingDay } from './domain/missing-hours.ts'
 import { OnesTransitions } from './adapters/ones-transitions.ts'
 import { filterProject, projectMappingKey, type ProjectMapping } from './domain/project-mapping.ts'
@@ -32,8 +34,11 @@ export class Workbench {
   private autoFlights: Partial<Record<Site, { epoch: number; promise: Promise<void>; controller: AbortController }>> = {}
   private authQueues: Record<Site, Promise<unknown>> = { ones: Promise.resolve(), coho: Promise.resolve() }
   private ready?: Promise<void>
+  private readonly batch: HoursBatch
+  private tasksEpoch = 0
+  private dayEpoch = 0
   private hoursScanEpoch = 0
-  private hoursScan?: { cursor: string; identity: string; team: string; month: string; scope: string; startedAt: number; today: string; results: MissingDay[]; dates: string[]; groups: Map<string, Worklog[]>; offset: number }
+  private hoursScan?: { cursor: string; identity: string; team: string; month: string; scope: string; startedAt: number; today: string; results: MissingDay[]; dates: string[]; groups: Map<string, Worklog[]>; offset: number; attendance: (date: string, signal?: AbortSignal) => Promise<Attendance> }
   private day?: Snapshot
   private preview?: Confirmation
   private recovery?: { id: string; receiptId: string; team: string; identity: string; key: string; stamp: string; expiresAt: number }
@@ -46,6 +51,14 @@ export class Workbench {
   constructor(private deps: Dependencies) {
     this.onesTransport = new Transport(ONES, deps.fetcher)
     this.cohoTransport = new Transport(COHO, deps.fetcher)
+    this.batch = new HoursBatch({
+      writesVerified: deps.writesVerified === true,
+      identity: () => this.identity(), client: team => this.ones(team),
+      fresh: (input, signal) => this.fetchDay(input, signal), ledger: () => this.ledger(), scope: client => this.scope(client),
+      acquire: () => { requireThat(!this.writeBusy, 'busy', '另一个写入尚未结束。'); this.writeBusy = true },
+      release: () => { this.writeBusy = false },
+      invalidate: (team, months) => this.invalidateHoursMonths(team, months)
+    })
   }
   private ensureReady(): Promise<void> {
     this.ready ??= this.restore().catch(error => {
@@ -230,7 +243,27 @@ export class Workbench {
     this.authQueues[site] = next.catch(() => {})
     return next
   }
-  private invalidate(): void { this.hoursScanEpoch++; this.hoursScan = undefined; this.day = undefined; this.preview = undefined; this.recovery = undefined; this.closeDetail() }
+  /// 身份变化使所有只读与业务确认失效；普通后台扫描不调用此入口。
+  private invalidate(): void {
+    this.invalidateHoursScan()
+    this.tasksEpoch++
+    this.dayEpoch++
+    this.day = undefined
+    this.preview = undefined
+    this.batch.clear()
+    this.recovery = undefined
+    this.closeDetail()
+  }
+  /// 独立管理扫描代次，不废弃正在查看的单日或批量预览。
+  private invalidateHoursScan(): void {
+    this.hoursScanEpoch++
+    this.hoursScan = undefined
+  }
+  /// 写入前清除受影响月份，旧扫描无法再发布已过期摘要。
+  private async invalidateHoursMonths(team: string, months: string[]): Promise<void> {
+    this.invalidateHoursScan()
+    for (const month of months) await this.deps.hoursCache?.invalidate?.(this.hoursCacheScope(team), month)
+  }
   private identity(): string {
     return digest([this.sessions.ones?.userId, this.sessions.coho?.principal, this.epochs.ones, this.epochs.coho])
   }
@@ -587,17 +620,114 @@ export class Workbench {
     requireThat(identity === this.identity(), 'stale', '账号已变化，缓存读取失效。')
     return cached
   }
-  async scanHours(input: { team: string; month: string; cursor?: string }, signal?: AbortSignal) {
+  /// 一次本地读取近一年摘要，失败月份不伪造为空月份。
+  async cachedHoursYear(team: string): Promise<HoursMonth[]> {
+    await this.ensureReady()
+    const identity = this.identity()
+    const months: HoursMonth[] = []
+    for (const month of recentHoursMonths()) {
+      const cached = await this.cachedHours(team, month)
+      requireThat(identity === this.identity(), 'stale', '年度缓存读取期间账号已变化。')
+      if (cached) months.push(cached)
+    }
+    return months
+  }
+  /// 普通任务的本地目录；按两站身份和团队隔离。
+  async cachedHoursTasks(team: string): Promise<HoursTasks | null> {
+    await this.ensureReady()
+    const identity = this.identity()
+    const value = await this.deps.hoursCache?.readTasks?.(this.hoursCacheScope(team)) ?? null
+    requireThat(identity === this.identity(), 'stale', '任务缓存读取期间账号已变化。')
+    return value
+  }
+  /// 完整读取普通任务分页后一次性发布，失败不覆盖上次成功目录。
+  async syncHoursTasks(team: string, signal?: AbortSignal): Promise<HoursTasks> {
+    await this.ensureOnesReady()
+    await this.ensureCohoReady()
+    const epoch = ++this.tasksEpoch
+    const identity = this.identity()
+    const client = this.ones(team)
+    const scope = this.hoursCacheScope(team)
+    const startedAt = Date.now()
+    const check = () => requireThat(epoch === this.tasksEpoch && identity === this.identity() && !signal?.aborted, 'stale', '任务读取已失效。')
+    return this.authenticated('ones', async () => {
+      await client.assertIdentity(signal)
+      const typeId = await client.ordinaryTaskType(signal)
+      const items: HoursTasks['items'] = []
+      const cursors = new Set<string>()
+      let after = ''
+      for (let page = 0; page < 20; page++) {
+        check()
+        const value = await client.ordinaryTasks(typeId, after, signal)
+        requireThat(!value.items.some(task => items.some(previous => previous.id === task.id)), 'partial', '任务分页重复，未替换本地目录。')
+        items.push(...value.items)
+        if (value.nextCursor === null) {
+          const result = { typeId, items, savedAt: startedAt }
+          check()
+          requireThat(this.deps.hoursCache?.publishTasks, 'cache', '任务数据库不可用，未保存目录。')
+          await this.deps.hoursCache.publishTasks(scope, result, check)
+          check()
+          return result
+        }
+        requireThat(!cursors.has(value.nextCursor), 'partial', '任务分页游标重复。')
+        cursors.add(value.nextCursor)
+        after = value.nextCursor
+      }
+      throw new AppError('partial', '普通任务超过 20 页，目录未完成，未替换本地缓存。')
+    }, client.session)
+  }
+  /// 批量预览只读，生产提交能力由批量类内部再次硬检查。
+  async previewHoursBatch(team: string, rows: HoursBatchRow[], signal?: AbortSignal) {
+    await this.ensureOnesReady()
+    await this.ensureCohoReady()
+    requireThat(!this.writeBusy, 'busy', '提交尚未结束，请稍后预览。')
+    return this.batch.preview(team, rows, signal)
+  }
+  /// 消费确认 token；返回结果本地保存，重入页面仍可查看部分完成状态。
+  async submitHoursBatch(previewId: string, confirmed: boolean, team: string): Promise<HoursBatchResult> {
+    await this.ensureOnesReady()
+    const identity = this.identity()
+    const scope = this.hoursCacheScope(team)
+    const result = await this.batch.submit(previewId, confirmed, team)
+    if (identity === this.identity()) await this.deps.store.set('hours.batch.result.' + scope, result)
+    return result
+  }
+  /// 最近批量结果与既有待核实账本共同保留，不因离开页面而丢失。
+  async hoursBatchResult(team: string): Promise<HoursBatchResult | null> {
+    await this.ensureReady()
+    const identity = this.identity()
+    const result = await this.deps.store.get('hours.batch.result.' + this.hoursCacheScope(team))
+    requireThat(identity === this.identity(), 'stale', '结果读取期间账号已变化。')
+    if (result === null || result === undefined) return null
+    const data = record(result)
+    requireThat(Array.isArray(data.rows) && data.rows.length > 0 && data.rows.length <= 31, 'ledger', '批量结果记录损坏，请查看操作核对。')
+    const rows = data.rows.map(value => {
+      const row = record(value)
+      requireThat(['verified', 'unknown', 'not_attempted'].includes(String(row.state)), 'ledger', '批量结果状态无效。')
+      return { date: validDate(row.date), state: row.state as HoursBatchResult['rows'][number]['state'], message: text(row.message, 2000) }
+    })
+    requireThat(new Set(rows.map(row => row.date)).size === rows.length, 'ledger', '批量结果日期重复。')
+    return { rows }
+  }
+  async scanHours(input: { team: string; month: string; cursor?: string; force?: boolean }, signal?: AbortSignal) {
     const dates = monthDates(input.month)
+    const requestEpoch = this.hoursScanEpoch
+    requireThat(!this.writeBusy, 'busy', '工时提交中，暂停后台对账。')
+    if (!input.cursor && input.force !== true && this.deps.hoursCache) {
+      const cached = await this.cachedHours(input.team, input.month)
+      requireThat(!this.writeBusy && requestEpoch === this.hoursScanEpoch && !signal?.aborted, 'stale', '对账期间写入或查询状态已变化。')
+      if (alignedHoursMonth(cached)) return { days: cached!.days, nextCursor: null, total: cached!.days.length, savedAt: cached!.savedAt }
+    }
     await this.ensureOnesReady()
     await this.ensureCohoReady()
     const identity = this.identity()
     const ones = this.ones(input.team)
     const coho = this.coho()
+    requireThat(!this.writeBusy && requestEpoch === this.hoursScanEpoch, 'stale', '后台查询已失效或正在写入。')
     let epoch = this.hoursScanEpoch
-    const check = () => requireThat(epoch === this.hoursScanEpoch && identity === this.identity() && !signal?.aborted, 'stale', '查询已取消或账号变化，请重新读取。')
+    const check = () => requireThat(!this.writeBusy && epoch === this.hoursScanEpoch && identity === this.identity() && !signal?.aborted, 'stale', '查询已取消或账号变化，请重新读取。')
     if (!input.cursor) {
-      this.invalidate()
+      this.invalidateHoursScan()
       epoch = this.hoursScanEpoch
       await this.authenticated('ones', async () => { await ones.assertIdentity(signal); await ones.config(signal) }, ones.session)
       const worklogs = await this.authenticated('ones', () => ones.worklogsRange(dates[0]!, dates[dates.length - 1]!, signal), ones.session)
@@ -610,7 +740,7 @@ export class Workbench {
         requireThat(group, 'schema', '接口返回了查询范围外的工时。')
         group.push(row)
       }
-      this.hoursScan = { cursor: randomUUID(), identity, team: input.team, month: input.month, scope: this.hoursCacheScope(input.team), startedAt: Date.now(), today: businessDate(), results: [], dates, groups, offset: 0 }
+      this.hoursScan = { cursor: randomUUID(), identity, team: input.team, month: input.month, scope: this.hoursCacheScope(input.team), startedAt: Date.now(), today: businessDate(), results: [], dates, groups, offset: 0, attendance: coho.attendanceReader() }
     }
     const scan = this.hoursScan
     requireThat(scan && scan.identity === identity && scan.team === input.team && scan.month === input.month &&
@@ -623,7 +753,7 @@ export class Workbench {
         check()
         const existing = existingMinutes(scan.groups.get(date)!, date, ones.session.userId)
         try {
-          const attendance = await this.authenticated('coho', () => coho.attendance(date, signal), coho.session)
+          const attendance = await this.authenticated('coho', () => scan.attendance(date, signal), coho.session)
           requireThat(attendance.date === date, 'schema', '考勤日期不匹配。')
           days.push(classifyDay(attendance, existing))
         } catch (error) {
@@ -672,8 +802,11 @@ export class Workbench {
   async readDay(input: DayInput, signal?: AbortSignal): Promise<Day> {
     await this.ensureOnesReady()
     await this.ensureCohoReady()
-    this.invalidate()
+    const epoch = ++this.dayEpoch
+    this.day = undefined
+    this.preview = undefined
     const snapshot = await this.fetchDay(input, signal)
+    requireThat(epoch === this.dayEpoch && !signal?.aborted, 'stale', '日期读取已被替换。')
     this.day = snapshot
     return snapshot.data
   }
@@ -687,7 +820,7 @@ export class Workbench {
     const client = this.ones(snapshot.input.team)
     const rows = []
     for (const allocation of allocations) {
-      const task = await client.task(id(allocation.taskId), signal)
+      const task = await client.ordinaryTask(id(allocation.taskId), signal)
       rows.push({ ...allocation, taskName: task.name })
     }
     requireThat(this.day === snapshot && snapshot.identity === this.identity(), 'stale', '预览期间身份或考勤已变化。')
@@ -710,11 +843,12 @@ export class Workbench {
       checkAllocations(confirmation.input.allocations, budget, fresh.data.existing)
       const scope = digest([ONES, client.team, client.session.userId])
       const ledger = this.ledger()
+      await this.invalidateHoursMonths(confirmation.snapshot.input.team, [fresh.input.date.slice(0, 7)])
       const writer = new Submission(ledger, worklogWriter(client))
       let count = 0
       for (const allocation of confirmation.input.allocations) {
         requireThat(this.identity() === confirmation.identity, 'identity', '身份发生变化，后续提交已停止。')
-        await client.task(allocation.taskId)
+        await client.ordinaryTask(allocation.taskId)
         const rows = await client.worklogs(fresh.input.date)
         checkAllocations([allocation], budget, existingMinutes(rows, fresh.input.date, client.session.userId))
         const intent = { scope, date: fresh.input.date, task: allocation.taskId, owner: client.session.userId, hours: apiHours(allocation.minutes), startTime: startSeconds(fresh.input.date, allocation.start), description: allocation.description }

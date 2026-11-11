@@ -73,7 +73,7 @@ function fixture() {
     if (path.endsWith('/getCurrentUser')) return json({ code: 200, data: { tenantCode: 'ATS', globalId: 'owner' } })
     if (path.endsWith('/getInfoByDateAndUser')) {
       requested = body.data.curDate
-      return json({ code: 200, data: { kqqs: 'period' } })
+      return json({ code: 200, data: { kqqs: requested } })
     }
     if (path.endsWith('/attCalendar')) {
       if (fail) return new Response('', { status: 503 })

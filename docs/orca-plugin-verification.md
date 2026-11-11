@@ -561,3 +561,14 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 月度缓存命名空间升级，旧规则生成的异常摘要不再被读取，下一次打开月份重新查询；不删除历史数据库文件。
 - TypeScript 与 diff-check 通过；protections 的 TC-PLUGIN-003/004 选择器 5 项、missing-hours 的分类与缓存隔离选择器 2 项通过。覆盖 18:30/19:00/19:29/19:30、20:00、21:02/21:29/21:30、22:00、23:59，及权威预览、提交前重读、虚构写入回读。未运行全量测试，未写入真实工时。
 - 实际 WorkbenchUI 渲染预览输入虚构打卡 08:53～21:02，操作选日后显示“考勤已自动识别”“折算工时：10 小时”；截图已打开检查，卡片文字完整，无异常提示和遮挡。截图：`/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/overtime-2102.png`。此为虚构数据渲染及交互证据，会话缓存可能清理，不代证真实接口/工时写入。
+
+### 年度本地工时、普通任务与批量预览（2026-11-11）
+
+- 近一年为当月及前 11 个自然月。首次按当前月优先补齐，重入只补未缓存/不完整月并更新当前月；切月显示本地快照，未齐月后台更新，完整对齐历史月不再自动联网。统计标明本地数据、覆盖范围、最早快照和可能滞后，不把未读/未知当缺报。
+- SQLite 增加普通任务目录，类型从团队配置唯一解析“任务”，服务端过滤并校验回包。单日和批量预览/提交再次验证普通任务，历史 Bug 草稿不能绕过。无独立真实普通任务目录或全年接口性能验收，本次网络验证使用虚构 fixture。
+- 批量最多 31 日，逐日可编辑时长、开始时间及公共描述；确认 token 绑定团队/身份/快照，先重读再逐笔提交回读。部分失败停止，未知结果保留账本阻断重试；结果持久保存并校验结构。写入前删除月度快照并使旧扫描失效，前台成功或未知返回亦移除内存月份并排队强制只读刷新。
+- 生产 `writesVerified:false` 未变，批量类内部也在任何 mutation 前硬检查；浏览器真实提交按钮禁用。权限审查最初拒绝隐含门禁的草稿方案，未执行该命令；改为类内显式只读门禁后获准实现。不执行真实工时写入，不把合成成功作为生产验收。
+- 定向测试共 27 个不同用例通过：`hours-batch.test.ts` 11、`hours-year.test.ts` 1、`hours-request.test.ts` 4、`hours-cache.test.ts` 3、`protections.test.ts` 的 `TC-PLUGIN-003|TC-PLUGIN-004` 5、`missing-hours.test.ts` 的 `service batches|cached month|late initial` 3。官方 Node test loader：`/Applications/Orca.app/Contents/Resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs`，`ORCA_PLUGIN_TEST_ROOT=$PWD/plugin`。TypeScript 与 `git diff --check` 通过；没有全量测试。
+- 覆盖年度跨界/异常月份输入、已齐跳云/强制刷新、SQLite重开与身份隔离、普通任务混入/重复分页拒绝、批量冻结输入/team/身份失效、fake逐日回读、预算或类型变化、未知第二笔阻断重试、后台读取不废弃单日及批量预览、写入期间旧扫描重建及迟到发布竞态、同月正在扫描时强制刷新最终重排。
+- 实际编译后的 `WorkbenchUI` 在 Orca 本地浏览器虚构 host 上操作验证：后台扫描期间月导航/日期/复选仍可用；跨月保留两日选择；普通任务字段；输入值/焦点/光标在后台刷新后保留；编辑时旧预览 DOM 立即移除，旧确认闭包不能提交；生产写闸保持禁用。初次 360px 批量日期输入过窄，已修为响应式双列，最终输入宽度 148px 且值完整，无横向溢出。
+- 截图均实际打开检查，来源为虚构数据渲染预览，不是账号或生产写入证明：`/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/year-calendar-360.png`、同目录 `year-batch-360.png`、`year-batch-1100.png`。360 暗色日历选择和双列输入、1100 浅色统计/批量预览的布局、文字及资源无遮挡；会话缓存可能清理。

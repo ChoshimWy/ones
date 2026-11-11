@@ -501,3 +501,14 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
   .hours-calendar-table .calendar-day { font-size: 10px; min-height: 100px; padding: 6px 3px; gap: 6px; }
   .hours-calendar-table th { font-size: 11px; }
 }
+
+.calendar-select { display: flex; justify-content: center; padding: 4px 2px; font-size: 0; }
+.calendar-select input { margin: 0; width: 16px; height: 16px; }
+
+.hours-batch-date { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto; align-items: end; gap: 10px; }
+.hours-batch-date .field { min-width: 0; }
+@media (max-width: 600px) {
+  .hours-batch-date { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding-top: 10px; border-top: 1px solid var(--orca-border); }
+  .hours-batch-date > p, .hours-batch-date > button { grid-column: 1 / -1; }
+  .hours-batch-date label { font-size: 12px; }
+}

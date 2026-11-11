@@ -101,13 +101,14 @@ test('TC-PLUGIN-003/004: service authority survives stale preview and refuses di
   const fetcher:Fetcher=async(url,init={})=>{
     const path=new URL(String(url)).pathname
     if(path.endsWith('/users/me'))return json({uuid:'user-fixture'})
+    if(path.endsWith('/issue_types'))return json({issue_types:[{uuid:'type-fixture',name:'任务'}]})
     if(path.endsWith('/info'))return json({timezone:'Asia/Shanghai',workhours_unit:'hour',configs:[{type:'manhour_mode',data:'simple'}]})
     if(path.endsWith('/getCurrentUser'))return json({code:200,data:{tenantCode:'ATS',globalId:'principal-fixture'}})
     if(path.endsWith('/getInfoByDateAndUser'))return json({code:200,data:{kqqsId:'period-fixture',kqqs:'period-label'}})
     if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'}],dkList:attendance('08:50',dayEnd).punches}})
     const {query}=JSON.parse(String(init.body))
     if(query.includes('mutation')){mutated++;throw Error('test must not write')}
-    if(query.includes('PluginTask'))return json({data:{tasks:[{uuid:'task-fixture',number:1,name:'虚构任务',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:'type-fixture',name:'缺陷'},status:{uuid:'status-fixture',name:'待处理'}}]}})
+    if(query.includes('PluginTask'))return json({data:{tasks:[{uuid:'task-fixture',number:1,name:'虚构任务',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:'type-fixture',name:'任务'},status:{uuid:'status-fixture',name:'待处理'}}]}})
     return json({data:{buckets:[{manhours:total?[{key:'existing',hours:total,owner:{uuid:'user-fixture'},task:{uuid:'task-fixture'},startTime:startSeconds('2026-01-05','09:00'),type:'recorded',description:'已有'}]:[],pageInfo:{hasNextPage:false,endCursor:'',unstable:false}}]}})
   }
   const deps={store:mem.store,vault:mem.vault,protection:async()=>true,fetcher}
@@ -159,6 +160,7 @@ test('TC-PLUGIN-004-positive: confirmed synthetic batch writes and reads each or
   const fetcher:Fetcher=async(url,init={})=>{
     const path=new URL(String(url)).pathname
     if(path.endsWith('/users/me'))return json({uuid:'user-fixture'})
+    if(path.endsWith('/issue_types'))return json({issue_types:[{uuid:'type-fixture',name:'任务'}]})
     if(path.endsWith('/info'))return json({timezone:'Asia/Shanghai',workhours_unit:'hour',configs:[{type:'manhour_mode',data:'simple'}]})
     if(path.endsWith('/getCurrentUser'))return json({code:200,data:{tenantCode:'ATS',globalId:'principal-fixture'}})
     if(path.endsWith('/getInfoByDateAndUser'))return json({code:200,data:{kqqsId:'period-fixture',kqqs:'period-label'}})
@@ -169,7 +171,7 @@ test('TC-PLUGIN-004-positive: confirmed synthetic batch writes and reads each or
       return json({data:{addManhour:{key}}})
     }
     if(query.includes('PluginReadback'))return json({data:{manhours:logs.filter(r=>r.key===v.filter.key_equal)}})
-    if(query.includes('PluginTask'))return json({data:{tasks:[{uuid:'task-fixture',number:1,name:'虚构任务',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:'type-fixture',name:'缺陷'},status:{uuid:'status-fixture',name:'待处理'}}]}})
+    if(query.includes('PluginTask'))return json({data:{tasks:[{uuid:'task-fixture',number:1,name:'虚构任务',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:'type-fixture',name:'任务'},status:{uuid:'status-fixture',name:'待处理'}}]}})
     return json({data:{buckets:[{manhours:logs,pageInfo:{hasNextPage:false,endCursor:'',unstable:false}}]}})
   }
   const service=new Workbench({store:mem.store,vault:mem.vault,protection:async()=>true,fetcher,writesVerified:true})
@@ -266,7 +268,7 @@ test('TC-PLUGIN-002-page: task reads remain bounded with explicit continuation',
     assert.deepEqual(variables.filter,{assign_in:['user-fixture']})
     assert.doesNotMatch(query,/tasks\([^)]*limit:/)
     if(page===1)assert.ok(query.includes('after:"cursor-fixture"'))
-    const value={uuid:`task-${page}`,number:page+1,name:'虚构',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:'type-fixture',name:'缺陷'},status:{uuid:'status-fixture',name:'待处理'}}
+    const value={uuid:`task-${page}`,number:page+1,name:'虚构',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:'type-fixture',name:'任务'},status:{uuid:'status-fixture',name:'待处理'}}
     page++
     return json({data:{buckets:[{tasks:[value],pageInfo:{unstable:bad,hasNextPage:page===1,endCursor:page===1?'cursor-fixture':''}}]}})
   }),{token:'fixture-access',userId:'user-fixture',label:'虚构',teams:[{id:'team-fixture',name:'团队'}],expiresAt:Date.now()+60000},'team-fixture')

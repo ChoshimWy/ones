@@ -32,3 +32,21 @@ test('hours cache: symlink directory is refused', async () => {
   try { await assert.rejects(cache.read('owner', '2026-02')) }
   finally { cache.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+test('hours cache: ordinary tasks survive restart with scope isolation; wrong types never replace them', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ones-hours-tasks-'))
+  const cache = new HoursCache(join(root, 'db'))
+  const task = { id: 'task', number: 1, name: '虚构任务', project: { id: 'project', name: '项目' }, issueType: { id: 'ordinary', name: '任务' }, status: { id: 'status', name: '进行中' } }
+  const value = { typeId: 'ordinary', savedAt: 1, items: [task] }
+  try {
+    await cache.publishTasks('team-owner', value, () => {})
+    cache.close()
+    assert.deepEqual(await cache.readTasks('team-owner'), value)
+    assert.equal(await cache.readTasks('other-owner'), null)
+    await assert.rejects(cache.publishTasks('team-owner', { ...value, savedAt: 2, items: [{ ...task, issueType: { id: 'bug', name: '缺陷' } }] }, () => {}))
+    assert.deepEqual(await cache.readTasks('team-owner'), value)
+    await cache.publish('team-owner', { month: '2026-02', days: [{ date: '2026-02-01', existing: 0, budget: 0, remaining: 0, state: 'not_required', reason: 'fixture' }], savedAt: 1 }, () => {})
+    await cache.invalidate('team-owner', '2026-02')
+    assert.equal(await cache.read('team-owner', '2026-02'), null)
+  } finally { cache.close(); await rm(root, { recursive: true, force: true }) }
+})

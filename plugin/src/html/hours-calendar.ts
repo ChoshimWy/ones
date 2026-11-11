@@ -1,6 +1,6 @@
 import { adjacentMonth, businessDate, type MissingDay } from '../domain/missing-hours.ts'
 import { validDate } from '../domain/model.ts'
-import { button, el, hours } from './dom.ts'
+import { button, el, hours, check } from './dom.ts'
 
 export function calendarMonths(days: MissingDay[]): string[] {
   return [...new Set(days.map(day => validDate(day.date).slice(0, 7)))].sort()
@@ -30,6 +30,7 @@ export function calendarLabels(day?: MissingDay): { attendance: string; registra
 
 export function hoursCalendar(options: {
   days: MissingDay[]; month: string; selected: string | null; busy: boolean; loading?: boolean
+  selectedDates?: Set<string>; toggleDate?(date: string): void
   changeMonth(month: string): void; chooseDate(date: string): void
 }): HTMLElement {
   const month = options.month
@@ -64,7 +65,7 @@ export function hoursCalendar(options: {
         el('span', 'calendar-registration', labels.registration)
       ]
       const selectable = day && day.state !== 'not_required' && day.state !== 'pending'
-      const cell = selectable ? button('', () => options.chooseDate(date), options.busy || options.loading, 'calendar-day') : el('div', 'calendar-day')
+      const cell = selectable ? button('', () => options.chooseDate(date), options.busy, 'calendar-day') : el('div', 'calendar-day')
       cell.append(...content)
       cell.setAttribute('aria-label', `${date}，${labels.attendance}，${labels.registration}`)
       cell.classList.add('calendar-' + (day?.state ?? 'unqueried'))
@@ -74,6 +75,11 @@ export function hoursCalendar(options: {
       } else if (selectable) cell.setAttribute('aria-pressed', 'false')
       if (day) cell.title = [date, day.attendanceTime ? `${day.attendanceTime.start}—${day.attendanceTime.end}` : '', day.reason].filter(Boolean).join(' · ')
       td.append(cell)
+      if (day && ['missing', 'partial'].includes(day.state) && options.toggleDate) {
+        const choose = check(`选择 ${date}`, options.selectedDates?.has(date) ?? false, () => options.toggleDate!(date), options.busy)
+        choose.classList.add('calendar-select')
+        td.append(choose)
+      }
       tr.append(td)
     }
     body.append(tr)

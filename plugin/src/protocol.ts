@@ -44,8 +44,14 @@ declare module 'orca' {
     'bugs.list': { input: { team: string; after?: string }; output: Answer<TaskPage> }
     'tasks.list': { input: { team: string; after?: string }; output: Answer<TaskPage> }
     'tasks.brief': { input: { team: string; taskId: string }; output: Answer<ImplementationBrief> }
+    'hours.yearCache': { input: { team: string }; output: Answer<import('./hours-cache.ts').HoursMonth[]> }
+    'hours.tasksCache': { input: { team: string }; output: Answer<import('./hours-cache.ts').HoursTasks | null> }
+    'hours.tasksSync': { input: { team: string }; output: Answer<import('./hours-cache.ts').HoursTasks> }
+    'hours.batchPreview': { input: { team: string; rows: import('./hours-batch.ts').HoursBatchRow[] }; output: Answer<import('./hours-batch.ts').HoursBatchPreview> }
+    'hours.batchSubmit': { input: { team: string; previewId: string; confirmed: boolean }; output: Answer<import('./hours-batch.ts').HoursBatchResult> }
+    'hours.batchResult': { input: { team: string }; output: Answer<import('./hours-batch.ts').HoursBatchResult | null> }
     'hours.cache': { input: { team: string; month: string }; output: Answer<import('./hours-cache.ts').HoursMonth | null> }
-    'hours.scan': { input: { team: string; month: string; cursor?: string }; output: Answer<{ days: import('./domain/missing-hours.ts').MissingDay[]; nextCursor: string | null; total: number; savedAt: number | null }> }
+    'hours.scan': { input: { team: string; month: string; cursor?: string; force?: boolean }; output: Answer<{ days: import('./domain/missing-hours.ts').MissingDay[]; nextCursor: string | null; total: number; savedAt: number | null }> }
     'day.read': { input: DayInput; output: Answer<Day> }
     'hours.preview': { input: PreviewInput; output: Answer<Preview> }
     'hours.submit': { input: { previewId: string; confirmed: boolean }; output: Answer<{ count: number }> }
