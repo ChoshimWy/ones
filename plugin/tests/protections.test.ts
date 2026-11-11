@@ -295,3 +295,21 @@ test('TC-PLUGIN-003-self-attendance: ATS binds employee and period to authoritat
   assert.equal((await client.attendance('2026-01-05')).punches.length,2)
   missingPeriod=true;await assert.rejects(()=>client.attendance('2026-01-05'))
 })
+
+
+test('TC-PLUGIN-004-new-key: existing or mismatched readback keys remain unknown and fence restart', async () => {
+  const intent: WriteIntent = { scope: 'scope-fixture', date: '2026-01-05', task: 'task-fixture', owner: 'owner-fixture', hours: 50000, startTime: startSeconds('2026-01-05', '09:00'), description: '虚构实际任务记录' }
+  const expected: Worklog = { key: 'old-log', task: intent.task, owner: intent.owner, hours: intent.hours, startTime: intent.startTime, description: intent.description, type: 'recorded' }
+  for (const mode of ['existing', 'mismatched'] as const) {
+    let records: Receipt[] = []
+    let writes = 0
+    const ledger = { load: async () => structuredClone(records), save: async (rows: Receipt[]) => { records = structuredClone(rows) } }
+    const writer = { add: async () => { writes++; return mode === 'existing' ? expected.key : 'new-log' }, get: async () => expected }
+    await assert.rejects(new Submission(ledger, writer).add(intent, 'first', [expected]))
+    assert.equal(records.length, 1)
+    assert.equal(records[0]!.state, 'unknown')
+    assert.equal(records[0]!.key, mode === 'existing' ? expected.key : 'new-log')
+    await assert.rejects(new Submission(ledger, writer).add(intent, 'retry', [expected]), { code: 'unknown' })
+    assert.equal(writes, 1)
+  }
+})

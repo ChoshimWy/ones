@@ -89,7 +89,9 @@ export class Submission {
         receipt.key = await this.writer.add(intent)
         receipt.state = 'unknown'
         await this.ledger.save(rows)
+        requireThat(!receipt.beforeKeys.includes(receipt.key), 'readback', '新增工时返回了已有记录，需要核实；不可重试。')
         const actual = await this.writer.get(receipt.key)
+        requireThat(actual.key === receipt.key, 'readback', '工时回读 key 与新增结果不一致，需要核实。')
         assertWorklog(actual, intent)
         receipt.state = 'verified'
         await this.ledger.save(rows)

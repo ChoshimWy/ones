@@ -19,7 +19,7 @@ function fixture(writesVerified = true) {
   const removed: string[] = []
   const logs: Worklog[] = []
   const calls: string[] = []
-  const state = { failAt: 0, writes: 0, ordinary: true, end: '21:02', requested: '2026-02-01', duplicatePage: false, taskPage: 0 }
+  const state = { failAt: 0, loseReplyAfterCommitAt: 0, existingKey: '', writes: 0, ordinary: true, end: '21:02', requested: '2026-02-01', duplicatePage: false, taskPage: 0 }
   const task = () => ({ uuid: 'task', number: 1, name: '虚构普通任务', project: { uuid: 'project', name: '项目' }, issueType: { uuid: state.ordinary ? 'ordinary' : 'bug', name: state.ordinary ? '任务' : '缺陷' }, status: { uuid: 'status', name: '处理中' } })
   const deps: Dependencies = { store, vault: store as Dependencies['vault'], writesVerified, protection: async () => true, hoursCache: {
     read: async (scope, month) => structuredClone(cache.get(scope + month) ?? null),
@@ -53,8 +53,10 @@ function fixture(writesVerified = true) {
     if (query.includes('PluginAdd')) {
       state.writes++
       if (state.writes === state.failAt) throw Error('simulated uncertain response')
+      if (state.existingKey) return json({ data: { addManhour: { key: state.existingKey } } })
       const key = 'log-' + state.writes
       logs.push({ key, owner: vars.owner, task: vars.task, type: vars.type, startTime: vars.start_time, hours: vars.hours, description: vars.description })
+      if (state.writes === state.loseReplyAfterCommitAt) throw Error('simulated response lost after commit')
       return json({ data: { addManhour: { key } } })
     }
     if (query.includes('PluginReadback')) return json({ data: { manhours: logs.filter(row => row.key === vars.filter.key_equal).map(raw) } })
@@ -248,4 +250,39 @@ test('hours batch: auth switch during preview or persisted result read discards 
   await rejected
   await assert.rejects(f.service.submitHoursBatch(preview.id, true, 'team'))
   assert.equal(f.state.writes, 2)
+})
+
+
+test('hours batch acceptance: existing key cannot verify a new write or resume remaining dates', async () => {
+  const f = fixture()
+  const row = { ...rows[0]!, minutes: 30 }
+  f.logs.push({ key: 'already-present', owner: 'owner', task: row.taskId, hours: 50000, startTime: startSeconds(row.date, row.start), description: row.description, type: 'recorded' })
+  f.state.existingKey = 'already-present'
+  const preview = await f.service.previewHoursBatch('team', [row, rows[1]!])
+  const result = await f.service.submitHoursBatch(preview.id, true, 'team')
+  assert.deepEqual(result.rows.map(item => item.state), ['unknown', 'not_attempted'])
+  assert.equal(f.logs.length, 1)
+  const restarted = new Workbench(f.deps)
+  assert.deepEqual(await restarted.hoursBatchResult('team'), result)
+  assert.equal((await restarted.pending('team')).length, 1)
+  const retry = await restarted.previewHoursBatch('team', [row])
+  await assert.rejects(restarted.submitHoursBatch(retry.id, true, 'team'), { code: 'unknown' })
+  assert.equal(f.state.writes, 1)
+})
+
+test('hours batch acceptance: committed write with lost reply is never resent after restart', async () => {
+  const f = fixture()
+  f.state.loseReplyAfterCommitAt = 1
+  const preview = await f.service.previewHoursBatch('team', rows)
+  const result = await f.service.submitHoursBatch(preview.id, true, 'team')
+  assert.deepEqual(result.rows.map(item => item.state), ['unknown', 'not_attempted'])
+  assert.equal(f.logs.length, 1)
+  assert.equal(f.logs[0]!.startTime, startSeconds(rows[0]!.date, rows[0]!.start))
+  const restarted = new Workbench(f.deps)
+  assert.equal((await restarted.pending('team')).length, 1)
+  // A different date still cannot bypass an unresolved account-scoped operation.
+  const retry = await restarted.previewHoursBatch('team', [rows[1]!])
+  await assert.rejects(restarted.submitHoursBatch(retry.id, true, 'team'), { code: 'unknown' })
+  assert.equal(f.state.writes, 1)
+  assert.equal(f.logs.length, 1)
 })

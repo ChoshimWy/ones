@@ -581,3 +581,13 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - Orca 本地合成 `WorkbenchUI` 操作：异常日期 2026-04-11 无批选框，点击显示日期和 `realDate` 固定字段错误；正常日期仍能读取。月统计独立显示待核实 1 天。模拟无缓存网络故障显示“本月尚无本地结果”，已有缓存才显示“保留本地结果”。这不证明线上 4 月 11 日具体坏字段是 `realDate`。
 - 1100 与 360px 截图已实际打开：日期/字段错误完整换行、月导航同一行、异常与正常日期区分清晰、统计独立、无横向溢出。来源为本地虚构渲染预览，非真实账号/云端验证。路径：`/Users/choshim/Library/Application Support/orca/chat-scratch/cf69c9bc9c7462f7c5ca9bb99a6e216b/hours-evidence/april-review-1100.png`、同目录 `april-review-360.png`；会话缓存可能清理。
 - 未覆盖：线上异常字段真实形态、修复后正式插件 4 月及另一未缓存月份只读扫描，由 Main 在集成重载后执行；未修改 `writesVerified:false`，未提交工时。
+
+
+## 工时新增回读保护补充（2026-11-11）
+
+基线 `main@dd8f03407aa99d10f3f096d09ff390d1e02cbfc2`；实施位于 `agent/attendance-hours` 隔离 Worktree。仅修改提交回读保护和定向测试，不改生产 `writesVerified: false` 或验收要求。
+
+- 新增回归先在原实现复现失败：新增接口返回操作前已有 key 时，原逻辑只比较业务字段，可能误报新增成功。
+- 修复后要求返回 key 不属于操作前快照，且回读 key 与新增返回 key 一致；失败保留 unknown 及已知 key，停止批次，不删除、不重发。
+- 定向验证 6 项通过：`protections.test.ts` 中 `TC-PLUGIN-004-new-key:`、`TC-PLUGIN-004: uncertain`；`hours-batch.test.ts` 中 `hours batch acceptance:` 两项、`hours batch: immutable`、`hours batch: production gate`。覆盖成功回读、防重复、旧 key/错 key、服务端已提交但回包丢失及重启后账号级阻断。TypeScript 类型检查与 `git diff --check` 通过。
+- 全部为合成接口响应，未使用真实凭证、未提交真实工时，不能计为生产端到端验收。未改变可视输出，无新增截图要求。真实提交仍受既有发布门禁限制，未添加绕过该门禁的临时参数或入口。
