@@ -4,6 +4,7 @@ import { mkdir, writeFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { evidenceFixture } from './fixtures/repair-evidence.ts'
 import { RepairCache } from '../src/repair-cache.ts'
+import { managedEvidenceFiles, supplementalEvidenceFiles } from '../src/domain/managed-evidence.ts'
 import { repairInstructions } from '../src/domain/repair-content.ts'
 import { parseRepairReport, repairCompletionBlocker, repairValidationSummary } from '../src/domain/repair-report.ts'
 
@@ -30,8 +31,10 @@ test('evidence contract: generated instructions to cache and projection use stru
     const {runId,revision,token,...payload}=template
     assert.doesNotThrow(()=>parseRepairReport(payload))
     assert.ok(instructions.includes('validation.managedEvidence'))
+    for(const name of [...managedEvidenceFiles,...supplementalEvidenceFiles]) assert.ok(instructions.includes(name))
+    assert.ok(instructions.includes('回执已写入，插件接纳与证据核验待确认'))
     const write=async(report:unknown)=>{await writeFile(contract.resultFile,JSON.stringify({runId,revision,token,...report as object}),{mode:0o600});await cache.consume('scope',()=>{})}
-    await write({...payload,...f.report})
+    await write({...payload,...f.report,validation:{...f.report.validation,evidence:[join(f.directory,'tests.json')]}})
     let row=(await cache.read('scope')).items[0]!
     assert.equal(row.reportError,undefined)
     assert.equal(repairValidationSummary(row.report),'验收状态：1/1项验证已通过')
@@ -123,4 +126,37 @@ test('evidence contract: accepted old v3 stays read-only; higher sequence bindin
     assert.deepEqual(JSON.parse(String(read.prepare('SELECT report FROM report_history WHERE sequence=2').get()!.report)),old)
     read.close()
   }finally{cache.close();await f.close()}
+})
+
+test('evidence contract: supplemental tests file never replaces authoritative evidence or weakens reference checks',async()=>{
+  const f=await fixture()
+  const report={...f.report,validation:{...f.report.validation,evidence:[join(f.directory,'tests.json')]}}
+  try {
+    // Supplementary material is not opened or used as a pass/fail authority.
+    await writeFile(join(f.directory,'tests.json'),'not authoritative JSON',{mode:0o600})
+    const before=JSON.stringify(report)
+    assert.equal((await f.projector.project(report))?.acceptanceEvidence?.state,'verified')
+    assert.equal(JSON.stringify(report),before)
+    await rm(join(f.directory,'tests.json'))
+    assert.equal((await f.projector.project(report))?.acceptanceEvidence?.state,'verified')
+    for(const extra of [
+      join(f.directory,'tests.json'),
+      join(f.apple,'00000000000000000002','tests.json'),
+      '/foreign/data/apple/'+f.run+'/tests.json',
+      f.directory+'/../'+f.run+'/tests.json',
+      join(f.directory,'unknown.json'),
+    ]) {
+      const projected=await f.projector.project({...report,validation:{...report.validation,evidence:[...report.validation.evidence,extra]}})
+      assert.equal(projected?.acceptanceEvidence?.reasonCode,'references')
+      assert.ok(repairCompletionBlocker(projected))
+    }
+    await writeFile(join(f.directory,'test-summary.json'),JSON.stringify({...f.summary,passedTests:0,failedTests:1,result:'Failed'}),{mode:0o600})
+    assert.equal((await f.projector.project(report))?.acceptanceEvidence?.reasonCode,'counts')
+    await f.save()
+    await rm(join(f.directory,'test-summary.json'))
+    assert.equal((await f.projector.project(report))?.acceptanceEvidence?.reasonCode,'unreadable')
+    // Legacy reports still need the authoritative pair, not just a supplementary file.
+    const legacy={...report,reportVersion:2 as const}
+    assert.equal((await f.projector.project(legacy))?.acceptanceEvidence?.reasonCode,'references')
+  } finally {await f.close()}
 })

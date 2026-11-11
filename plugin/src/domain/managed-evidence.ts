@@ -3,6 +3,10 @@ import { requireThat } from './model.ts'
 /// 只描述受管任务与测试输入；不能由回执指定读取根目录或判定通过。
 export type ManagedEvidence = { kind: 'apple_selected_test'; runId: string; sourceDigest: string }
 export const managedEvidenceExample: ManagedEvidence = { kind:'apple_selected_test',runId:'00000000000000000001',sourceDigest:'a'.repeat(64) }
+// Fixed authoritative files and optional supplementary references share one contract.
+// Supplementary contents are never opened or used to establish acceptance.
+export const managedEvidenceFiles: readonly string[] = ['evidence.json','test-summary.json','result.xcresult']
+export const supplementalEvidenceFiles: readonly string[] = ['tests.json']
 export const evidenceReasons = {
   binding: '未提供有效的受管任务与测试源码身份，请填写 validation.managedEvidence。',
   references: '证据引用不完整、重复、跨任务或不属于受管目录。',

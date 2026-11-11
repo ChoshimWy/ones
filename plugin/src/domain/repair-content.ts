@@ -1,5 +1,5 @@
 import { parseRepairReport } from './repair-report.ts'
-import { managedEvidenceExample } from './managed-evidence.ts'
+import { managedEvidenceExample, managedEvidenceFiles, supplementalEvidenceFiles } from './managed-evidence.ts'
 import type { ReceiptContract } from '../repair-cache.ts'
 import type { Attachment, BugDetail, DetailPage, Discussion } from '../adapters/bug-details.ts'
 import type { BugContent } from './bug-content.ts'
@@ -79,7 +79,7 @@ export function repairInstructions(contract: ReceiptContract): string {
 rootCause/solution/impact 每项一句简短白话，优先约 30–60 字，避免专业术语，不加入代码符号、路径或测试命令；不机械截断、改写或编造事实。技术身份放 sourceIdentity，验证详情与命令放 validation.reason/evidence，交付事实放 delivery。
 repair.state 仅 investigating/fixed/blocked，workspace 仅 isolated_worktree/main_workspace；代码已修复但硬件、截图或人工验证未完成时 repair.state=fixed，并在 remaining 如实记录，不得因此把代码修复记为 blocked。
 validation.status 仅 passed/failed/not_run，reason/remaining/evidence 作为独立技术记录，不决定已修复门槛。validation.unitTests 必须按单元测试 runner 真实结果填写 status、passed/failed/skipped/notRun/total 非负整数，total 等于四类之和；全部通过且 total>0 才为 passed，有 failed 则 failed，其余 not_run。build-only、未运行、skip 或 0/0 均不能冒充通过，不能从自然语言或 evidence 条数猜计数。已执行测试须在 evidence 提供实际命令、结果与证据路径；只有代码 fixed 且单元测试全部通过才能更新为已修复，硬件/截图/人工剩余项不阻断。确实无需单元测试的改动可将 unitTests 完整替换为 {"applicability":"not_applicable","reason":"具体说明为什么不适用（不是环境受阻或测试失败）","checks":[{"name":"实际替代检查名称","status":"not_run","evidence":[]}]}。每项检查 status 为 passed/failed/not_run；已执行检查必须有实际证据，全部通过且代码 fixed 后仍需用户明确确认。不得把 0/0、需要但未运行、失败或 skip 自动改称不适用；替代检查不是虚构单测数量。旧私有协议的计数分支仍可读，新不适用分支需明确获知此合同并递增序号提交，不修改原协议。
-受管 Apple 定向测试必须增加 validation.managedEvidence，结构示例（虚构占位值，必须替换为实际值）：${JSON.stringify(managedEvidenceExample)}。runId 填受管任务的 20 位 ID；sourceDigest 填该任务 evidence.json 中 before.source，并核对 after.source 一致。不从 HEAD、补丁摘要或说明文字推测。插件在固定受管根目录推导证据路径并自行核对，字段不是通过证明；无需在 evidence 重复列固定文件。非受管测试不添加此字段。sourceIdentity 仅记录技术说明，不要求固定自然语言格式。缺字段或格式错误会拒收；文件暂不可读会保持待核对，恢复后重新读取，不必重跑测试。已有私有协议不修改，补报时需明确获知本合同并递增 reportSequence。
+受管 Apple 定向测试必须增加 validation.managedEvidence，结构示例（虚构占位值，必须替换为实际值）：${JSON.stringify(managedEvidenceExample)}。runId 填受管任务的 20 位 ID；sourceDigest 填该任务 evidence.json 中 before.source，并核对 after.source 一致。不从 HEAD、补丁摘要或说明文字推测。插件在固定受管根目录推导证据路径并自行核对，字段不是通过证明；无需在 evidence 重复列固定文件。若列出受管路径，固定产物仅允许 ${managedEvidenceFiles.join('、')}；另允许同一任务的 ${supplementalEvidenceFiles.join('、')} 作为补充引用，其内容不参与通过判定。所有受管路径必须为同一任务的绝对路径，不得重复、跨任务或含路径遍历；其它材料在 reason 中说明，不混入受管路径引用。非受管测试不添加此字段。sourceIdentity 仅记录技术说明，不要求固定自然语言格式。缺字段或格式错误会拒收；文件暂不可读会保持待核对，恢复后重新读取，不必重跑测试。已有私有协议不修改，补报时需明确获知本合同并递增 reportSequence。
 delivery.state 仅 uncommitted/committed/merged/released，独立保留交付事实。
-reportSequence 从 1 开始，每次修复进度或验收事实更新必须递增；同序号内容不可变，旧序号不覆盖最新报告。后续单元测试或其它验证事实更新可保留同一 run/token/revision，递增 reportSequence 后提交完整新报告。三项简述与独立验证记录均必填；不能以修改文字掩盖未完成验收。令牌只用于此回执，不在摘要或日志重复公开。`
+reportSequence 从 1 开始，每次修复进度或验收事实更新必须递增；同序号内容不可变，旧序号不覆盖最新报告。后续单元测试或其它验证事实更新可保留同一 run/token/revision，递增 reportSequence 后提交完整新报告。三项简述与独立验证记录均必填；不能以修改文字掩盖未完成验收。完成总结须区分测试执行通过、result.json 已写入与插件已接纳且证据已核验。仅写入文件不代表插件核验成功；没有对应本次 reportSequence 的插件反馈时，明确注明“回执已写入，插件接纳与证据核验待确认”，不得为确认而直接修改数据库或重跑测试。令牌只用于此回执，不在摘要或日志重复公开。`
 }

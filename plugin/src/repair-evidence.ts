@@ -1,4 +1,4 @@
-import { evidenceReasons, managedEvidenceReferences, parseManagedEvidence, requireEvidence, type EvidenceReason } from './domain/managed-evidence.ts'
+import { managedEvidenceFiles, supplementalEvidenceFiles, evidenceReasons, managedEvidenceReferences, parseManagedEvidence, requireEvidence, type EvidenceReason } from './domain/managed-evidence.ts'
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open, realpath } from 'node:fs/promises'
@@ -43,7 +43,7 @@ export class RepairEvidence {
       return buffer.subarray(0,length).toString('utf8')
     } finally { await handle.close() }
   }
-  /// 仅跟随 evidence 数组明确列出的唯一固定文件配对；不解析自然语言的通过数量。
+  /// 绑定唯一受管任务；补充引用仅核对归属，不读取或用于判定通过。
   async project(report: RepairReport | undefined): Promise<RepairReport | undefined> {
     if (!report) return report
     const original = {...report}
@@ -60,8 +60,12 @@ export class RepairEvidence {
       const paths = references.filter(value=>value.startsWith('/'))
       const parsed = paths.map(value => {
         const relative = value.slice(this.root.length+1)
-        requireThat(value.startsWith(this.root+'/') && /^[0-9]{20}\/(evidence\.json|test-summary\.json|result\.xcresult)$/.test(relative), 'evidence', '证据路径不属于受管固定产物。')
-        return relative.split('/')
+        const parts = relative.split('/')
+        requireThat(value.startsWith(this.root+'/') && parts.length === 2
+          && /^[0-9]{20}$/.test(parts[0]!)
+          && (managedEvidenceFiles.includes(parts[1]!) || supplementalEvidenceFiles.includes(parts[1]!)),
+        'evidence', '证据路径不属于受管固定产物或允许的补充材料。')
+        return parts
       })
       const runs = new Set(parsed.map(parts=>parts[0]))
       requireThat((managed && paths.length === 0 || runs.size === 1) && new Set(paths).size === paths.length, 'evidence', '证据引用重复或存在多个运行，需人工核对。')
