@@ -87,11 +87,11 @@ export async function loginOnes(transport: Transport, account: string, password:
   const code = text(location.searchParams.get('code'), 4000)
   const tokens = await readJSON(await send('/identity/oauth/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', client_id: 'ones.v1', code, code_verifier: verifier, redirect_uri: callback }).toString() }), 'ONES 令牌交换')
   const token = text(tokens.access_token, 16000)
-  requireThat(String(tokens.token_type).toLowerCase() === 'bearer' && typeof tokens.expires_in === 'number' && tokens.expires_in > 0, 'auth_contract', '令牌类型或有效期不受支持。')
+  requireThat(String(tokens.token_type).toLowerCase() === 'bearer' && typeof tokens.expires_in === 'number' && Number.isFinite(tokens.expires_in) && tokens.expires_in > 0 && Number.isSafeInteger(Date.now() + tokens.expires_in * 1000), 'auth_contract', '令牌类型或有效期不受支持。')
   const me = await transport.json('/project/api/project/users/me', { headers: { Authorization: `Bearer ${token}` }, signal })
   requireThat(me.uuid === user && typeof me.email === 'string' && me.email.toLowerCase() === account.toLowerCase(), 'identity', '登录身份回读不匹配。')
   const info = await transport.json('/project/api/project/auth/token_info', { headers: { Authorization: `Bearer ${token}` }, signal })
   requireThat(Array.isArray(info.teams), 'auth_contract', '登录成功，但团队信息接口尚未匹配。')
   const teams = info.teams.map(v => { const t = record(v); return { id: id(t.uuid), name: text(t.name) } })
-  return { token, userId: user, label: text(me.name ?? me.email), teams, expiresAt: Date.now() + Math.min(tokens.expires_in, 86400) * 1000 }
+  return { token, userId: user, label: text(me.name ?? me.email), teams, expiresAt: Date.now() + tokens.expires_in * 1000 }
 }

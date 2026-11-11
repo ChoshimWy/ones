@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { id, record, requireThat, text, validDate, type Attendance, type Punch } from '../domain/model.ts'
 import { COHO, Transport, jsonBody } from './http.ts'
-export type CohoSession = { token: string; principal: string; label: string; expiresAt: number }
+export type CohoSession = { token: string; principal: string; label: string; expiresAt: number | null }
 const TENANT = 'ATS'
 function headers(token?: string): Record<string, string> {
   return {
@@ -30,7 +30,9 @@ export async function loginCoho(transport: Transport, account: string, password:
   // ATS WorkbenchCalendar uses this authenticated USER_INFO.globalId as its employee key.
   // Verified from the instance frontend; not a rule for other tenants.
   const principal = id(user.globalId)
-  return { token, principal, label: `Coho · ${TENANT}`, expiresAt: Date.now() + 3600000 }
+  // expTime units/refresh semantics are not verified. Do not invent a local TTL.
+  // Every attendance read validates this token and tenant with the server first.
+  return { token, principal, label: `Coho · ${TENANT}`, expiresAt: null }
 }
 function signed(data: Record<string, unknown>, token: string) {
   const timeStamp = Math.round(Date.now() / 1000)

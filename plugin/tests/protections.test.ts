@@ -53,7 +53,7 @@ test('TC-PLUGIN-001: exact origin, OAuth state and password login without browse
       cookieSeen=new Headers(init.headers).get('cookie')==='sid=fixture-cookie'
       return new Response(null,{status:302,headers:{location:`${ONES}/auth/authorize/callback?code=fake-code&state=${state}`}})
     }
-    if(path==='/identity/oauth/token')return json({access_token:'fixture-access',token_type:'Bearer',expires_in:60})
+    if(path==='/identity/oauth/token')return json({access_token:'fixture-access',token_type:'Bearer',expires_in:172800})
     assert.equal(new Headers(init.headers).get('cookie'),null)
     if(path.endsWith('/users/me'))return json({uuid:'user-fixture',email:'fixture@example.test',name:'虚构用户'})
     if(path.endsWith('/auth/token_info'))return json({teams:[{uuid:'team-fixture',name:'虚构团队'}]})
@@ -61,7 +61,7 @@ test('TC-PLUGIN-001: exact origin, OAuth state and password login without browse
   }
   const transport=new Transport(ONES,fetcher)
   const session=await loginOnes(transport,'fixture@example.test','fake-password-only',true)
-  assert.equal(session.userId,'user-fixture');assert.ok(cookieSeen);assert.equal(requests.length,7)
+  assert.ok(session.expiresAt > Date.now() + 86400000);assert.equal(session.userId,'user-fixture');assert.ok(cookieSeen);assert.equal(requests.length,7)
   const before=requests.length
   await assert.rejects(()=>transport.json('https://untrusted.example.test/steal'))
   await assert.rejects(()=>loginOnes(transport,'fixture@example.test','fake-password-only',false))
