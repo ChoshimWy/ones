@@ -530,7 +530,7 @@ export class Workbench {
     try { media.allow(mediaIds(bug)) } catch (error) { media.dispose(); throw error }
     return {
       bug,
-      read: async (resource: string, offset: number) => { check(); return media.read(media.detailId, resource, offset, signal) },
+      read: async (resource: string, offset: number) => { check(); return media.readAttachment(media.detailId, resource, offset, signal) },
       validate: async () => {
         await client.assertIdentity(signal)
         const freshTask = await client.task(task.id, signal)

@@ -33,7 +33,6 @@ export function mediaIds(bug: CompleteBug): string[] {
       else requireThat(!b.text.includes('[此媒体缺少受控资源标识'), 'media', 'Bug 包含无法读取的媒体，未发送不完整内容。')
     }
   for (const attachment of bug.attachments) {
-    requireThat(/^(image|video)\//.test(attachment.mime), 'media', 'Bug 含暂不支持传递的附件，未发送不完整内容；请在原单查看。')
     ids.add(attachment.id)
   }
   requireThat(ids.size <= 100, 'size', 'Bug 媒体数量超出上限，未截断发送。')

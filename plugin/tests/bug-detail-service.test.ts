@@ -83,6 +83,11 @@ function fixture(body = '<p>正文</p><img data-uuid="image">') {
       }
       if (path.endsWith("/messages")) return Response.json({ messages: [], has_next: false });
       if (path.endsWith("/attachments")) return Response.json({ attachments: [], has_next: false });
+      if (path.endsWith("/res/attachment/image")) return Response.json({
+        uuid: "image", mime: "video/quicktime", size: 3,
+        url: "/api/project/fixture-video",
+      });
+      if (path === "/api/project/fixture-video") return new Response("mov", { headers: { "Content-Type": "video/quicktime" } });
       throw new Error("Unexpected fixture path");
     },
   });
@@ -229,4 +234,19 @@ test('repair cache service: local scope is network-free, all reads share one typ
   await f.service.logout('ones');
   assert.throws(local.check);
   await assert.rejects(f.service.repairCacheContext('team'));
+});
+
+test("repair collection downloads original video even when detail preview rejects it", async () => {
+  const f = fixture('<video data-uuid="image"></video>');
+  const detail = await f.service.bugDetail("team", "bug");
+  await assert.rejects(f.service.detailMedia(detail.detailId, "image", 0), /不支持内嵌/);
+  const source = await f.service.collectRepair(detail.detailId);
+  try {
+    const chunk = await source.read("image", 0);
+    assert.equal(chunk.mime, "video/quicktime");
+    assert.equal(Buffer.from(chunk.data, "base64").toString(), "mov");
+    await source.validate();
+    await f.service.logout("ones");
+    await assert.rejects(source.read("image", 0));
+  } finally { source.dispose(); }
 });

@@ -56,10 +56,18 @@ export class BugMediaStore {
     );
     requireThat(this.allowed.has(id(resource)), "scope", "媒体不属于已读取的 Bug 详情。");
   }
-  async read(
+  // Agent handoff treats downloads as opaque files, never browser-renderable data.
+  async readAttachment(detailId: string, resource: string, offset: number, signal?: AbortSignal): Promise<MediaChunk> {
+    return this.readChunk(detailId, resource, offset, false, signal);
+  }
+  async read(detailId: string, resource: string, offset: number, signal?: AbortSignal): Promise<MediaChunk> {
+    return this.readChunk(detailId, resource, offset, true, signal);
+  }
+  private async readChunk(
     detailId: string,
     resource: string,
     offset: number,
+    preview: boolean,
     signal?: AbortSignal,
   ): Promise<MediaChunk> {
     this.valid(detailId, resource);
@@ -74,7 +82,7 @@ export class BugMediaStore {
       let pending = this.pending.get(resource);
       if (!pending) {
         requireThat(this.pending.size < 2, "busy", "同时加载的媒体过多，请稍后重试。");
-        pending = this.download(resource, signal);
+        pending = this.download(resource, preview, signal);
         this.pending.set(resource, pending);
       }
       try {
@@ -89,6 +97,10 @@ export class BugMediaStore {
       "cancelled",
       "媒体读取已取消或分块超出范围。",
     );
+    if (preview) {
+      requireThat(allowedMimes.has(value.mime), "media", "此媒体格式暂不支持内嵌。");
+      requireThat(matchesSignature(value.bytes, value.mime), "media", "媒体文件签名不匹配。");
+    }
     const end = Math.min(offset + CHUNK, value.bytes.length);
     return {
       mime: value.mime,
@@ -100,6 +112,7 @@ export class BugMediaStore {
   }
   private async download(
     resource: string,
+    preview: boolean,
     signal?: AbortSignal,
   ): Promise<{ mime: string; bytes: Buffer }> {
     const abort = AbortSignal.any([this.controller.signal, ...(signal ? [signal] : [])]);
@@ -111,7 +124,7 @@ export class BugMediaStore {
     );
     requireThat(value.uuid === resource, "identity", "媒体资源身份不匹配。");
     const mime = text(value.mime, 100).toLowerCase();
-    requireThat(allowedMimes.has(mime), "media", "此媒体格式暂不支持内嵌。");
+    if (preview) requireThat(allowedMimes.has(mime), "media", "此媒体格式暂不支持内嵌。");
     requireThat(
       Number.isSafeInteger(value.size) && Number(value.size) > 0 && Number(value.size) <= MAX_FILE,
       "size",
@@ -170,7 +183,7 @@ export class BugMediaStore {
       }
       const bytes = Buffer.concat(chunks);
       requireThat(
-        count === size && matchesSignature(bytes, mime),
+        count === size,
         "media",
         "媒体字节数或文件签名不匹配。",
       );
