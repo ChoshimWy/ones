@@ -296,7 +296,7 @@ DAG：080（HTML 公共桥接/主题/生命周期）→ 081（同面板列表、
 
 本节是用户明确确认的当前方案，替代第 4.1 节关于“为 Bug 创建隔离工作区”的启动步骤及 TASK-PLUGIN-040 原工作区路径阻塞；不修改 Orca 宿主，不新增 Worktree。开发本插件自身仍遵守隔离开发规则，两者不能混淆。
 
-- DEC-PLUGIN-CLI-001：顶部“打开原单”同排最右侧与详情末尾各一个“执行修复”；自动匹配已有项目，只有无可靠唯一匹配/失效映射才手动选择一次。确认 Agent 后在该项目已有主目录启动聊天。映射、限额、媒体本地引用、隐私和恢复合同唯一维护于 [插件说明](../plugin/README.md#已实现与边界)。
+- DEC-PLUGIN-CLI-001：顶部“打开原单”同排最右侧与详情末尾各一个“执行修复”；自动匹配已有项目，只有无可靠唯一匹配/失效映射才手动选择一次。选择 Agent 并补齐必填字段后，点击“开始修复并更新状态”即确认本次操作；内部预检后直接执行，不再展示二次确认，在该项目已有主目录启动聊天。映射、限额、媒体本地引用、隐私和恢复合同唯一维护于 [插件说明](../plugin/README.md#已实现与边界)。
 - DEC-PLUGIN-CLI-002：只调用已核实的 `project list`、`project setups --host local`、`worktree list` 和 `agent launch --surface chat --prompt …`。`--worktree` 为已有目录的 selector，不调用 create/setup。正文格式为 `排查并修复以下内容\n《Bug 标题、描述、图片视频引用及完整评论》`，不追加额外说明；原单内容按原样保留。
 - DEC-PLUGIN-CLI-003：独占启动意图先落盘；只有 structured session 与 journaled message 回执同时存在才显示已发送。超时、终端降级、回执不完整保持待核实，不能盲目重发。session ID 是真实返回值，不伪造“打开指定 session”能力。
 - 身份：canonical Git root `/Users/choshim/Desktop/Aputure/Code/Projects/Ones`；`base_branch=main`；`base_sha=59f1225d439e15cb912b13e959f453e54044d109`；`target_branch=feat/bug-repair-session`；任务目录 `/Users/choshim/.agent-worktrees/choshimwy-ones/feat/bug-repair-session`。Main 单 writer，ownership 为 `plugin/`、本文及验证报告。

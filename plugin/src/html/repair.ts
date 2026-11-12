@@ -52,7 +52,7 @@ export class RepairView {
     this.busy = busy
     if (!this.disposed) this.changed(busy || this.readFailed, this.record !== null)
   }
-  /// 先预览全部必填条件与项目，唯一确认按钮同时授权合法状态路径与 Agent 启动。
+  /// 表单点击即确认；内部预检成功后串行流转与启动，不再展示二次确认。
   private form(preparation: Awaited<ReturnType<RepairActions['prepare']>>) {
     const mapping=preparation.mapping,status=preparation.status
     let projectId=mapping.kind==='mapped'?mapping.project.id:''
@@ -60,28 +60,35 @@ export class RepairView {
     const fields=Object.fromEntries(status?.route.map(edge=>[edge.step.id,Object.fromEntries(edge.step.fields.map(field=>[field.id,field.value]))])??[])
     const confirmation=el('div','stack')
     const clear=()=>confirmation.replaceChildren()
-    const preview=button('预览开始修复',async()=>{
-      if(this.busy||!projectId||this.disposed)return
+    const blocked=!status?.writeEnabled||!!(status?.operation&&status.operation.state!=='verified')
+    const preview=button('开始修复并更新状态',async()=>{
+      if(this.busy||!projectId||this.disposed||blocked)return
       this.setBusy(true)
-      preview.disabled=true
+      // 冻结点击时的字段，并移除可变表单，避免预检期间改变已授权内容。
+      const input={preparationId:preparation.id,projectId,agent,fields:structuredClone(fields)}
+      this.element.replaceChildren(notice('正在校验并开始修复，请勿重复操作。'))
+      let submitting=false
       try{
-        const value=await request<Awaited<ReturnType<RepairActions['preview']>>>('repair.previewStart',{preparationId:preparation.id,projectId,agent,fields})
+        const value=await request<Awaited<ReturnType<RepairActions['preview']>>>('repair.previewStart',input)
         if(this.disposed)return
-        confirmation.replaceChildren(card('确认开始修复',text(`项目：${value.projectName}`),text([value.status.task.status.name,...value.status.route.map(x=>x.step.target.name)].join(' → ')),...value.status.route.flatMap(x=>x.step.fields.map(f=>text(`${x.step.name} · ${f.name}：${f.options.find(o=>o.id===value.status.fields[x.step.id]![f.id])?.name??(value.status.fields[x.step.id]![f.id]||'（空）')}`))),notice('状态流转不提交评论。逐步更新并回读到“修复中”后才创建聊天。状态未知时停止；已成功的远端状态不因聊天启动失败回滚。'),button('开始修复并更新状态',async()=>{
-          if(this.busy||this.disposed)return
-          this.setBusy(true)
-          this.element.replaceChildren(notice('正在执行已确认状态路径，成功后收集最新 Bug 并创建聊天。请勿重复操作。'))
-          try{
-            const result=await request<RepairRecord>('repair.start',{previewId:value.id,confirmed:true})
-            if(!this.disposed){this.showRecord(result);await this.updated?.()}
-          }catch(error){if(!this.disposed){const warning=message(error)+' 已成功的远端步骤保留，不会自动回滚或重发未知操作。';this.element.replaceChildren(notice(warning,true));await this.updated?.(warning)}}
-          finally{this.setBusy(false)}
-        },false,'primary')))
-      }catch(error){if(!this.disposed)confirmation.replaceChildren(notice(message(error),true))}
-      finally{this.setBusy(false);preview.disabled=!projectId}
-    },!projectId||!status?.writeEnabled||!!(status?.operation&&status.operation.state!=='verified'),'primary')
-    const mappingUI=mapping.kind==='mapped'?text(`目标项目：${mapping.project.name}`):select('本地项目','',[{value:'',label:'请选择本地项目'},...mapping.candidates.map(p=>({value:p.id,label:p.name}))],value=>{projectId=value;clear();preview.disabled=!value})
-    const content=card('开始修复并更新状态',mappingUI,select('修复 Agent',agent,[{value:'codex',label:'Codex'},{value:'claude',label:'Claude Code'}],value=>{agent=value;clear()}),text(status?[status.snapshot.task.status.name,...status.route.map(x=>x.step.target.name)].join(' → '):''),notice('状态流转不提交评论。将向 Agent 发送完整 Bug 正文、已有评论与媒体引用；不授权自动提交代码或改变其它状态。'))
+        submitting=true
+        const result=await request<RepairRecord>('repair.start',{previewId:value.id,confirmed:true})
+        if(!this.disposed){this.showRecord(result);await this.updated?.()}
+      }catch(error){
+        if(!this.disposed){
+          if(submitting){
+            const warning=message(error)+' 已成功的远端步骤保留，不会自动回滚或重发未知操作。'
+            this.element.replaceChildren(notice(warning,true))
+            await this.updated?.(warning)
+          }else{
+            this.form(preparation)
+            this.element.prepend(notice(message(error),true))
+          }
+        }
+      }finally{this.setBusy(false)}
+    },!projectId||blocked,'primary')
+    const mappingUI=mapping.kind==='mapped'?text(`目标项目：${mapping.project.name}`):select('本地项目','',[{value:'',label:'请选择本地项目'},...mapping.candidates.map(p=>({value:p.id,label:p.name}))],value=>{projectId=value;clear();preview.disabled=!value||blocked})
+    const content=card('开始修复并更新状态',mappingUI,select('修复 Agent',agent,[{value:'codex',label:'Codex'},{value:'claude',label:'Claude Code'}],value=>{agent=value;clear()}),text(status?[status.snapshot.task.status.name,...status.route.map(x=>x.step.target.name)].join(' → '):''),notice('状态流转不提交评论。将向 Agent 发送完整 Bug 正文、已有评论与媒体引用；不授权自动提交代码或改变其它状态。核对表单后点击即执行，不再二次确认。'))
     if(status?.operation&&status.operation.state!=='verified'){
       content.append(notice('已有状态结果待核实，不能再次开始修复。',true),button('核对状态结果',async()=>{
         try{await request('bugs.transitionReconcile',{detailId:this.detailId,operationId:status.operation!.id});await this.open()}catch(error){confirmation.replaceChildren(notice(message(error),true))}

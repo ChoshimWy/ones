@@ -50,12 +50,16 @@ try{
   const screenshot=async(name,mode,width)=>{
     await page.setViewportSize({width,height:1100});await theme(mode==='dark')
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
-    const title=name.startsWith('content-spacing')?'Bug 正文':name.startsWith('repair-business')?'确认开始修复':name.startsWith('repair-detail')?'修复进度':(name==='completion-business-preview'||name.startsWith('summary-layout'))?'确认一次完成状态更新':name.startsWith('completion-')?'更新为已修复':null
+    const title=name.startsWith('content-spacing')?'Bug 正文':name.startsWith('repair-business')?'开始修复并更新状态':name.startsWith('repair-detail')?'修复进度':(name==='completion-business-preview'||name.startsWith('summary-layout'))?'确认一次完成状态更新':name.startsWith('completion-')?'更新为已修复':null
     if(title)await page.getByRole('heading',{name:title,exact:true}).locator('..').screenshot({path:join(output,name+'.png')})
     else await page.screenshot({path:join(output,name+'.png'),fullPage:true})
   }
   const api={evaluate:expression=>page.evaluate(expression),wait:async expression=>{try{return await page.waitForFunction(expression)}catch(error){console.log(JSON.stringify({waiting:expression,body:await page.locator('body').innerText(),errors}));throw error}},screenshot,press:key=>page.keyboard.press(key)}
-  if(process.env.ONES_JOURNEY==='ui-design'){
+  if(process.env.ONES_JOURNEY==='repair-direct'){
+    const evidence=await exerciseRepairPanel(api)
+    assert.deepEqual(errors,[])
+    console.log(JSON.stringify({...evidence,pageErrors:errors}))
+  }else if(process.env.ONES_JOURNEY==='ui-design'){
     const evidence=await exerciseWorkbenchDesign({page,screenshot})
     assert.deepEqual(errors,[])
     await writeFile(join(output,'ui-design-evidence.json'),JSON.stringify({...evidence,pageErrors:errors},null,2))
