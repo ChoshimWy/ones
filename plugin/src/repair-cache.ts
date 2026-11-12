@@ -9,6 +9,7 @@ import { constants } from 'node:fs'
 import { lstat, mkdir, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { AppError, requireThat, record, type Task } from './domain/model.ts'
+import { attemptKey } from './repair-journal.ts'
 import type { RepairListItem, RepairRecord } from './repair.ts'
 import { ensurePrivateDirectory, assertPrivatePath } from './private-files.ts'
 
@@ -41,6 +42,7 @@ export class RepairCache {
       db.exec(`CREATE TABLE IF NOT EXISTS repairs(scope TEXT NOT NULL, task_id TEXT NOT NULL, task TEXT NOT NULL, receipt TEXT NOT NULL, visible INTEGER NOT NULL DEFAULT 1, run_id TEXT, revision TEXT, token_hash TEXT, result_file TEXT, report TEXT, report_error TEXT, PRIMARY KEY(scope,task_id));
         CREATE TABLE IF NOT EXISTS sync(scope TEXT PRIMARY KEY, synced_at INTEGER, reconciled_at INTEGER, version INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS report_history(scope TEXT NOT NULL, task_id TEXT NOT NULL, run_id TEXT NOT NULL, sequence INTEGER NOT NULL, report TEXT NOT NULL, received_at INTEGER NOT NULL, PRIMARY KEY(scope,task_id,run_id,sequence));
+        CREATE TABLE IF NOT EXISTS attempt_history(scope TEXT NOT NULL, task_id TEXT NOT NULL, attempt TEXT NOT NULL, snapshot TEXT NOT NULL, PRIMARY KEY(scope,task_id,attempt));
         PRAGMA user_version=1;`)
       this.database = db
       return db
@@ -70,7 +72,15 @@ export class RepairCache {
       const current = db.prepare('SELECT version FROM sync WHERE scope=?').get(scope)
       requireThat(Number(current?.version ?? 0) === expectedVersion, 'stale', '同步期间执行记录已更新，请重新刷新。')
       db.prepare('UPDATE repairs SET visible=0 WHERE scope=?').run(scope)
-      for (const item of items) db.prepare('INSERT INTO repairs(scope,task_id,task,receipt) VALUES(?,?,?,?) ON CONFLICT(scope,task_id) DO UPDATE SET task=excluded.task,receipt=excluded.receipt,visible=1').run(scope, item.task.id, JSON.stringify(item.task), JSON.stringify(item.record))
+      for (const item of items) {
+        const old = db.prepare('SELECT task,receipt,report FROM repairs WHERE scope=? AND task_id=?').get(scope,item.task.id)
+        if (old && attemptKey(JSON.parse(String(old.receipt))) !== attemptKey(item.record)) {
+          const previous = JSON.parse(String(old.receipt)) as RepairRecord
+          db.prepare('INSERT OR IGNORE INTO attempt_history(scope,task_id,attempt,snapshot) VALUES(?,?,?,?)').run(scope,item.task.id,attemptKey(previous),JSON.stringify({task:JSON.parse(String(old.task)),record:previous,...(old.report?{report:JSON.parse(String(old.report))}:{})}))
+          db.prepare('DELETE FROM repairs WHERE scope=? AND task_id=?').run(scope,item.task.id)
+        }
+        db.prepare('INSERT INTO repairs(scope,task_id,task,receipt) VALUES(?,?,?,?) ON CONFLICT(scope,task_id) DO UPDATE SET task=excluded.task,receipt=excluded.receipt,visible=1').run(scope, item.task.id, JSON.stringify(item.task), JSON.stringify(item.record))
+      }
       db.prepare('INSERT INTO sync(scope,synced_at,reconciled_at,version) VALUES(?,?,?,1) ON CONFLICT(scope) DO UPDATE SET synced_at=excluded.synced_at,reconciled_at=COALESCE(excluded.reconciled_at,sync.reconciled_at),version=sync.version+1').run(scope, Date.now(), reconcile ? Date.now() : null)
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); throw error }
@@ -85,12 +95,22 @@ export class RepairCache {
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); throw error }
   }
+  async archived(scope: string, taskId: string, attempt: string): Promise<RepairListItem | null> {
+    const row = (await this.db()).prepare('SELECT snapshot FROM attempt_history WHERE scope=? AND task_id=? AND attempt=?').get(scope,taskId,attempt)
+    return row ? JSON.parse(String(row.snapshot)) as RepairListItem : null
+  }
   /// 启动前登记绑定，使瞬时完成的回执也可恢复；不更改防重发账本。
-  async register(scope: string, task: Task, receipt: RepairRecord, revision: string, directory: string): Promise<ReceiptContract> {
+  async register(scope: string, task: Task, receipt: RepairRecord, revision: string, directory: string, previous?: RepairRecord, ancestors: string[] = []): Promise<ReceiptContract> {
     const db = await this.db()
     const runId = randomUUID(), token = randomBytes(32).toString('hex'), resultFile = join(directory, 'result.json')
     db.exec('BEGIN IMMEDIATE')
     try {
+    const prior = db.prepare('SELECT * FROM repairs WHERE scope=? AND task_id=?').get(scope,task.id)
+    if (prior) {
+      const oldReceipt = JSON.parse(String(prior.receipt)) as RepairRecord
+      requireThat((attemptKey(oldReceipt) === attemptKey(previous ?? receipt) || ancestors.includes(attemptKey(oldReceipt))), 'stale', '回执缓存已有不同执行轮次，未覆盖。')
+      if (previous) db.prepare('INSERT OR IGNORE INTO attempt_history(scope,task_id,attempt,snapshot) VALUES(?,?,?,?)').run(scope,task.id,attemptKey(oldReceipt),JSON.stringify({task:JSON.parse(String(prior.task)),record:oldReceipt,...(prior.report?{report:JSON.parse(String(prior.report))}:{})}))
+    }
     db.prepare('INSERT INTO repairs(scope,task_id,task,receipt,run_id,revision,token_hash,result_file) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(scope,task_id) DO UPDATE SET task=excluded.task,receipt=excluded.receipt,visible=1,run_id=excluded.run_id,revision=excluded.revision,token_hash=excluded.token_hash,result_file=excluded.result_file,report=NULL,report_error=NULL').run(scope,task.id,JSON.stringify(task),JSON.stringify(receipt),runId,revision,hash(token),resultFile)
     db.prepare('INSERT INTO sync(scope,version) VALUES(?,1) ON CONFLICT(scope) DO UPDATE SET version=sync.version+1').run(scope)
     db.exec('COMMIT')
@@ -98,11 +118,13 @@ export class RepairCache {
     return { runId, revision, token, resultFile }
   }
   /// 预发送失败撤销本次投影；只有确实未调用 launch 才允许调用。
-  async abandon(scope: string, taskId: string): Promise<void> {
+  async abandon(scope: string, taskId: string, attemptId?: string): Promise<void> {
     const db = await this.db()
     db.exec('BEGIN IMMEDIATE')
     try {
-      db.prepare('DELETE FROM repairs WHERE scope=? AND task_id=?').run(scope,taskId)
+      const row = db.prepare('SELECT receipt FROM repairs WHERE scope=? AND task_id=?').get(scope,taskId)
+      if (row && (!attemptId || JSON.parse(String(row.receipt)).attemptId === attemptId))
+        db.prepare('DELETE FROM repairs WHERE scope=? AND task_id=?').run(scope,taskId)
       db.prepare('UPDATE sync SET version=version+1 WHERE scope=?').run(scope)
       db.exec('COMMIT')
     } catch (error) { db.exec('ROLLBACK'); throw error }
@@ -112,6 +134,8 @@ export class RepairCache {
     const db = await this.db()
     db.exec('BEGIN IMMEDIATE')
     try {
+      const row = db.prepare('SELECT receipt FROM repairs WHERE scope=? AND task_id=?').get(scope,taskId)
+      requireThat(row && attemptKey(JSON.parse(String(row.receipt))) === attemptKey(receipt), 'stale', '执行轮次已变化，未覆盖新回执。')
       db.prepare('UPDATE repairs SET receipt=? WHERE scope=? AND task_id=?').run(JSON.stringify(receipt),scope,taskId)
       db.prepare('UPDATE sync SET version=version+1 WHERE scope=?').run(scope)
       db.exec('COMMIT')

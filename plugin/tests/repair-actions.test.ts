@@ -333,3 +333,29 @@ test('acceptance business: structured artifact projection permits submit but cha
   const fresh=await f.statuses.businessPreview(input)
   assert.equal((await f.statuses.businessSubmit(fresh.id,true)).state,'verified')
 })
+
+test('restart business: fresh repairing status launches without repeating remote transitions; external status blocks',async t=>{
+  const f=await fixture(t)
+  await f.actions.start((await f.actions.preview(await f.input())).id,true)
+  const writes=[...f.state.writes]
+  const inspection=await f.repair.inspectRestart(f.detail.detailId)
+  const input={inspectionId:inspection.id,agent:'codex',confirmed:true,stoppedConfirmed:true,reason:'已人工终止旧会话'}
+  await f.actions.restart(input)
+  assert.equal(f.state.launches,2)
+  assert.deepEqual(f.state.writes,writes)
+  const next=await f.repair.inspectRestart(f.detail.detailId)
+  f.state.status='done';f.state.version++
+  await assert.rejects(f.actions.restart({...input,inspectionId:next.id}))
+  assert.equal(f.state.launches,2)
+  assert.deepEqual(f.state.writes,writes)
+})
+test('restart business: unresolved status journal cannot be bypassed by manual stopped confirmation',async t=>{
+  const f=await fixture(t)
+  f.state.lost='repair-action'
+  await assert.rejects(f.actions.start((await f.actions.preview(await f.input())).id,true))
+  assert.equal(f.state.status,'repairing')
+  const inspection=await f.repair.inspectRestart(f.detail.detailId)
+  await assert.rejects(f.actions.restart({inspectionId:inspection.id,agent:'codex',confirmed:true,stoppedConfirmed:true,reason:'未启动 Agent 已确认'}),/核实/)
+  assert.equal(f.state.launches,0)
+  assert.deepEqual(f.state.writes,['confirm-action','repair-action'])
+})

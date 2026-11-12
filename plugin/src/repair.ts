@@ -1,3 +1,4 @@
+import { RepairJournal, attemptKey } from './repair-journal.ts'
 import { RepairEvidence } from './repair-evidence.ts'
 import { RepairCache, type CachedRepairs, type RepairReport } from './repair-cache.ts'
 import { createHash, randomUUID } from 'node:crypto'
@@ -10,12 +11,13 @@ import { resolveProjectMapping, projectMappingKey, type MappingResult, type Proj
 import { AppError, requireThat, record, type Option, type Task } from './domain/model.ts'
 import type { Store, Workbench } from './service.ts'
 
-export type RepairRecord = LaunchReceipt & { projectName: string; projectId: string; createdAt: number; directory?: string }
+export type RepairRecord = LaunchReceipt & { attemptId?: string; phase?: 'preparing' | 'launching' | 'settled' | 'failed'; restart?: { previousAttempt: string; basis: string; confirmedAt: number }; projectName: string; projectId: string; createdAt: number; directory?: string }
 export type RepairListItem = { task: Task; record: RepairRecord; report?: RepairReport; reportError?: string }
 export type RepairPreparation = { id: string; mapping: MappingResult; existing: RepairRecord | null }
-type Plan = { detailId: string; scope: string; taskId: string; source: Option; mapping: MappingResult; projects: Option[]; expires: number }
+type RestartPlan = { parent: RepairRecord; fingerprint: string; observation: Awaited<ReturnType<OrcaCli['sessionStatus']>> }
+type Plan = { restart?: RestartPlan; detailId: string; scope: string; taskId: string; source: Option; mapping: MappingResult; projects: Option[]; expires: number }
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
-const extension: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm' }
+const extension: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv', 'video/x-msvideo': 'avi', 'image/gif': 'gif', 'application/pdf': 'pdf' }
 
 /** Durable no-resend journal. Unknown outcomes intentionally require human reconciliation. */
 export class RepairWorkflow {
@@ -34,16 +36,50 @@ export class RepairWorkflow {
     await ensurePrivateDirectory(this.root, '修复资料目录权限不安全。')
   }
   private async existing(key: string): Promise<RepairRecord | null> {
-    try {
-      const file = join(this.root, key + '.json'), st = await lstat(file)
-      requireThat(st.isFile() && !st.isSymbolicLink() && st.size <= 16000, 'storage', '修复启动记录不可安全读取，已停止。')
-      const value = record(JSON.parse(await readFile(file, 'utf8')))
-      requireThat(['sent', 'unknown', 'terminal'].includes(String(value.state)) && typeof value.projectId === 'string' && typeof value.projectName === 'string' && typeof value.createdAt === 'number', 'storage', '修复记录损坏，需人工核实。')
-      return value as RepairRecord
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
+    return (await new RepairJournal(this.root).entries(key)).at(-1)?.record ?? null
+  }
+  async history(detailId: string): Promise<{ record: RepairRecord; report?: RepairReport }[]> {
+    const context = await this.service.repairContext(detailId)
+    if (!await this.hasRoot()) return []
+    const entries = await new RepairJournal(this.root).entries(this.key(context.scope, context.task.id))
+    const fresh = await this.service.repairContext(detailId)
+    requireThat(fresh.scope === context.scope && fresh.task.id === context.task.id, 'identity', '账号或 Bug 已变化。')
+    const history = await Promise.all(entries.slice(0,-1).reverse().map(async entry => {
+      const archived = await this.cache.archived(context.scope,context.task.id,attemptKey(entry.record))
+      return { record: entry.record, ...(archived?.report ? { report: archived.report } : {}) }
+    }))
+    const final = await this.service.repairContext(detailId)
+    requireThat(final.scope === context.scope && final.task.id === context.task.id, 'identity', '账号或 Bug 已变化。')
+    return history
+  }
+  async inspectRestart(detailId: string) {
+    const preparation = await this.prepare(detailId)
+    const parent = preparation.existing ?? await this.read(detailId)
+    requireThat(parent, 'stale', '没有可重新执行的记录。')
+    const observation = parent.phase === 'failed'
+      ? { state: 'stopped' as const, reason: '上一轮在调用 Agent 前失败，尚未发送。' }
+      : await this.cli.sessionStatus(parent).catch(() => ({ state: 'unknown' as const, reason: '宿主查询失败，无法核实原 Agent 是否停止。' }))
+    const plan = this.plans.get(preparation.id)!
+    const current = await this.existing(this.key(plan.scope, plan.taskId))
+    requireThat(digest(current) === digest(parent), 'stale', '核对期间执行轮次已变化。')
+    plan.restart = { parent, fingerprint: digest(parent), observation }
+    return { id: preparation.id, record: parent, observation, history: await this.history(detailId) }
+  }
+  async restart(input: { inspectionId: string; agent: string; confirmed: boolean; stoppedConfirmed: boolean; reason: string }, verifyStatus?: (detailId: string) => Promise<void>) {
+    const plan = this.plans.get(input.inspectionId), restart = plan?.restart
+    requireThat(plan && restart && plan.expires > Date.now(), 'stale', '会话核对已过期，请重新核对。')
+    requireThat(input.confirmed === true, 'confirm', '请确认重新执行修复。')
+    requireThat(restart.observation.state !== 'running', 'busy', '原 Agent 仍在运行，不能重新执行。')
+    requireThat(restart.observation.state === 'stopped' || input.stoppedConfirmed === true &&
+      typeof input.reason === 'string' && input.reason.trim().length >= 4 && input.reason.length <= 500,
+      'confirm', '请先确认原 Agent 已停止，并填写人工核实依据。')
+    const observation = restart.parent.phase === 'failed' ? restart.observation : await this.cli.sessionStatus(restart.parent).catch(() => ({ state: 'unknown' as const, reason: '宿主查询失败，无法核实停止状态。' }))
+    requireThat(observation.state !== 'running', 'busy', '原 Agent 仍在运行，不能重新执行。')
+    requireThat(observation.state === 'stopped' || input.stoppedConfirmed === true &&
+      typeof input.reason === 'string' && input.reason.trim().length >= 4 && input.reason.length <= 500,
+      'confirm', '停止状态无法核实，请重新核对并人工确认。')
+    return this.start({ preparationId: input.inspectionId, projectId: restart.parent.projectId, agent: input.agent, confirmed: true },
+      undefined, { ...(verifyStatus ? { beforeCollect: () => verifyStatus(plan.detailId) } : {}), basis: observation.state === 'stopped' ? observation.reason : '人工确认：' + input.reason.trim() })
   }
   private async hasRoot(): Promise<boolean> {
     try {
@@ -89,7 +125,15 @@ export class RepairWorkflow {
     context.check()
     await this.cache.consume(context.scope, context.check)
     const result = await this.cache.read(context.scope)
-    for (const item of result.items) { await this.projectReport(item); context.check() }
+    for (const item of result.items) {
+      const current = await this.existing(this.key(context.scope,item.task.id))
+      if (current && attemptKey(current) !== attemptKey(item.record)) {
+        item.record = current
+        delete item.report
+        delete item.reportError
+      }
+      await this.projectReport(item); context.check()
+    }
     context.check()
     return result
   }
@@ -138,7 +182,7 @@ export class RepairWorkflow {
     for (const [key, plan] of this.plans) if (plan.expires < Date.now()) this.plans.delete(key)
     requireThat(this.plans.size < 100, 'busy', '待确认修复过多，请稍后重试。')
     this.plans.set(id, { detailId, scope: context.scope, taskId: context.task.id, source: context.task.project, projects, mapping, expires: Date.now() + 600000 })
-    return { id, mapping, existing }
+    return { id, mapping, existing: existing?.phase === 'failed' ? null : existing }
   }
   /// 保留可选字段缺省语义，避免等待回执的记录在 Worker JSON 边界被拒绝。
   private async projectReport(item: RepairListItem): Promise<void> {
@@ -151,6 +195,8 @@ export class RepairWorkflow {
     const context = await this.service.repairContext(detailId)
     await this.cache.consume(context.scope, () => {})
     const item = (await this.cache.read(context.scope)).items.find(x=>x.task.id===context.task.id)
+    const current = await this.existing(this.key(context.scope, context.task.id))
+    if (item && (!current || attemptKey(current) !== attemptKey(item.record))) return null
     if (item) await this.projectReport(item)
     const fresh = await this.service.repairContext(detailId)
     requireThat(fresh.scope === context.scope && fresh.task.id === context.task.id, 'identity', '读取回执期间身份已变化。')
@@ -169,7 +215,7 @@ export class RepairWorkflow {
     const target = await this.cli.target(fresh)
     return {detailId:plan.detailId,task:context.task,scope:context.scope,target}
   }
-  async start(input: { preparationId: string; projectId: string; agent: string; confirmed: boolean }, hook?: { target: Awaited<ReturnType<OrcaCli['target']>>; targetStatus: string; beforeCollect(): Promise<void> }): Promise<RepairRecord> {
+  async start(input: { preparationId: string; projectId: string; agent: string; confirmed: boolean }, hook?: { target: Awaited<ReturnType<OrcaCli['target']>>; targetStatus: string; beforeCollect(): Promise<void> }, restartApproval?: { basis: string; beforeCollect?: () => Promise<void> }): Promise<RepairRecord> {
     requireThat(input.confirmed === true, 'confirm', '请确认创建聊天并发送 Bug 内容。')
     requireThat(input.agent === 'codex' || input.agent === 'claude', 'input', '不支持的 Agent。')
     const plan = this.plans.get(input.preparationId)
@@ -178,35 +224,39 @@ export class RepairWorkflow {
     requireThat(context.scope === plan.scope && context.task.id === plan.taskId && context.task.project.id === plan.source.id, 'stale', '账号或 Bug 项目已变化。')
     const key = this.key(plan.scope, plan.taskId)
     const existing = await this.existing(key)
-    if (existing) return existing
+    const restart = restartApproval ? plan.restart : existing?.phase === 'failed' ? { parent: existing, fingerprint: digest(existing) } : undefined
+    if (restart) requireThat(digest(existing) === restart.fingerprint, 'stale', '执行记录已变化，请重新核对，未重复发送。')
+    else if (existing) return existing
     const project = plan.projects.find(p => p.id === input.projectId)
     requireThat(project && (plan.mapping.kind !== 'mapped' || plan.mapping.project.id === project.id), 'scope', '所选项目不属于当前映射。')
     const fresh = (await this.cli.projects()).find(p => p.id === project.id)
     requireThat(fresh, 'stale', '本地项目已移除，请重新映射。')
     const target = await this.cli.target(fresh)
     requireThat(!hook || JSON.stringify(hook.target) === JSON.stringify(target), 'stale', '确认后 CLI 目标目录已变化。')
-    const receipt: RepairRecord = { state: 'unknown', projectName: fresh.name, projectId: fresh.id, createdAt: Date.now() }
-    const journal = join(this.root, key + '.json')
-    let reservation
-    try { reservation = await open(journal, 'wx', 0o600) }
+    const receipt: RepairRecord = { attemptId: randomUUID(), phase: 'preparing', ...(restart ? { restart: { previousAttempt: attemptKey(restart.parent), basis: restartApproval?.basis ?? '上轮未调用 Agent，重新准备', confirmedAt: Date.now() } } : {}), state: 'unknown', projectName: fresh.name, projectId: fresh.id, createdAt: Date.now() }
+    const ledger = new RepairJournal(this.root)
+    const journal = restart ? ledger.nextFile(key, restart.parent) : join(this.root, key + '.json')
+    try { await ledger.claim(journal, receipt) }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-        const prior = await this.existing(key)
-        requireThat(prior, 'busy', '此 Bug 正在准备启动，请稍后查看。')
-        return prior
-      }
-      throw error
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      requireThat(!restart, 'busy', '此轮已登记重新执行，请刷新记录，不能重复发送。')
+      const prior = await this.existing(key)
+      requireThat(prior, 'busy', '此 Bug 正在准备启动。')
+      return prior
     }
-    // Empty or partial journal after a crash is fail-closed, never treated as permission to retry.
-    try { await reservation.writeFile(JSON.stringify(receipt)); await reservation.sync() }
-    finally { await reservation.close() }
-    await this.syncRoot()
+    const assertCurrent = async () => {
+      const current = await this.existing(key)
+      requireThat(current && attemptKey(current) === receipt.attemptId, 'stale', '已有新执行轮次，旧启动已停止。')
+    }
     let registered = false
     let attempted = false, directory: string | undefined, source: Awaited<ReturnType<Workbench['collectRepair']>> | undefined
     try {
       // 状态达到修复中且逐步回读后，才收集最新正文，避免旧状态快照失效。
       await hook?.beforeCollect()
+      await restartApproval?.beforeCollect?.()
       source = await this.service.collectRepair(plan.detailId)
+      if (restartApproval) requireThat(source.bug.task.status.name === '修复中', 'stale', 'Bug 已不处于修复中，请刷新并通过状态操作核对；本次重启不更改 ONES 状态。')
+      await assertCurrent()
       directory = await mkdtemp(join(this.root, key + '-'))
       const files = new Map<string, string>()
       let total = 0
@@ -225,13 +275,18 @@ export class RepairWorkflow {
           if (chunk.next === null) { requireThat(offset === size, 'partial', '媒体未完整读取。'); break }
           requireThat(chunk.next === offset, 'partial', '媒体分页未推进。')
         }
-        requireThat(extension[mime], 'media', '媒体格式暂不支持。')
-        const file = join(directory, `${files.size + 1}.${extension[mime]}`)
+        // Unknown types stay opaque; remote filenames never become local paths.
+        const file = join(directory, `${files.size + 1}.${Object.hasOwn(extension, mime) ? extension[mime] : 'bin'}`)
         await writeFile(file, Buffer.concat(chunks), { mode: 0o600, flag: 'wx' })
         files.set(resource, file)
       }
       const revision = digest(source.bug)
-      const contract = await this.cache.register(plan.scope, source.bug.task, receipt, revision, directory)
+      await assertCurrent()
+      const entries = await ledger.entries(key)
+      const ownIndex = entries.findIndex(x => attemptKey(x.record) === receipt.attemptId)
+      requireThat(ownIndex >= 0 && ownIndex === entries.length - 1, 'stale', '已有新执行轮次，未覆盖回执缓存。')
+      const ancestors = entries.slice(0, ownIndex).map(x => attemptKey(x.record))
+      const contract = await this.cache.register(plan.scope, source.bug.task, receipt, revision, directory, restart?.parent, ancestors)
       registered = true
       // 协议先以独占私有文件完整落盘；失败沿原 registered cleanup 清理，绝不启动。
       const instructionsFile = join(directory, 'receipt-instructions.md')
@@ -242,7 +297,8 @@ export class RepairWorkflow {
       } finally { await instructions.close() }
       await syncDirectory(directory)
       await assertPrivatePath(instructionsFile, 'file', '回执协议文件权限不安全，未启动。')
-      const prompt = repairPrompt(source.bug, files, instructionsFile)
+      const prompt = repairPrompt(source.bug, files, instructionsFile) + (restart ? '\n这是一次中断后的新执行轮次。先检查项目已有修改及遗留 Worktree，再决定继续路径；不得覆盖、回滚他人改动，不沿用旧轮次的测试通过结论。' : '')
+      requireThat(Buffer.byteLength(prompt) <= 48000, 'size', '包含继续执行说明的消息超过 CLI 预算，未发送。')
       await source.validate()
       requireThat(!hook || source.bug.task.status.id === hook.targetStatus, 'stale', 'Agent 启动前 Bug 已不处于已确认的修复中状态，未启动。')
       const currentTarget = await this.cli.target(fresh)
@@ -252,19 +308,27 @@ export class RepairWorkflow {
       receipt.directory = directory
       await this.persist(journal, receipt)
       source.check()
+      await assertCurrent()
+      receipt.phase = 'launching'
+      await this.persist(journal, receipt)
+      await assertCurrent()
+      source.check()
       attempted = true
       try { Object.assign(receipt, launchReceipt(await this.cli.launch(target, input.agent, prompt))) }
       catch { receipt.state = 'unknown' }
+      receipt.phase = 'settled'
       await this.persist(journal, receipt)
+      await assertCurrent()
       await this.cache.launched(plan.scope, plan.taskId, receipt)
       return receipt
     } finally {
       source?.dispose()
       this.plans.delete(input.preparationId)
       if (!attempted) {
-        if (registered) await this.cache.abandon(plan.scope, plan.taskId)
+        if (registered) await this.cache.abandon(plan.scope, plan.taskId, receipt.attemptId)
         if (directory) await rm(directory, { recursive: true, force: true })
-        await rm(journal, { force: true })
+        receipt.phase = 'failed'
+        await this.persist(journal, receipt)
       }
     }
   }

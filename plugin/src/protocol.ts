@@ -23,6 +23,9 @@ declare module 'orca' {
     'bugs.projectFilter': { input: { team: string; projects: Option[] }; output: Answer<{ localProject: Option | null; project: Option | null }> }
     'repair.cache': { input: { team: string }; output: Answer<CachedRepairs> }
     'repair.sync': { input: { team: string }; output: Answer<CachedRepairs> }
+    'repair.inspectRestart': { input: { detailId: string }; output: Answer<Awaited<ReturnType<import('./repair.ts').RepairWorkflow['inspectRestart']>>> }
+    'repair.restart': { input: Parameters<import('./repair.ts').RepairWorkflow['restart']>[0]; output: Answer<RepairRecord> }
+    'repair.history': { input: { detailId: string }; output: Answer<Awaited<ReturnType<import('./repair.ts').RepairWorkflow['history']>>> }
     'repair.read': { input: { detailId: string }; output: Answer<RepairRecord | null> }
     'repair.prepare': { input: { detailId: string }; output: Answer<Awaited<ReturnType<RepairActions['prepare']>>> }
     'repair.start': { input: { previewId: string; confirmed: boolean }; output: Answer<RepairRecord> }

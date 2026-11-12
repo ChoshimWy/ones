@@ -1,6 +1,6 @@
 import type { RepairActions } from '../repair-actions.ts'
 import { repairProgress, repairValidationSummary, repairAcceptance, isNotApplicable, repairComment } from '../domain/repair-report.ts'
-import type { RepairRecord, RepairListItem } from '../repair.ts'
+import type { RepairWorkflow, RepairRecord, RepairListItem } from '../repair.ts'
 import { button, card, el, message, notice, request, row, select, text, input } from './dom.ts'
 
 export class RepairView {
@@ -95,9 +95,59 @@ export class RepairView {
     content.append(preview,confirmation,button('取消',()=>this.element.replaceChildren()))
     this.element.replaceChildren(content)
   }
+  private async inspectRestart() {
+    if (this.busy || this.disposed) return
+    this.setBusy(true)
+    const content = card('核对原 Agent 会话', notice('正在核对执行记录…'))
+    this.element.replaceChildren(content)
+    try {
+      const inspection = await request<Awaited<ReturnType<RepairWorkflow['inspectRestart']>>>('repair.inspectRestart', { detailId: this.detailId })
+      if (this.disposed) return
+      const observation = inspection.observation
+      const details = el('details', 'stack', el('summary', '', '历史执行轮次'))
+      for (const item of inspection.history) details.append(text(new Date(item.record.createdAt).toLocaleString() + ' · ' + item.record.state), ...(item.record.sessionId ? [text('Session：' + item.record.sessionId)] : []), ...(item.report ? [text(repairComment(item.report))] : []))
+      content.replaceChildren(el('h2', '', '核对原 Agent 会话'), notice(observation.reason, observation.state !== 'stopped'), text('项目：' + inspection.record.projectName), ...(inspection.record.sessionId ? [text('Session：' + inspection.record.sessionId)] : []), details)
+      if (observation.state === 'running') {
+        content.append(notice('原 Agent 仍在运行，请返回原会话；不能重新执行。', true))
+      } else {
+        let agent = 'codex', reason = '', stoppedConfirmed = observation.state === 'stopped'
+        const confirmation = el('div', 'stack')
+        const clear = () => confirmation.replaceChildren()
+        const check = el('input')
+        check.type = 'checkbox'
+        check.addEventListener('change', () => { stoppedConfirmed = check.checked; clear() })
+        if (observation.state === 'unknown') content.append(
+          notice('宿主未自动核实。请在 Orca 中确认原 Agent 已停止或终止；仅关闭窗口不够。同时运行可能造成代码冲突。', true),
+          el('label', 'row', check, '我已人工确认原 Agent 停止，不会继续修改项目'),
+          input('人工核实依据（至少 4 字）', '', value => { reason = value; clear() }, { maxLength: 500 }))
+        content.append(select('重新执行的 Agent', agent, [{value:'codex',label:'Codex'},{value:'claude',label:'Claude Code'}], value => { agent = value; clear() }),
+          button('重新执行修复', () => {
+            if (this.busy) return
+            if (!stoppedConfirmed || observation.state === 'unknown' && reason.trim().length < 4) {
+              confirmation.replaceChildren(notice('请确认原 Agent 已停止，并填写人工核实依据。', true)); return
+            }
+            confirmation.replaceChildren(card('确认重新执行', notice('将创建新会话，保留旧记录和已有代码；重新下载原单附件。新 Agent 必须先检查已有修改。仅在 Bug 仍为“修复中”时继续，不重复更新 ONES 状态。'),
+              button('确认创建新修复会话', async () => {
+                if (this.busy || this.disposed) return
+                this.setBusy(true)
+                confirmation.replaceChildren(notice('正在准备新的执行轮次，请勿重复操作。'))
+                try {
+                  const result = await request<RepairRecord>('repair.restart', { inspectionId: inspection.id, agent, confirmed:true, stoppedConfirmed, reason })
+                  if (!this.disposed) { this.result = null; this.showRecord(result); await this.updated?.() }
+                } catch (error) {
+                  if (!this.disposed) confirmation.replaceChildren(notice(message(error) + ' 请重新读取执行记录；未知启动结果不会自动重发。', true), button('重新读取执行记录', () => this.load()))
+                } finally { this.setBusy(false) }
+              }, false, 'primary')))
+          }, false, 'primary'), confirmation)
+      }
+      content.append(button('重新核对', () => this.inspectRestart()), button('返回执行记录', () => this.load()))
+    } catch (error) {
+      if (!this.disposed) content.replaceChildren(notice(message(error),true),button('重新核对',()=>this.inspectRestart()),button('返回执行记录',()=>this.load()))
+    } finally { this.setBusy(false) }
+  }
   private showRecord(record: RepairRecord) {
     this.record = record
-    const status = record.state === 'sent'
+    const status = record.phase === 'failed' ? '上轮准备失败，未调用 Agent；可核对后重新执行。' : record.state === 'sent'
       ? '聊天已创建，消息已写入会话；不代表修复或媒体分析已完成。'
       : record.state === 'terminal'
         ? 'Orca 实际返回了终端而非聊天，可能已发送任务。请到项目核实，不会自动重试。'
@@ -106,6 +156,6 @@ export class RepairView {
     const acceptance=repairAcceptance(report)
     const alternative=isNotApplicable(acceptance)?[acceptance.reason,...acceptance.checks.flatMap(check=>[`${check.name}：${check.status}`,...check.evidence])]:[]
     const technical=el('details','stack',el('summary','','技术信息'),...alternative.map(value=>text(value,true)),...(report?.acceptanceEvidence?[text(report.acceptanceEvidence.note,true)]:[]),text(`执行时间：${new Date(record.createdAt).toLocaleString()}`),text(`项目：${record.projectName}`),...(record.sessionId?[text(`Session：${record.sessionId}`)]:[]),...(record.directory?[text(`媒体目录：${record.directory}`,true)]:[]),...(report?[text(`源码身份：${report.sourceIdentity}`,true),...('reportVersion' in report?[report.validation.reason,...report.validation.remaining,report.delivery.note,...report.validation.evidence]:report.evidence).map(value=>text(value,true))]:[]))
-    this.element.replaceChildren(card('修复进度',notice(report?repairProgress(report):status,record.state!=='sent'),text(repairValidationSummary(report)),...(report?.acceptanceEvidence?.state==='pending'?[notice(report.acceptanceEvidence.note,true)]:[]),...(report?[text(repairComment(report))]:[]),...(this.result?.reportError?[notice(this.result.reportError,true)]:[]),technical))
+    this.element.replaceChildren(card('修复进度',notice(report?repairProgress(report):status,record.state!=='sent'),text(repairValidationSummary(report)),...(report?.acceptanceEvidence?.state==='pending'?[notice(report.acceptanceEvidence.note,true)]:[]),...(report?[text(repairComment(report))]:[]),...(this.result?.reportError?[notice(this.result.reportError,true)]:[]),technical,...(record.phase === 'failed' ? [button('重新准备修复',()=>{this.record=null;return this.open()})] : []),button('核对会话 / 重新执行',()=>this.inspectRestart())))
   }
 }

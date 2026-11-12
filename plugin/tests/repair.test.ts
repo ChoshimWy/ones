@@ -49,7 +49,7 @@ test('repair content: exact prefix, text order, comments and deduplicated local 
   assert.ok(withSourceNote.includes(sourceNote))
   assert.throws(() => repairPrompt(bug, new Map()))
   assert.throws(() => repairPrompt({ ...bug, content: [{ kind: 'text', text: '文'.repeat(48000) }] }, new Map([['image', '/x'], ['video', '/y']])))
-  assert.throws(() => mediaIds({ ...bug, attachments: [{ ...bug.attachments[0]!, mime: 'application/pdf' }] }))
+  assert.ok(mediaIds({ ...bug, attachments: [{ ...bug.attachments[0]!, mime: 'application/pdf' }] }).includes(bug.attachments[0]!.id))
   assert.throws(() => mediaIds({ ...bug, content: [{ kind: 'text', text: '[此媒体缺少受控资源标识，无法安全内嵌；请在原单查看。]' }] }))
 })
 test('repair CLI: only selects existing local main directory and passes prompt as one argument', async () => {
@@ -80,11 +80,13 @@ test('repair CLI: recognizes actual chat and journaled prompt, never treats term
   assert.equal(launchReceipt({ ...success, warning: 'partial' }).state, 'unknown')
   assert.equal(launchReceipt({ outcome: { kind: 'terminal', handle: 'terminal' } }).state, 'terminal')
 })
-async function fixture(evidence = new RepairEvidence()) {
+async function fixture(evidence = new RepairEvidence(), videoMime = 'video/mp4') {
   const root = await mkdtemp(join(tmpdir(), 'ones-repair-test-'))
   await ensurePrivateDirectory(root, 'private test root')
   let launches = 0, collected = 0, changed = false, broken = false, response: Record<string, unknown> | Error = success
-  let sent = '', protocolCollision = false
+  let sent = '', protocolCollision = false, statusName = '待处理'
+  let onCollect: (() => Promise<void>) | undefined
+  let observation: 'running' | 'stopped' | 'unknown' = 'unknown'
   const data = new Map<string, unknown>()
   const store = { get: async (key: string) => data.get(key) ?? null, set: async (key: string, value: unknown) => { data.set(key, value) }, delete: async (key: string) => { data.delete(key) } }
   const check = () => { if (changed) throw Error('identity changed') }
@@ -92,17 +94,19 @@ async function fixture(evidence = new RepairEvidence()) {
     repairContext: async () => { check(); return { scope: 'scope', task: bug.task } },
     collectRepair: async () => {
       collected++; check()
-      return { bug, read: async (resource, offset) => {
+      const hook = onCollect; onCollect = undefined; await hook?.(); check()
+      return { bug: {...bug, task:{...bug.task,status:{id:statusName === '待处理' ? 'pending' : statusName,name:statusName}}}, read: async (resource, offset) => {
         if (broken) throw Error('media failed')
         if (protocolCollision) {
           const directory = (await readdir(root,{withFileTypes:true})).find(entry=>entry.isDirectory())!
           await writeFile(join(root,directory.name,'receipt-instructions.md'),'collision',{mode:0o600})
         }
-        return { mime: resource === 'image' ? 'image/png' : 'video/mp4', total: 3, offset, data: Buffer.from('abc').toString('base64'), next: null }
+        return { mime: resource === 'image' ? 'image/png' : videoMime, total: 3, offset, data: Buffer.from('abc').toString('base64'), next: null }
       }, validate: async () => check(), check, dispose() {} }
     }
   }
   class FakeCli extends OrcaCli {
+    async sessionStatus() { return { state: observation, reason: 'fixture status observation' } }
     async projects() { return [project] }
     async target() { return target }
     async launch(_target: typeof target, _agent: string, prompt: string) {
@@ -119,7 +123,7 @@ async function fixture(evidence = new RepairEvidence()) {
   const create = () => new RepairWorkflow(service, store, cli, root,evidence)
   const flow = create()
   const start = (id: string) => flow.start({ preparationId: id, projectId: project.id, agent: 'codex', confirmed: true })
-  return { root, flow, create, start, store, data, get launches() { return launches }, get collected() { return collected }, get sent() { return sent }, setProtocolCollision: () => { protocolCollision = true }, setChanged: () => { changed = true }, setBroken: (value: boolean) => { broken = value }, setResponse: (value: typeof response) => { response = value } }
+  return { root, flow, create, start, store, data, setStatus: (name: string) => { statusName = name }, setObservation: (value: typeof observation) => { observation = value }, setOnCollect: (hook: () => Promise<void>) => { onCollect = hook }, get launches() { return launches }, get collected() { return collected }, get sent() { return sent }, setProtocolCollision: () => { protocolCollision = true }, setChanged: () => { changed = true }, setBroken: (value: boolean) => { broken = value }, setResponse: (value: typeof response) => { response = value } }
 }
 test('repair workflow: persists scoped mapping, readable private media and session; repeated/restarted requests never launch twice', async () => {
   const f = await fixture()
@@ -137,12 +141,12 @@ test('repair workflow: persists scoped mapping, readable private media and sessi
     assert.equal(f.launches, 1); assert.equal(f.collected, 1)
   } finally { await rm(f.root, { recursive: true, force: true }) }
 })
-test('repair workflow: failed media releases prelaunch reservation and can be retried without sending incomplete content', async () => {
+test('repair workflow: failed media retains a failed journal and can be retried without sending incomplete content', async () => {
   const f = await fixture()
   try {
     f.setBroken(true)
     await assert.rejects(f.start((await f.flow.prepare('detail')).id))
-    assert.equal(f.launches, 0); assert.deepEqual(await readdir(f.root), [])
+    assert.equal(f.launches, 0); assert.equal((JSON.parse(await readFile(join(f.root,(await readdir(f.root)).find(x=>x.endsWith('.json'))!), 'utf8'))).phase, 'failed')
     f.setBroken(false); assert.equal((await f.start((await f.flow.prepare('detail')).id)).state, 'sent')
   } finally { await rm(f.root, { recursive: true, force: true }) }
 })
@@ -183,7 +187,7 @@ test('repair workflow: identity change while saving mapping cannot launch after 
     f.store.set = async () => { f.setChanged() }
     await assert.rejects(f.start(plan.id))
     assert.equal(f.launches, 0)
-    assert.deepEqual(await readdir(f.root), [])
+    assert.equal((JSON.parse(await readFile(join(f.root,(await readdir(f.root)).find(x=>x.endsWith('.json'))!), 'utf8'))).phase, 'failed')
   } finally { await rm(f.root, { recursive: true, force: true }) }
 })
 
@@ -222,7 +226,7 @@ test('repair list: restores old journals across pages, sorts records, isolates s
     const receipt = await f.start(plan.id)
     const closed = { ...bug.task, id: 'closed', status: { id: 'closed', name: '已关闭' } }
     const key = createHash('sha256').update(JSON.stringify(['scope', closed.id])).digest('hex')
-    await writeFile(join(f.root, key + '.json'), JSON.stringify({ ...receipt, createdAt: receipt.createdAt + 1, state: 'unknown' }))
+    await writeFile(join(f.root, key + '.json'), JSON.stringify({ ...receipt, createdAt: receipt.createdAt + 1, state: 'unknown' }), {mode:0o600})
     const cursors: string[] = []
     const context = { scope: 'scope', check() {}, readPage: async (after: string) => {
       cursors.push(after)
@@ -337,7 +341,7 @@ test('repair receipt instructions: write failure abandons registration and never
     f.setProtocolCollision()
     await assert.rejects(f.start((await f.flow.prepare('detail')).id),{code:'EEXIST'})
     assert.equal(f.launches,0)
-    assert.deepEqual(await readdir(f.root),[])
+    assert.equal((await f.flow.read('detail'))?.phase,'failed')
     assert.equal(await f.create().result('detail'),null)
   }finally{await rm(f.root,{recursive:true,force:true})}
 })
@@ -398,4 +402,137 @@ test('acceptance workflow: structured receipt projects same counts in cache and 
     assert.equal(detail?.report?.acceptanceEvidence?.state,'verified')
     assert.equal(f.launches,1)
   }finally{await e.close();await rm(f.root,{recursive:true,force:true});await rm(f.root+'-cache',{recursive:true,force:true})}
+})
+
+test('repair workflow: non-previewable videos and opaque attachments are saved and referenced before launch', async () => {
+  for (const [mime, extension] of [['video/quicktime', 'mov'], ['application/octet-stream', 'bin'], ['constructor', 'bin']]) {
+    const f = await fixture(new RepairEvidence(), mime)
+    try {
+      const result = await f.start((await f.flow.prepare('detail')).id)
+      assert.equal(result.state, 'sent')
+      const file = join(result.directory!, '2.' + extension)
+      assert.equal(await readFile(file, 'utf8'), 'abc')
+      await assertPrivatePath(file, 'file', 'attachment must be private')
+      assert.ok(f.sent.includes(JSON.stringify(file)))
+      await f.start((await f.flow.prepare('detail')).id)
+      assert.equal(f.launches, 1)
+    } finally { await rm(f.root, { recursive: true, force: true }) }
+  }
+})
+
+const restartInput = (id: string) => ({inspectionId:id,agent:'codex',confirmed:true,stoppedConfirmed:true,reason:'已在宿主终止原 Agent'})
+test('restart: unknown requires explicit manual evidence; retains history, new contract and local media', async () => {
+  const f = await fixture()
+  try {
+    const first = await f.start((await f.flow.prepare('detail')).id)
+    f.setStatus('修复中')
+    const inspection = await f.flow.inspectRestart('detail')
+    assert.equal(inspection.observation.state,'unknown')
+    await assert.rejects(f.flow.restart({...restartInput(inspection.id),stoppedConfirmed:false}),/确认/)
+    await assert.rejects(f.flow.restart({...restartInput(inspection.id),reason:''}),/依据/)
+    const second = await f.flow.restart(restartInput(inspection.id))
+    assert.notEqual(second.attemptId,first.attemptId)
+    assert.notEqual(second.directory,first.directory)
+    assert.equal(second.restart?.basis,'人工确认：已在宿主终止原 Agent')
+    assert.equal(await readFile(join(first.directory!,'1.png'),'utf8'),'abc')
+    assert.ok(f.sent.includes('先检查项目已有修改及遗留 Worktree'))
+    assert.equal((await f.create().read('detail'))?.attemptId,second.attemptId)
+    assert.equal((await f.create().history('detail'))[0]?.record.attemptId,first.attemptId)
+    assert.notEqual(await readFile(join(first.directory!,'receipt-instructions.md'),'utf8'),await readFile(join(second.directory!,'receipt-instructions.md'),'utf8'))
+    await assert.rejects(f.flow.restart(restartInput(inspection.id)))
+    assert.equal(f.launches,2)
+  } finally { await rm(f.root,{recursive:true,force:true}) }
+})
+test('restart: running or newly running Agent, changed Bug status and account prevent launch', async () => {
+  const f = await fixture()
+  try {
+    await f.start((await f.flow.prepare('detail')).id)
+    f.setStatus('修复中'); f.setObservation('running')
+    await assert.rejects(f.flow.restart(restartInput((await f.flow.inspectRestart('detail')).id)),/运行/)
+    f.setObservation('stopped')
+    const inspected = await f.flow.inspectRestart('detail')
+    f.setObservation('running')
+    await assert.rejects(f.flow.restart(restartInput(inspected.id)),/运行/)
+    f.setObservation('unknown'); f.setStatus('已修复')
+    await assert.rejects(f.flow.restart(restartInput((await f.flow.inspectRestart('detail')).id)),/修复中/)
+    assert.equal((await f.flow.read('detail'))?.phase,'failed')
+    f.setStatus('修复中')
+    const next = await f.flow.inspectRestart('detail')
+    f.setChanged()
+    await assert.rejects(f.flow.restart(restartInput(next.id)))
+    assert.equal(f.launches,1)
+  } finally { await rm(f.root,{recursive:true,force:true}) }
+})
+test('restart: cross-worker successor claim launches once, stale confirmations never resend', async () => {
+  const f = await fixture()
+  try {
+    await f.start((await f.flow.prepare('detail')).id); f.setStatus('修复中')
+    const other = f.create()
+    const a = await f.flow.inspectRestart('detail'), b = await other.inspectRestart('detail')
+    const results = await Promise.allSettled([f.flow.restart(restartInput(a.id)),other.restart(restartInput(b.id))])
+    assert.equal(results.filter(x=>x.status==='fulfilled').length,1)
+    assert.equal(f.launches,2)
+    assert.equal((await other.history('detail')).length,1)
+  } finally { await rm(f.root,{recursive:true,force:true}) }
+})
+test('restart: prelaunch failure remains recoverable, unknown launch survives process restart without auto resend', async () => {
+  const f = await fixture()
+  try {
+    await f.start((await f.flow.prepare('detail')).id); f.setStatus('修复中')
+    f.setBroken(true)
+    await assert.rejects(f.flow.restart(restartInput((await f.flow.inspectRestart('detail')).id)))
+    assert.equal((await f.create().read('detail'))?.phase,'failed')
+    f.setBroken(false); f.setResponse(Error('lost launch response'))
+    const restored=f.create()
+    const result=await restored.restart(restartInput((await restored.inspectRestart('detail')).id))
+    assert.equal(result.state,'unknown')
+    assert.equal(result.phase,'settled')
+    assert.equal((await f.create().prepare('detail')).existing?.attemptId,result.attemptId)
+    assert.equal(f.launches,2)
+  } finally { await rm(f.root,{recursive:true,force:true}) }
+})
+
+test('restart: archived reports remain readable and late parent output cannot become current acceptance', async () => {
+  const f=await fixture()
+  try {
+    const first=await f.start((await f.flow.prepare('detail')).id)
+    const instructions=await readFile(join(first.directory!,'receipt-instructions.md'),'utf8')
+    const template=JSON.parse(instructions.split('字段须严格为：')[1]!.split('\n')[0]!)
+    const output={...template,rootCause:'旧根因',solution:'旧方法',impact:'旧范围'}
+    await writeFile(join(first.directory!,'result.json'),JSON.stringify(output),{mode:0o600})
+    const accepted=(await f.flow.result('detail'))?.report
+    assert.ok(accepted && 'rootCause' in accepted && accepted.rootCause === '旧根因')
+    f.setStatus('修复中')
+    const second=await f.flow.restart(restartInput((await f.flow.inspectRestart('detail')).id))
+    const archived=(await f.flow.history('detail'))[0]?.report
+    assert.ok(archived && 'rootCause' in archived && archived.rootCause === '旧根因')
+    await writeFile(join(first.directory!,'result.json'),JSON.stringify({...output,reportSequence:2,rootCause:'迟到旧结果'}),{mode:0o600})
+    assert.equal((await f.create().result('detail'))?.report,undefined)
+    // Even copying the old capability into the new path does not authorize it.
+    await writeFile(join(second.directory!,'result.json'),JSON.stringify(output),{mode:0o600})
+    const latest=await f.create().result('detail')
+    assert.equal(latest?.report,undefined)
+    assert.ok(latest?.reportError?.includes('回执未接收'))
+  } finally { await rm(f.root,{recursive:true,force:true}) }
+})
+
+test('restart: successor fences a delayed parent before launch and parent cleanup cannot remove the successor', async () => {
+  const f=await fixture()
+  let release!:()=>void, entered!:()=>void
+  const paused=new Promise<void>(r=>release=r), started=new Promise<void>(r=>entered=r)
+  try {
+    f.setStatus('修复中')
+    f.setOnCollect(async()=>{entered();await paused})
+    const old=f.start((await f.flow.prepare('detail')).id)
+    // Attach rejection handling before unblocking the old attempt.
+    const oldRejected=assert.rejects(old,/新执行轮次/)
+    await started
+    const restored=f.create()
+    const child=await restored.restart(restartInput((await restored.inspectRestart('detail')).id))
+    release();await oldRejected
+    assert.equal(f.launches,1)
+    assert.equal((await f.create().read('detail'))?.attemptId,child.attemptId)
+    assert.equal((await f.create().result('detail'))?.record.attemptId,child.attemptId)
+    assert.equal((await f.create().history('detail'))[0]?.record.phase,'failed')
+  } finally { release?.(); await rm(f.root,{recursive:true,force:true}) }
 })

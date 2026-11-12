@@ -7,6 +7,13 @@ export class RepairActions {
   /// 仅保存未确认预览，持久结果仍归 StatusJournal 和修复启动账本。
   private plans = new Map<string,{input:{preparationId:string;projectId:string;agent:string};target:Awaited<ReturnType<RepairWorkflow['preflight']>>['target'];status:BusinessPreview}>()
   constructor(private repair: RepairWorkflow, private statuses: StatusWorkflow) {}
+  async restart(input: Parameters<RepairWorkflow['restart']>[0]) {
+    return this.repair.restart(input, async detailId => {
+      const status = await this.statuses.businessOptions(detailId, '修复中')
+      requireThat(status.snapshot.task.status.name === '修复中' && status.route.length === 0, 'stale', 'Bug 状态已变化，请先核对状态；重新执行不会更新 ONES。')
+      requireThat(!status.operation || status.operation.state === 'verified', 'pending', '已有状态结果待核实，请先核对状态操作，不能重新执行。')
+    })
+  }
   /// 一次展示整条状态路径和所有必填字段，旧启动记录仍阻止重复创建聊天。
   async prepare(detailId: string) {
     const preparation = await this.repair.prepare(detailId)

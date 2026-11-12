@@ -3,6 +3,7 @@ import { isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import { AppError, record, requireThat, text, type Option } from '../domain/model.ts'
 
+export type SessionObservation = { state: 'running' | 'stopped' | 'unknown'; reason: string }
 export type LocalTarget = { projectId: string; name: string; path: string; selector: string }
 export type CliRunner = (args: string[], cwd?: string) => Promise<Record<string, unknown>>
 // Pinned to the executable verified on this installation; never search PATH or invoke a shell.
@@ -34,6 +35,11 @@ export const runCli: CliRunner = (args, cwd) => new Promise((resolve, reject) =>
 })
 export class OrcaCli {
   constructor(private run: CliRunner = runCli) {}
+  async sessionStatus(_receipt: LaunchReceipt): Promise<SessionObservation> {
+    // Installed CLI exposes chat rename, not a session-ID-bound execution query.
+    // worktree ps / terminal absence is not proof a structured Agent stopped.
+    return { state: 'unknown', reason: '此版本 Orca 未提供按会话 ID 核实停止状态的接口；关闭窗口或查不到会话不代表 Agent 已停止。' }
+  }
   async projects(): Promise<Option[]> {
     const result = await this.run(['project', 'list'])
     requireThat(Array.isArray(result.projects) && !result.truncated, 'partial', 'Orca 项目列表不完整。')
