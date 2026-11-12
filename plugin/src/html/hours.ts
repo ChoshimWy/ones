@@ -1,18 +1,18 @@
 import { alignedHoursMonth, completeHoursMonth, recentHoursMonths, hoursTotals } from '../domain/hours-year.ts'
 import type { HoursBatchPreview, HoursBatchResult, HoursBatchRow } from '../hours-batch.ts'
 import { hoursCalendar } from './hours-calendar.ts'
-import { attendanceBudget, resolveAttendance } from '../domain/attendance.ts'
-import { taskDraft, businessDate, type MissingDay } from '../domain/missing-hours.ts'
+import { hoursToMinutes, minutesToHoursInput } from './hours-input.ts'
+import { attendanceBudget, resolveAttendance, checkAllocations } from '../domain/attendance.ts'
+import { businessDate, type MissingDay } from '../domain/missing-hours.ts'
 import { safeFailure } from '../domain/model.ts'
 import type { Allocation, Preview, Task } from '../domain/model.ts'
 import type { HoursMonth, HoursTasks } from '../hours-cache.ts'
-import type { Day, Draft } from '../protocol.ts'
+import type { Day, ImplementationBrief } from '../protocol.ts'
 import type { WorkbenchUI } from './panel.ts'
 import {
   button,
   el,
   card,
-  check,
   hours,
   input,
   notice,
@@ -51,34 +51,38 @@ export class HoursView {
   private pumping = false
   private taskLoading = false
   private taskNote = ''
-  private batchRows = new Map<string, { minutes: string; start: string }>()
+  private batchRows = new Map<string, { hours: string; start: string }>()
   private batchTask = ''
   private batchDescription = ''
-  private batchPreview: HoursBatchPreview | null = null
-  private batchConfirmed = false
-  private batchPreviewElement?: HTMLElement
+  private batchRevision = 0
   private batchResult: HoursBatchResult | null = null
-  preview: Preview | null = null
-  confirmed = false
+  private submitting = false
   private day: Day | null = null
   private tasks: Task[] = []
+  private dayTasks: Task[] = []
+  private supplementOptions: { taskId: string; description: string; start: string }[] = []
+  private supplementChoice = ''
+  private supplementNote = ''
+  private get availableTasks(): Task[] {
+    return [...new Map([...this.tasks, ...this.dayTasks].map(task => [task.id, task])).values()]
+  }
   private selected = ''
   private start = '09:00'
-  private minutes = '480'
+  private durationHours = '8'
   private description = ''
-  private allocations: Allocation[] = []
   constructor(private app: WorkbenchUI) {}
   clearDay(): void {
     this.day = null
-    this.preview = null
-    this.confirmed = false
+    this.dayTasks = []
+    this.supplementOptions = []
+    this.supplementChoice = ''
+    this.supplementNote = ''
   }
   clear(): void {
     this.leave()
     this.clearDay()
     this.tasks = []
     this.selected = ''
-    this.allocations = []
     this.scan = null
     this.calendarMonth = businessDate().slice(0, 7)
     this.savedAt = null
@@ -91,12 +95,10 @@ export class HoursView {
     this.batchRows.clear()
     this.batchTask = ''
     this.batchDescription = ''
-    this.batchPreview = null
-    this.batchConfirmed = false
+    this.batchRevision++
     this.batchResult = null
   }
   changeDate(value: string): void {
-    this.allocations = []
     this.description = ''
     this.date = value
     this.app.invalidateDay()
@@ -131,43 +133,120 @@ export class HoursView {
       if (current()) { this.taskLoading = false; this.app.render() }
     }
   }
-  private loadDay(): void {
+  private loadDay(prefill = false): void {
     this.app.invalidateDay()
+    const date = this.date
+    const generation = this.generation
+    const team = this.app.team
+    const identity = this.app.status?.identity
     void this.app.run(
-      (signal) =>
-        request<Day>(
-          'day.read',
-          { team: this.app.team, date: this.date },
-          signal
-        ),
-      (day) => {
+      async signal => {
+        const day = await request<Day>('day.read', { team, date }, signal)
+        const tasks: Task[] = []
+        let note = ''
+        if (prefill && day.existing > 0 && attendanceBudget(day.attendance) > day.existing) {
+          // Historical work may no longer be assigned to me; read task names independently.
+          const ids = [...new Set(day.worklogs.map(row => row.task))]
+          if (ids.length > 20) note = '当天任务过多，请手动选择补充任务。'
+          else {
+            for (const taskId of ids) {
+              try {
+                const detail = await request<ImplementationBrief>('tasks.brief', { team, taskId }, signal)
+                if (detail.task.issueType.name === '任务') tasks.push(detail.task)
+              } catch {
+                if (signal.aborted) throw new Error('cancelled')
+                note = '部分原任务无法读取，请核对后手动选择；不会使用未核实的任务。'
+              }
+            }
+          }
+        }
+        return { day, tasks, note }
+      },
+      ({ day, tasks, note }) => {
+        if (date !== this.date || generation !== this.generation || team !== this.app.team || identity !== this.app.status?.identity) return
         this.day = day
+        this.dayTasks = tasks
         try { this.start = resolveAttendance(day.attendance).start } catch { /* Anomalous days remain blocked. */ }
+        if (!prefill) return
+        this.selected = ''
+        this.description = ''
+        this.durationHours = minutesToHoursInput(Math.max(0, attendanceBudget(day.attendance) - day.existing))
+        const options = new Map<string, { taskId: string; description: string; start: string }>()
+        for (const log of day.worklogs) {
+          if (!tasks.some(task => task.id === log.task)) continue
+          const start = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(log.startTime * 1000))
+          options.set(JSON.stringify([log.task, log.description]), { taskId: log.task, description: log.description, start })
+        }
+        this.supplementOptions = [...options.values()]
+        this.supplementNote = note
+        queueMicrotask(() => { if (typeof document !== 'undefined' && this.date === date) document.getElementById('hours-supplement')?.scrollIntoView({ block: 'start' }) })
+        if (this.supplementOptions.length === 1) {
+          this.applySupplement('0')
+          this.supplementNote ||= '已复用当天任务和描述，并填入剩余额度；核对后点击“补充工时”直接提交。'
+        } else if (this.supplementOptions.length > 1) {
+          this.supplementNote ||= '当天有多个任务或描述，请选择要复用的记录；不会自动分摊差额。'
+        }
       }
     )
   }
-  private add(): void {
+  private applySupplement(value: string): void {
     this.app.invalidate()
-    if (!this.day || !this.selected || !this.description.trim()) {
-      this.app.error = '请先读取考勤，选择任务并填写描述。'
-      this.app.render()
+    this.supplementChoice = value
+    const option = value === '' ? undefined : this.supplementOptions[Number(value)]
+    this.selected = option?.taskId ?? ''
+    this.description = option?.description ?? ''
+    if (option) this.start = option.start
+  }
+  /// The form itself is the confirmation: freeze exactly what the user clicked,
+  /// validate server-side, then consume the existing one-shot submission contract.
+  private supplement(): void {
+    const app = this.app
+    const day = this.day
+    if (app.busy || this.submitting || !day || !app.status?.writeEnabled) return
+    let allocation: Allocation
+    try {
+      allocation = { taskId: this.selected, start: this.start, minutes: hoursToMinutes(this.durationHours), description: this.description }
+      if (!allocation.taskId) throw new UIError('请选择补充工时的普通任务。')
+      checkAllocations([allocation], attendanceBudget(day.attendance), day.existing)
+    } catch (error) {
+      app.error = error instanceof UIError ? error.message : safeFailure(error).message
+      app.render()
       return
     }
-    const minutes = Number(this.minutes)
-    if (!Number.isSafeInteger(minutes) || minutes <= 0) {
-      this.app.error = '请输入正整数分钟。'
-      this.app.render()
-      return
-    }
-    this.allocations.push({
-      taskId: this.selected,
-      start: this.start,
-      minutes,
-      description: this.description
+    const team = app.team
+    const identity = app.status.identity
+    const generation = this.generation
+    const month = day.date.slice(0, 7)
+    app.invalidate()
+    this.submitting = true
+    void app.run(async signal => {
+      const preview = await request<Preview>('hours.preview', { dayId: day.id, allocations: [allocation] }, signal)
+      if (signal.aborted || this.day !== day || this.generation !== generation || app.team !== team || app.status?.identity !== identity)
+        throw new UIError('日期或身份已变化，未提交工时。', 'stale')
+      // The server's calculation may not substitute another date or allocation.
+      const row = preview.rows[0]
+      if (preview.date !== day.date || preview.rows.length !== 1 || !row ||
+          row.taskId !== allocation.taskId || row.start !== allocation.start ||
+          row.minutes !== allocation.minutes || row.description !== allocation.description)
+        throw new UIError('工时校验结果与本次填写不一致，未提交。', 'stale')
+      try {
+        return await request<{ count: number }>('hours.submit', { previewId: preview.id, confirmed: true }, signal)
+      } finally {
+        // Success and ambiguous delivery both invalidate this form. Never auto-retry.
+        if (app.team === team && app.status?.identity === identity) {
+          if (this.day === day) this.clearDay()
+          this.months.delete(month)
+          this.enqueueMonth(month, true)
+          this.showMonth()
+          if (this.active) void this.pump(this.generation)
+        }
+      }
+    }, result => {
+      app.info = `已补充工时并回读确认 ${result.count} 笔。`
+    }).finally(() => {
+      this.submitting = false
+      app.render()
     })
-    this.description = ''
-    this.app.error = ''
-    this.app.render()
   }
   /// 进入时读取近一年本地快照，当前月优先补齐，普通任务独立后台同步。
   enter(): void {
@@ -307,13 +386,9 @@ export class HoursView {
       }
     }
   }
-  /// 修改任何批量字段都使前台确认失效，服务端确认还会在提交前重读。
+  /// Editing the form revokes the internal validation result without another UI confirmation.
   private invalidateBatch(): void {
-    this.batchPreview = null
-    this.batchConfirmed = false
-    // 输入时只移除过期确认子树，保留当前输入框和光标，不让旧闭包重新确认。
-    this.batchPreviewElement?.remove()
-    this.batchPreviewElement = undefined
+    this.batchRevision++
   }
   /// 仅缺报日期可选；保留跨月选择，每批最多 31 日。
   private toggleBatch(date: string): void {
@@ -322,73 +397,63 @@ export class HoursView {
     else {
       const day = this.months.get(date.slice(0, 7))?.days.find(day => day.date === date)
       if (!day || !['missing', 'partial'].includes(day.state) || this.batchRows.size >= 31) return
-      this.batchRows.set(date, { minutes: String(day.remaining ?? 0), start: '09:00' })
+      this.batchRows.set(date, { hours: minutesToHoursInput(day.remaining ?? 0), start: '09:00' })
     }
     this.app.render()
   }
-  /// 批次预览由 Worker 校验逐日投入与当前普通任务，不直接提交本地建议额度。
-  private previewBatch(): void {
-    this.invalidateBatch()
-    const rows: HoursBatchRow[] = [...this.batchRows].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({
-      date, taskId: this.batchTask, start: value.start, minutes: Number(value.minutes), description: this.batchDescription
-    }))
-    void this.app.run(signal => request<HoursBatchPreview>('hours.batchPreview', { team: this.app.team, rows }, signal), value => { this.batchPreview = value })
-  }
-  private generate(): void {
-    this.app.invalidate()
+  /// Clicking submits exactly the displayed batch; internal validation is not a UI step.
+  private submitBatch(): void {
+    const app = this.app
+    if (app.busy || this.submitting || !app.status?.writeEnabled) return
+    let rows: HoursBatchRow[]
     try {
-      const task = this.tasks.find(t => t.id === this.selected)
-      if (!task || !this.day) throw new Error()
-      const budget = attendanceBudget(this.day.attendance)
-      this.allocations.push(taskDraft(task, this.start, Number(this.minutes), this.description, budget, this.day.existing, this.allocations))
-      this.description = ''
-      this.app.info = '已生成待确认草稿；任务标题不是完成证据，请核对实际时长和描述后预览。'
-    } catch (error) { this.app.error = safeFailure(error).message }
-    this.app.render()
-  }
-  private makePreview(): void {
-    const day = this.day
-    if (!day) return
-    this.app.invalidate()
-    void this.app.run(
-      (signal) =>
-        request<Preview>(
-          'hours.preview',
-          {
-            dayId: day.id,
-            allocations: this.allocations
-          },
-          signal
-        ),
-      (value) => {
-        this.preview = value
+      if (!this.batchTask || !this.batchDescription.trim() || !this.batchRows.size)
+        throw new UIError('请选择日期、普通任务并填写工作描述。')
+      rows = [...this.batchRows].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({
+        date, taskId: this.batchTask, start: value.start, minutes: hoursToMinutes(value.hours), description: this.batchDescription
+      }))
+    } catch (error) {
+      app.error = message(error)
+      app.render()
+      return
+    }
+    const team = app.team
+    const identity = app.status.identity
+    const generation = this.generation
+    const revision = this.batchRevision
+    app.invalidate()
+    this.submitting = true
+    void app.run(async signal => {
+      const preview = await request<HoursBatchPreview>('hours.batchPreview', { team, rows }, signal)
+      if (signal.aborted || this.generation !== generation || this.batchRevision !== revision ||
+          app.team !== team || app.status?.identity !== identity)
+        throw new UIError('日期、填写内容或身份已变化，未提交工时。', 'stale')
+      if (preview.rows.length !== rows.length || preview.rows.some((row, index) => {
+        const expected = rows[index]!
+        return row.date !== expected.date || row.taskId !== expected.taskId || row.start !== expected.start ||
+          row.minutes !== expected.minutes || row.description !== expected.description
+      })) throw new UIError('批量校验结果与本次填写不一致，未提交。', 'stale')
+      let result: HoursBatchResult | undefined
+      this.batchResult = null
+      try {
+        result = await request<HoursBatchResult>('hours.batchSubmit', { team, previewId: preview.id, confirmed: true }, signal)
+        return result
+      } finally {
+        if (app.team === team && app.status?.identity === identity) {
+          this.clearDay()
+          // Unknown delivery cannot leave a ready-to-replay batch. Only proven unsent rows remain.
+          for (const row of rows)
+            if (!result?.rows.some(value => value.date === row.date && value.state === 'not_attempted')) this.batchRows.delete(row.date)
+          this.invalidateBatch()
+          for (const month of new Set(rows.map(row => row.date.slice(0, 7)))) { this.months.delete(month); this.enqueueMonth(month, true) }
+          this.showMonth()
+          if (this.active) void this.pump(this.generation)
+        }
       }
-    )
-  }
-  private save(): void {
-    void this.app.run(
-      (signal) => request('draft.save', { date: this.date, allocations: this.allocations }, signal),
-      () => {
-        this.app.info = '已保存本机草稿；重新打开后必须重读考勤。'
-      }
-    )
-  }
-  private restore(): void {
-    void this.app.run(
-      (signal) => request<Draft | null>('draft.load', undefined, signal),
-      (value) => {
-        this.app.invalidateDay()
-        if (value) {
-          this.app.info = '正在恢复草稿并重读考勤。'
-          queueMicrotask(() => { void this.loadMonth(value.date.slice(0, 7)).then(() => {
-            if (!this.active || this.calendarMonth !== value.date.slice(0, 7)) return
-            this.date = value.date
-            this.allocations = value.allocations
-            this.loadDay()
-          }) })
-        } else this.app.info = '当前身份没有草稿。'
-      }
-    )
+    }, result => { this.batchResult = result }).finally(() => {
+      this.submitting = false
+      app.render()
+    })
   }
   /// 日历下展示年度覆盖、缺报总数与普通任务批量分配，不隐藏尚未完成的月份。
   private renderBatch(): HTMLElement {
@@ -408,7 +473,7 @@ export class HoursView {
         this.invalidateBatch()
         for (const day of this.scan ?? []) {
           if (['missing', 'partial'].includes(day.state) && !this.batchRows.has(day.date) && this.batchRows.size < 31)
-            this.batchRows.set(day.date, { minutes: String(day.remaining ?? 0), start: '09:00' })
+            this.batchRows.set(day.date, { hours: minutesToHoursInput(day.remaining ?? 0), start: '09:00' })
         }
         app.render()
       }, app.busy), button('清空日期选择', () => { this.batchRows.clear(); this.invalidateBatch(); app.render() }, app.busy)),
@@ -419,43 +484,14 @@ export class HoursView {
     for (const [date, value] of [...this.batchRows].sort(([a], [b]) => a.localeCompare(b))) section.append(el('div', 'hours-batch-date',
       text(date),
       input(`${date} 开始时间`, value.start, next => { value.start = next; this.invalidateBatch() }, { disabled: app.busy }),
-      input(`${date} 时长（分钟）`, value.minutes, next => { value.minutes = next; this.invalidateBatch() }, { type: 'number', disabled: app.busy }),
+      input(`${date} 时长（小时）`, value.hours, next => { value.hours = next; this.invalidateBatch() }, { type: 'number', disabled: app.busy }),
       button(`移除 ${date}`, () => this.toggleBatch(date), app.busy)))
     if (this.batchRows.size) section.append(
       input('批量工作描述（必填）', this.batchDescription, value => { this.batchDescription = value; this.invalidateBatch() }, { multiline: true, disabled: app.busy }),
-      button('校验批量工时并预览', () => this.previewBatch(), app.busy || !this.batchTask),
-      text('不会自动均摊或提交；预览会逐日重新读取考勤、已有工时及普通任务。', true))
-    const preview = this.batchPreview
-    if (preview) {
-      this.batchPreviewElement = card('批量提交预览',
-      text(`${preview.rows.length} 天，共 ${hours(preview.total)}`),
-      ...preview.rows.map(value => text(`${value.date} · ${value.taskName} · ${value.start} · 本次 ${hours(value.minutes)} · 考勤 ${hours(value.budget)} · 已登记 ${hours(value.existing)} · ${value.description}`)),
-      check('确认每个日期、普通任务、实际时长和描述', this.batchConfirmed, value => { if (this.batchPreview !== preview) return; this.batchConfirmed = value; app.render() }, app.busy),
-      button('确认批量提交到 ONES', () => {
-        if (this.batchPreview !== preview) return
-        return app.run(
-        async () => {
-          this.batchResult = null
-          try {
-            return await request<HoursBatchResult>('hours.batchSubmit', { team: app.team, previewId: preview.id, confirmed: this.batchConfirmed })
-          } finally {
-            // The Worker may have consumed the confirmation even if the reply is lost.
-            this.invalidateBatch()
-            this.clearDay()
-            for (const month of new Set(preview.rows.map(row => row.date.slice(0, 7)))) { this.months.delete(month); this.enqueueMonth(month, true) }
-            this.showMonth()
-            void this.pump(this.generation)
-          }
-        },
-        result => {
-          this.batchResult = result
-          for (const row of result.rows) if (row.state === 'verified') this.batchRows.delete(row.date)
-        })
-      }, app.busy || !app.status?.writeEnabled || !this.batchConfirmed))
-      section.append(this.batchPreviewElement)
-    }
+      button('提交工时', () => this.submitBatch(), app.busy || this.submitting || !this.batchTask || !app.status?.writeEnabled),
+      text('点击即提交所选日期的工时；系统逐日校验额度，不再弹出二次确认。', true))
     if (this.batchResult) section.append(card('上次批量结果', ...this.batchResult.rows.map(row => text(`${row.date} · ${row.state === 'verified' ? '已回读' : row.state === 'unknown' ? '结果待核实' : '未提交'} · ${row.message}`))))
-    if (!app.status?.writeEnabled) section.append(notice('生产工时写入尚未验收：可选择和预览，提交暂不可用；不会写入真实工时。'))
+    if (!app.status?.writeEnabled) section.append(notice('生产工时写入尚未验收：可选择和填写，提交暂不可用；不会写入真实工时。'))
     return section
   }
   render(): HTMLElement {
@@ -469,8 +505,8 @@ export class HoursView {
     content.append(hoursCalendar({
       days: this.scan ?? [], month: this.calendarMonth, selected: this.day?.date ?? null,
       busy: app.busy, selectedDates: new Set(this.batchRows.keys()), toggleDate: date => this.toggleBatch(date),
-      changeMonth: month => { this.allocations = []; this.description = ''; void this.loadMonth(month) },
-      chooseDate: date => { this.changeDate(date); this.loadDay() }
+      changeMonth: month => { this.description = ''; void this.loadMonth(month) },
+      chooseDate: date => { this.changeDate(date); this.loadDay(true) }
     }))
     const stamp = this.savedAt ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(this.savedAt) : ''
     content.append(row(
@@ -485,10 +521,10 @@ export class HoursView {
       try {
         const calculated = resolveAttendance(this.day.attendance)
         attendanceValid = true
-        content.append(card('考勤已自动识别',
+        content.append(card(calculated.basis === 'punch' ? '考勤已自动识别' : '已审批工作时长',
           text(this.day.date + ' · ' + calculated.start + '—' + (calculated.endNextDay ? '次日 ' : '') + calculated.end),
           text('折算工时：' + hours(calculated.budget) + ' · 已登记：' + hours(this.day.existing)),
-          text('符合正常考勤规则，无需手动配对或确认。', true)))
+          text(calculated.basis === 'punch' ? '符合正常考勤规则，无需手动配对或确认。' : '依据审批时长及未覆盖的有效打卡时间计算；审批与打卡不重复累计。', true)))
       } catch (error) {
         content.append(card('考勤异常，暂不可分配',
           text(this.day.date + ' · ' + this.day.attendance.punches.length + ' 条打卡'),
@@ -497,18 +533,23 @@ export class HoursView {
       }
     } else {
       content.append(notice('选择日历中的日期，自动识别考勤后分配工时。'))
-      content.append(button('恢复草稿', () => this.restore(), app.busy || !authenticated))
       return content
     }
     content.append(
       card(
-        '按任务生成草稿 / 手动分配',
+        '工时补充',
+        this.supplementNote ? text(this.supplementNote, true) : null,
+        this.supplementOptions.length > 1 ? select('复用当天已登记记录', this.supplementChoice,
+          [{ value: '', label: '请选择原任务和描述' }, ...this.supplementOptions.map((option, index) => ({
+            value: String(index),
+            label: (this.dayTasks.find(task => task.id === option.taskId)?.name ?? option.taskId) + ' · ' + (option.description || '原描述为空')
+          }))], value => { this.applySupplement(value); app.render() }, app.busy) : null,
         select(
           '目标普通任务',
           this.selected,
           [
             { value: '', label: '请选择普通任务' },
-            ...this.tasks.map((t) => ({ value: t.id, label: `#${t.number} ${t.name}` }))
+            ...this.availableTasks.map((t) => ({ value: t.id, label: `#${t.number} ${t.name}` }))
           ],
           (v) => {
             this.selected = v
@@ -526,10 +567,10 @@ export class HoursView {
             { disabled: app.busy }
           ),
           input(
-            '时长（分钟）',
-            this.minutes,
+            '时长（小时）',
+            this.durationHours,
             (v) => {
-              this.minutes = v
+              this.durationHours = v
             },
             { disabled: app.busy }
           )
@@ -542,111 +583,12 @@ export class HoursView {
           },
           { multiline: true, disabled: app.busy }
         ),
-        button('按所选任务生成草稿', () => this.generate(),
-          app.busy || !attendanceValid || !this.selected),
-        text('使用所填时长生成，不自动推断投入；空描述按任务标题建议，提交前须人工确认。', true),
-        button(
-          '加入分配草稿',
-          () => this.add(),
-          app.busy || !attendanceValid || this.allocations.length >= 20
-        ),
-        text('用整数分钟记录，API 精确编码为 3 分钟的倍数。半小时取整仅用于考勤额度。', true)
+        button('补充工时', () => this.supplement(),
+          app.busy || this.submitting || !attendanceValid || !app.status?.writeEnabled)
       )
     )
-    if (this.allocations.length)
-      content.append(
-        card(
-          '待分配草稿',
-          ...this.allocations.map((item, index) =>
-            stack(
-              text(this.tasks.find((t) => t.id === item.taskId)?.name ?? '待重新核对的任务'),
-              text(`${item.start} · ${hours(item.minutes)} · ${item.description}`),
-              button(
-                '移除此项',
-                () => {
-                  this.allocations.splice(index, 1)
-                  app.invalidate()
-                  app.render()
-                },
-                app.busy
-              )
-            )
-          )
-        )
-      )
-    content.append(
-      row(
-        button(
-          '保存草稿',
-          () => this.save(),
-          app.busy || !authenticated || !this.allocations.length
-        ),
-        button('恢复草稿', () => this.restore(), app.busy || !authenticated),
-        button(
-          '校验并预览',
-          () => this.makePreview(),
-          app.busy ||
-            !this.day ||
-            !attendanceValid ||
-            !this.allocations.length
-        )
-      )
-    )
-    const preview = this.preview
-    if (preview)
-      content.append(
-        card(
-          '提交预览',
-          text('业务日期：' + preview.date),
-          text(
-            `考勤额度 ${hours(preview.budget)} · 已有 ${hours(preview.existing)} · 本次 ${hours(preview.proposed)} · 剩余 ${hours(preview.remaining)}`
-          ),
-          ...preview.rows.map((item) =>
-            text(`${item.taskName}｜${item.start}｜${hours(item.minutes)}｜${item.description}`)
-          ),
-          check(
-            '我确认上述任务、原日期、时长和每笔描述',
-            this.confirmed,
-            (v) => {
-              this.confirmed = v
-              app.render()
-            },
-            app.busy
-          ),
-          button(
-            '确认提交到 ONES',
-            () =>
-              app.run(
-                async (signal) => {
-                  try {
-                    return await request<{ count: number }>('hours.submit', { previewId: preview.id, confirmed: this.confirmed }, signal)
-                  } catch (error) {
-                    // 提交失败可能是未知结果：移除本地结论并只读回查，绝不重发写入。
-                    this.clearDay()
-                    const month = preview.date.slice(0, 7)
-                    this.months.delete(month)
-                    this.enqueueMonth(month, true)
-                    this.showMonth()
-                    void this.pump(this.generation)
-                    throw error
-                  }
-                },
-                (value) => {
-                  app.invalidateDay()
-                  this.allocations = []
-                  const month = preview.date.slice(0, 7)
-                  this.months.delete(month)
-                  this.enqueueMonth(month, true)
-                  this.showMonth()
-                  void this.pump(this.generation)
-                  app.info = `已逐笔回读 ${value.count} 笔工时。`
-                }
-              ),
-            app.busy || !app.status?.writeEnabled || !this.confirmed
-          )
-        )
-      )
-    if (!app.status?.writeEnabled) content.append(notice('写入安全闸未开放：目前仅允许读取、分配和预览；不会写入 ONES。'))
+    content.lastElementChild!.id = 'hours-supplement'
+    if (!app.status?.writeEnabled) content.append(notice('写入安全闸未开放：目前仅允许读取；不会写入 ONES。'))
     return content
   }
 }

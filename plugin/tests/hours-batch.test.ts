@@ -39,7 +39,7 @@ function fixture(writesVerified = true) {
     if (path.endsWith('/getInfoByDateAndUser')) { state.requested = body.data.curDate; return json({ code: 200, data: { kqqs: state.requested.slice(0, 7) } }) }
     if (path.endsWith('/attCalendar')) {
       const dates = monthDates(body.data.kqqs)
-      return json({ code: 200, data: { dateList: dates.map(date => ({ date })), dkList: dates.flatMap(date => ['08:53', state.end].map(time => ({ date, realDate: date, time, isNext: false, outFence: false }))) } })
+      return json({ code: 200, data: { dateList: dates.map(date => ({ date })), workList: [], dkList: dates.flatMap(date => ['08:53', state.end].map(time => ({ date, realDate: date, time, isNext: false, outFence: false }))) } })
     }
     const query = body.query ?? ''
     const vars = body.variables ?? {}

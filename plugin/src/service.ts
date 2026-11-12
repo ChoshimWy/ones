@@ -608,7 +608,7 @@ export class Workbench {
     const existing = existingMinutes(worklogs, input.date, ones.session.userId)
     const data = { id: randomUUID(), date: input.date, attendance, existing, worklogs }
     // Discard volatile timestamps/ordering from the comparison, not business fields.
-    const stamp = digest([attendance.date, attendance.punches, [...worklogs].sort((a,b) => a.key.localeCompare(b.key))])
+    const stamp = digest([attendance.date, attendance.punches, attendance.leave, attendance.approved, [...worklogs].sort((a,b) => a.key.localeCompare(b.key))])
     return { input: { ...input }, data, identity, stamp }
   }
   private hoursCacheScope(team: string): string {

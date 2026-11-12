@@ -196,8 +196,6 @@ export class WorkbenchUI {
   }
   invalidate(): void {
     this.epoch++
-    this.hours.preview = null
-    this.hours.confirmed = false
   }
   invalidateDay(): void {
     this.invalidate()
