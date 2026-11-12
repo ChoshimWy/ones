@@ -71,7 +71,7 @@ function dayFetcher(cohoResponse: () => Promise<Response>): Fetcher {
     if (path.endsWith('/info')) return json({ timezone: 'Asia/Shanghai', workhours_unit: 'hour', configs: [{ type: 'manhour_mode', data: 'simple' }] })
     if (path.endsWith('/getCurrentUser') && new Headers(init?.headers).get('Authorization') === 'Bearer fixture-old') return cohoResponse()
     if (path.endsWith('/getInfoByDateAndUser')) return json({ code: 200, data: { kqqs: 'period' } })
-    if (path.endsWith('/attCalendar')) return json({ code: 200, data: { dateList: [{ date: day.date }], dkList: ['09:00', '18:30'].map(time => ({ date: day.date, realDate: day.date, time, isNext: false, outFence: false })) } })
+    if (path.endsWith('/attCalendar')) return json({ code: 200, data: { dateList: [{ date: day.date }], workList: [], dkList: ['09:00', '18:30'].map(time => ({ date: day.date, realDate: day.date, time, isNext: false, outFence: false })) } })
     if (path.endsWith('/items/graphql')) return json({ data: { buckets: [{ manhours: [], pageInfo: { hasNextPage: false, endCursor: '', unstable: false } }] } })
     return auth(url, init)
   }

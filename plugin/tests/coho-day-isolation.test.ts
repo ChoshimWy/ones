@@ -36,7 +36,7 @@ async function fixture(change: (calendar: Record<string, unknown>) => void = () 
         if (failure === 'http') return new Response('', { status: 503 })
         if (failure === 'auth') return Response.json({ code: 401, data: {} })
         const dates = [...monthDates('2026-04'), '2026-05-01']
-        const calendar = { dateList: dates.map(date => ({ date })), dkList: dates.filter(date => date !== '2026-04-12').flatMap(date => ['08:50', '18:31'].map(time => ({ date, realDate: date, time, isNext: false, outFence: false }))) }
+        const calendar = { dateList: dates.map(date => ({ date })), workList: [], dkList: dates.filter(date => date !== '2026-04-12').flatMap(date => ['08:50', '18:31'].map(time => ({ date, realDate: date, time, isNext: false, outFence: false }))) }
         change(calendar)
         return Response.json({ code: 200, data: calendar })
       }
@@ -195,5 +195,149 @@ test('Coho day isolation: previous month stays pending until the next 08:00 and 
     saved = (await f.service.cachedHours('team', '2026-04'))!
     assert.equal(saved.days.at(-1)!.state, 'missing')
     assert.equal(saved.days.at(-1)!.remaining, 480)
+  } finally { await f.close() }
+})
+
+test('Coho next-day label: scan, SQLite and fresh preview normalize without poisoning adjacent dates', async () => {
+  const f = await fixture(calendar => {
+    const rows = calendar.dkList as Record<string, unknown>[]
+    Object.assign(rows.find(row => row.date === '2026-04-11' && row.time === '18:31')!, { time: '次日00:30', isNext: true })
+  })
+  try {
+    await scan(f.service)
+    const saved = (await f.service.cachedHours('team', '2026-04'))!
+    assert.equal(saved.days[9]!.budget, 480)
+    assert.equal(saved.days[10]!.budget, 810)
+    assert.deepEqual(saved.days[10]!.attendanceTime, { start: '08:50', end: '00:30', endNextDay: true })
+    assert.equal(saved.days[11]!.state, 'not_required')
+    f.cache.close()
+    assert.deepEqual(await new Workbench(f.deps).cachedHours('team', '2026-04'), saved)
+    const day = await f.service.readDay({ team: 'team', date: '2026-04-11' })
+    assert.equal(day.attendance.punches[1]!.realDate, '2026-04-12')
+    const preview = await f.service.makePreview({ dayId: day.id, allocations: [{ taskId: 'task', start: '09:00', minutes: 810, description: '虚构任务工作' }] })
+    assert.equal(preview.budget, 810)
+  } finally { await f.close() }
+})
+
+for (const change of [
+  { time: '次日00:30', isNext: false },
+  { time: '次日00:30', isNext: true, realDate: '2026-04-12' },
+  { time: '次日24:30', isNext: true },
+  { time: '次日00:30-private', isNext: true },
+  { time: '次日00:30', isNext: true, outFence: true }
+]) {
+  test('Coho next-day label: contradictory or malformed fields remain blocked ' + JSON.stringify(change), async () => {
+    const f = await fixture(calendar => {
+      const rows = calendar.dkList as Record<string, unknown>[]
+      Object.assign(rows.find(row => row.date === '2026-04-11' && row.time === '18:31')!, change)
+    })
+    try {
+      await scan(f.service)
+      const bad = (await f.service.cachedHours('team', '2026-04'))!.days[10]!
+      assert.equal(bad.state, 'review')
+      assert.equal(bad.budget, null)
+      const row = { date: bad.date, taskId: 'task', start: '09:00', minutes: 480, description: '虚构工作' }
+      await assert.rejects(f.service.previewHoursBatch('team', [row]), { code: 'attendance' })
+    } finally { await f.close() }
+  })
+}
+
+test('Coho leave: approved intervals affect scan and fresh preview without double deduction', async () => {
+  let minutes = 20
+  const f = await fixture(calendar => {
+    calendar.workList = [{ date: '2026-04-11', code: 'leave', statusCode: 10, status: '审批通过',
+      time: '2026-04-11 10:00:00~2026-04-11 10:' + String(minutes).padStart(2, '0') + ':00' }]
+  })
+  try {
+    await scan(f.service)
+    assert.equal((await f.service.cachedHours('team', '2026-04'))!.days[10]!.budget, 450)
+    const day = await f.service.readDay({ team: 'team', date: '2026-04-11' })
+    const row = { date: day.date, taskId: 'task', start: '09:00', minutes: 450, description: '虚构工作' }
+    assert.equal((await f.service.makePreview({ dayId: day.id, allocations: [row] })).budget, 450)
+    minutes = 40
+    await assert.rejects(f.service.previewHoursBatch('team', [row]), { code: 'budget' })
+  } finally { await f.close() }
+})
+
+for (const change of [{ statusCode: 0 }, { time: 'bad-private' }, { time: '2026-04-11 11:00:00~2026-04-11 10:00:00' }]) {
+  test('Coho leave: uncertain approval or malformed interval stays review ' + JSON.stringify(change), async () => {
+    const f = await fixture(calendar => {
+      calendar.workList = [{ date: '2026-04-11', code: 'leave', statusCode: 10, status: '审批通过',
+        time: '2026-04-11 10:00:00~2026-04-11 10:20:00', ...change }]
+    })
+    try {
+      await scan(f.service)
+      const day = (await f.service.cachedHours('team', '2026-04'))!.days[10]!
+      assert.equal(day.state, 'review')
+      assert.equal(day.budget, null)
+      assert.ok(!day.reason.includes('private'))
+      await assert.rejects(f.service.readDay({ team: 'team', date: day.date }), { code: 'attendance' })
+    } finally { await f.close() }
+  })
+}
+
+test('Coho leave: approval changes invalidate single and batch confirmations even within same rounded budget', async () => {
+  let end = '20'
+  const f = await fixture(calendar => {
+    calendar.workList = [{ date: '2026-04-11', code: 'leave', statusCode: 10, status: '审批通过',
+      time: '2026-04-11 10:00:00~2026-04-11 10:' + end + ':00' }]
+  })
+  f.deps.writesVerified = true
+  const service = new Workbench(f.deps)
+  try {
+    const day = await service.readDay({ team: 'team', date: '2026-04-11' })
+    const row = { date: day.date, taskId: 'task', start: '09:00', minutes: 450, description: '虚构工作' }
+    const preview = await service.makePreview({ dayId: day.id, allocations: [row] })
+    const batch = await service.previewHoursBatch('team', [row])
+    end = '25'
+    await assert.rejects(service.submit(preview.id, true), { code: 'stale' })
+    const result = await service.submitHoursBatch(batch.id, true, 'team')
+    assert.equal(result.rows[0]!.state, 'not_attempted')
+    assert.match(result.rows[0]!.message, /考勤或已登记工时变化/)
+  } finally { await f.close() }
+})
+
+test('Coho leave: missing authoritative workList fails closed without publishing', async () => {
+  const f = await fixture(calendar => { delete calendar.workList })
+  try {
+    await assert.rejects(scan(f.service), { code: 'schema' })
+    assert.equal(f.publications(), 0)
+  } finally { await f.close() }
+})
+
+test('Coho approved work: no-punch business plus overtime supports scan and preview, changed approval revokes submit', async () => {
+  let duration = 13.5
+  const f = await fixture(calendar => {
+    calendar.dkList = (calendar.dkList as Record<string, unknown>[]).filter(row => row.date !== '2026-04-11')
+    const overtime = { date: '2026-04-11', code: 'overtime', statusCode: 10, status: '审批通过',
+      time: '2026-04-11 09:00:00~2026-04-12 00:00:00', value: duration }
+    calendar.workList = [overtime, { ...overtime }]
+  })
+  f.deps.writesVerified = true
+  const service = new Workbench(f.deps)
+  try {
+    await scan(service)
+    const saved = (await service.cachedHours('team', '2026-04'))!.days[10]!
+    assert.equal(saved.budget, 810)
+    assert.equal(saved.attendanceTime, undefined)
+    const day = await service.readDay({ team: 'team', date: saved.date })
+    assert.equal(day.attendance.approved!.length, 1)
+    const preview = await service.makePreview({ dayId: day.id, allocations: [{ taskId: 'task', start: '09:00', minutes: 30, description: '虚构补充' }] })
+    duration = 13
+    await assert.rejects(service.submit(preview.id, true), { code: 'stale' })
+  } finally { await f.close() }
+})
+
+test('Coho approved work: overnight business travel counts dated eight hours plus separate overtime', async () => {
+  const f = await fixture(calendar => {
+    calendar.dkList = (calendar.dkList as Record<string, unknown>[]).filter(row => row.date !== '2026-04-11')
+    calendar.workList = [
+      { date: '2026-04-11', code: 'business', statusCode: 10, status: '审批通过', time: '2026-04-11 09:00:00~2026-04-12 09:00:00', value: 8 },
+      { date: '2026-04-11', code: 'overtime', statusCode: 10, status: '审批通过', time: '2026-04-11 22:00:00~2026-04-11 23:30:00', value: 1.5 }
+    ]
+  })
+  try {
+    await scan(f.service)
+    assert.equal((await f.service.cachedHours('team', '2026-04'))!.days[10]!.budget, 570)
   } finally { await f.close() }
 })

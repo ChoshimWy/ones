@@ -94,7 +94,7 @@ function fixture(start = '09:00') {
     }
     if (path.endsWith('/attCalendar')) {
       if (fail) return new Response('', { status: 503 })
-      return json({ code: 200, data: { dateList: [{ date: requested }, { date: nextAttendanceDate(requested) }], dkList: [requested, nextAttendanceDate(requested)].filter(date => !date.endsWith('01')).flatMap(date => [start, '18:30'].map(time => ({ date, realDate: date, time, isNext: false, outFence: date.endsWith('02') ? null : false }))) } })
+      return json({ code: 200, data: { dateList: [{ date: requested }, { date: nextAttendanceDate(requested) }], workList: [], dkList: [requested, nextAttendanceDate(requested)].filter(date => !date.endsWith('01')).flatMap(date => [start, '18:30'].map(time => ({ date, realDate: date, time, isNext: false, outFence: date.endsWith('02') ? null : false }))) } })
     }
     throw new Error('unexpected endpoint')
   } }

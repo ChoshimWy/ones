@@ -22,26 +22,25 @@ const row = {taskId:'task-fixture',start:'09:00',minutes:480,description:'虚构
 
 test('TC-PLUGIN-003: attendance boundaries and no attendance bypass', () => {
   for (const [end,minutes] of [['18:30',480],['18:59',480],['19:00',480],['19:29',480],['19:30',510],['19:59',510],['20:00',540],['20:29',540],['20:30',570],['21:00',600],['21:02',600],['21:29',600],['21:30',630],['21:59',630],['22:00',660],['23:59',750]] as const) assert.equal(attendanceBudget(attendance('09:00',end)),minutes)
-  assert.equal(attendanceBudget(attendance('09:15','21:00')),600)
-  for (const value of [attendance('09:00','18:29'),{...attendance(),punches:[]},{...attendance(),punches:[...attendance().punches,...attendance().punches]}]) assert.throws(()=>attendanceBudget(value))
+  assert.equal(attendanceBudget(attendance('09:15','21:00')),570)
+  for (const value of [{...attendance(),punches:[]},{...attendance(),punches:[...attendance().punches,...attendance().punches]}]) assert.throws(()=>attendanceBudget(value))
   assert.equal(attendanceBudget(attendance('08:53','21:02')),600)
   assert.equal(attendanceBudget(attendance('08:50','18:31')),480)
   assert.equal(attendanceBudget({ ...attendance('08:50','18:31'), punches: attendance('08:50','18:31').punches.reverse() }),480)
   for (const [start, minutes] of [
-    ['09:01',480], ['09:15',480], ['09:29',480], ['09:30',450],
-    ['09:31',450], ['09:59',450], ['10:00',420], ['10:29',420],
-    ['10:30',390], ['12:29',300], ['12:30',270], ['13:00',270],
-    ['13:59',270], ['14:00',270], ['14:29',270], ['14:30',240],
-    ['18:00',30], ['18:29',30]
+    ['09:01',480], ['09:15',450], ['09:29',450], ['09:30',450],
+    ['09:31',420], ['09:59',420], ['10:00',420], ['10:29',390],
+    ['10:30',390], ['12:29',270], ['12:30',270], ['13:00',270],
+    ['13:59',270], ['14:00',270], ['14:29',240], ['14:30',240],
+    ['18:00',30], ['18:29',0]
   ] as const) {
     assert.equal(attendanceBudget(attendance(start, '18:30')), minutes, start)
-    assert.equal(attendanceBudget(attendance(start, '19:29')), minutes, start)
     assert.equal(attendanceBudget(attendance(start, '19:30')), minutes + 30, start)
     assert.equal(attendanceBudget(attendance(start, '21:00')), minutes + 120, start)
   }
-  assert.equal(attendanceBudget(attendance('09:15','20:00')),540)
-  assert.throws(()=>attendanceBudget(attendance('18:30','21:00')))
-  assert.throws(()=>attendanceBudget(attendance('19:00','21:00')))
+  assert.equal(attendanceBudget(attendance('09:15','20:00')),510)
+  assert.equal(attendanceBudget(attendance('18:30','21:00')),120)
+  assert.equal(attendanceBudget(attendance('19:00','21:00')),120)
   for (const changed of [{isNext:true},{outFence:undefined},{outFence:'false'},{realDate:'2026-01-06'}]) {
     const input=attendance();Object.assign(input.punches[0],changed);assert.throws(()=>attendanceBudget(input))
   }
@@ -119,7 +118,7 @@ test('TC-PLUGIN-003/004: service authority survives stale preview and refuses di
     if(path.endsWith('/info'))return json({timezone:'Asia/Shanghai',workhours_unit:'hour',configs:[{type:'manhour_mode',data:'simple'}]})
     if(path.endsWith('/getCurrentUser'))return json({code:200,data:{tenantCode:'ATS',globalId:'principal-fixture'}})
     if(path.endsWith('/getInfoByDateAndUser'))return json({code:200,data:{kqqsId:'period-fixture',kqqs:'period-label'}})
-    if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'},{date:'2026-01-06'}],dkList:attendance('08:50',dayEnd).punches}})
+    if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'},{date:'2026-01-06'}],workList: [], dkList:attendance('08:50',dayEnd).punches}})
     const {query}=JSON.parse(String(init.body))
     if(query.includes('mutation')){mutated++;throw Error('test must not write')}
     if(query.includes('PluginTask'))return json({data:{tasks:[{uuid:'task-fixture',number:1,name:'虚构任务',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:'type-fixture',name:'任务'},status:{uuid:'status-fixture',name:'待处理'}}]}})
@@ -178,7 +177,7 @@ test('TC-PLUGIN-004-positive: confirmed synthetic batch writes and reads each or
     if(path.endsWith('/info'))return json({timezone:'Asia/Shanghai',workhours_unit:'hour',configs:[{type:'manhour_mode',data:'simple'}]})
     if(path.endsWith('/getCurrentUser'))return json({code:200,data:{tenantCode:'ATS',globalId:'principal-fixture'}})
     if(path.endsWith('/getInfoByDateAndUser'))return json({code:200,data:{kqqsId:'period-fixture',kqqs:'period-label'}})
-    if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'},{date:'2026-01-06'}],dkList:attendance('08:53','21:02').punches}})
+    if(path.endsWith('/attCalendar'))return json({code:200,data:{dateList:[{date:'2026-01-05'},{date:'2026-01-06'}],workList: [], dkList:attendance('08:53','21:02').punches}})
     const {query,variables:v}=JSON.parse(String(init.body))
     if(query.includes('PluginAdd')){
       writes++;const key=`log-${writes}`;logs.push({key,hours:v.hours,startTime:v.start_time,type:v.type,description:v.description,owner:{uuid:v.owner},task:{uuid:v.task}})
@@ -304,7 +303,7 @@ test('TC-PLUGIN-003-self-attendance: ATS binds employee and period to authoritat
       return json({code:200,data:missingPeriod?{}:{kqqs:'period-fixture'}})
     }
     assert.deepEqual(data,{userId:'principal-fixture',kqqsId:'period-fixture',kqqs:'period-fixture'})
-    return json({code:200,data:{dateList:[{date:'2026-01-05'},{date:'2026-01-06'}],dkList:attendance('08:53','21:02').punches}})
+    return json({code:200,data:{dateList:[{date:'2026-01-05'},{date:'2026-01-06'}],workList: [], dkList:attendance('08:53','21:02').punches}})
   }),{token:'fixture-coho',principal:'principal-fixture',label:'虚构',expiresAt:Date.now()+60000})
   assert.equal((await client.attendance('2026-01-05')).punches.length,2)
   missingPeriod=true;await assert.rejects(()=>client.attendance('2026-01-05'))

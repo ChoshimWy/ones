@@ -59,7 +59,7 @@ export function authFixture() {
     if (path.endsWith('/getInfoByDateAndUser')) return Response.json({ code: 200, data: { kqqs: 'period' } })
     if (path.endsWith('/attCalendar')) {
       control.calendarCalls++
-      return Response.json({ code: 200, data: { dateList: [{ date: '2026-01-05' }], dkList: ['09:00', '18:30'].map(time => ({ date: '2026-01-05', realDate: '2026-01-05', time, isNext: false, outFence: false })) } })
+      return Response.json({ code: 200, data: { dateList: [{ date: '2026-01-05' }], workList: [], dkList: ['09:00', '18:30'].map(time => ({ date: '2026-01-05', realDate: '2026-01-05', time, isNext: false, outFence: false })) } })
     }
     if (path.endsWith('/items/graphql')) return Response.json({ data: { buckets: [{ tasks: [{ uuid: 'task', number: 1, name: '虚构缺陷：自动登录验证', project: { uuid: 'project', name: '验证项目' }, issueType: { uuid: 'bug', name: '缺陷' }, status: { uuid: 'open', name: '待处理' } }], manhours: [], pageInfo: { hasNextPage: false, endCursor: '', unstable: false } }] } })
     throw Error('Unexpected fixture endpoint')

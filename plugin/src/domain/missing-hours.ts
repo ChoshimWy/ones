@@ -48,10 +48,10 @@ export function classifyDay(attendance: Attendance, existing: number): MissingDa
   const endpoints = attendanceEndpoints(attendance)
   const base = { date: attendance.date, existing, ...(endpoints ? { attendanceTime: endpoints } : {}) }
   validDate(attendance.date)
-  if (attendance.punches.length === 0) return { ...base, budget: 0, remaining: 0, state: 'not_required', reason: '该日无考勤，无需填写工时。' }
+  if (attendance.punches.length === 0 && !attendance.approved?.length) return { ...base, budget: 0, remaining: 0, state: 'not_required', reason: '该日无考勤，无需填写工时。' }
   try {
     const { start, end, endNextDay, budget } = resolveAttendance(attendance)
-    return { ...base, attendanceTime: { start, end, ...(endNextDay ? { endNextDay } : {}) }, budget, remaining: Math.max(0, budget - existing),
+    return { ...base, ...(attendance.approved?.length ? {} : { attendanceTime: { start, end, ...(endNextDay ? { endNextDay } : {}) } }), budget, remaining: Math.max(0, budget - existing),
       state: existing === 0 ? 'missing' : existing < budget ? 'partial' : 'covered',
       reason: existing > budget ? '已有工时超过考勤额度，请核对；不自动修改。' : '考勤额度仅为上限，不代表实际任务投入。' }
   } catch (error) {

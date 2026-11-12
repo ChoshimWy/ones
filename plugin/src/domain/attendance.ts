@@ -1,7 +1,7 @@
 import { type Allocation, type Attendance, type Punch, type Worklog, requireThat, minuteOfDay, validDate } from './model.ts'
 
 // Persisted projections must not reuse budgets calculated under older rules.
-export const ATTENDANCE_RULE_VERSION = 'attendance-0800-window-first-last-v1'
+export const ATTENDANCE_RULE_VERSION = 'attendance-approved-work-total-floor-v4'
 
 export function nextAttendanceDate(date: string): string {
   validDate(date)
@@ -23,9 +23,15 @@ export function attendancePunchMinute(punch: Punch, date: string): number {
   return offset
 }
 
-export function resolveAttendance(attendance: Attendance): { start: string; end: string; endNextDay?: boolean; budget: number } {
+export function resolveAttendance(attendance: Attendance): { start: string; end: string; endNextDay?: boolean; budget: number; basis: 'punch' | 'approval' | 'mixed' } {
   validDate(attendance.date)
-  requireThat(attendance.punches.length === 2, 'attendance', '缺卡、多次打卡或异常记录不能自动折算，请先处理考勤异常。')
+  const approved = [...(attendance.approved ?? [])].sort((a, b) => a.start - b.start)
+  for (const [index, span] of approved.entries()) {
+    requireThat(Number.isFinite(span.start) && Number.isFinite(span.end) && Number.isFinite(span.minutes) &&
+      span.start >= 480 && span.end <= 1860 && span.start < span.end && span.minutes > 0 && span.minutes <= span.end - span.start &&
+      (index === 0 || approved[index - 1]!.end <= span.start), 'attendance', '工作审批重叠或时长不明确，需先核实，不能重复累计。')
+  }
+  requireThat(attendance.punches.length === 2 || (approved.length > 0 && attendance.punches.length <= 1), 'attendance', '缺卡、多次打卡或异常记录不能自动折算，请先处理考勤异常。')
   for (const punch of attendance.punches) {
     attendancePunchMinute(punch, attendance.date)
     requireThat(punch.outFence === false, 'attendance', '外勤标志未知或异常，需先核实接口与考勤。')
@@ -33,16 +39,55 @@ export function resolveAttendance(attendance: Attendance): { start: string; end:
   }
   // Exactly two verified punches in one business window; multiple punches remain review-only.
   const [start, end] = [...attendance.punches].sort((a, b) => attendancePunchMinute(a, attendance.date) - attendancePunchMinute(b, attendance.date))
-  const a = attendancePunchMinute(start!, attendance.date)
-  const b = attendancePunchMinute(end!, attendance.date)
-  requireThat(a < 1110 && b >= 1110, 'attendance', '此上下班时段不在已确认工时规则内，不能自动折算。')
-  // Count only missed scheduled work: 09:00–12:30 and 14:00–18:30.
-  // Lunch is not work and must not be deducted a second time.
-  const missedMorning = Math.max(0, Math.min(a, 750) - 540)
-  const missedAfternoon = Math.max(0, Math.min(a, 1110) - 840)
-  const deduction = Math.floor((missedMorning + missedAfternoon) / 30) * 30
-  const overtime = Math.floor(Math.max(0, b - 1140) / 30) * 30
-  return { start: start!.time, end: end!.time, ...(b >= 1440 ? { endNextDay: true } : {}), budget: 480 - deduction + overtime }
+  const a = start ? attendancePunchMinute(start, attendance.date) : approved[0]!.start
+  const b = end ? attendancePunchMinute(end, attendance.date) : approved.at(-1)!.end
+  if (attendance.punches.length === 2) requireThat(a < b, 'attendance', '上下班时间顺序无效，不能自动折算。')
+  if (attendance.punches.length === 1) requireThat(approved.some(span => a >= span.start && a <= span.end),
+    'attendance', '单条打卡未被工作审批覆盖，不能推断出勤区间。')
+  const effectiveStart = a < 555 ? 540 : a
+  const leave = [...(attendance.leave ?? [])].sort((x, y) => x.start - y.start)
+  for (const span of leave) {
+    requireThat(Number.isFinite(span.start) && Number.isFinite(span.end) && span.start < span.end,
+      'attendance', '请假起止时间无效，不能自动折算。')
+  }
+  // Merge leave intervals before subtracting so duplicate/overlapping approvals count once.
+  const merged: { start: number; end: number }[] = []
+  for (const span of leave) {
+    const last = merged.at(-1)
+    if (last && span.start <= last.end) last.end = Math.max(last.end, span.end)
+    else merged.push({ ...span })
+  }
+  const overlap = (a: { start: number; end: number }, b: { start: number; end: number }) =>
+    Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start))
+  const windows = [{ start: 540, end: 750 }, { start: 840, end: 1110 }, { start: 1140, end: 1860 }]
+  let minutes = 0
+  for (const span of approved) {
+    const scheduled = windows.reduce((sum, window) => sum + overlap(span, window), 0)
+    const deduction = windows.reduce((sum, window) => sum + merged.reduce((amount, leave) =>
+      amount + overlap({ start: Math.max(span.start, window.start), end: Math.min(span.end, window.end) }, leave), 0), 0)
+    requireThat(deduction === 0 || scheduled === span.minutes, 'attendance', '审批时长与工作区间不一致且存在请假，需核实扣除方式。')
+    minutes += Math.max(0, span.minutes - deduction)
+  }
+  if (attendance.punches.length === 2) {
+    // Approval owns its full interval; only uncovered punch time is additional.
+    const exclusions = [...merged, ...approved].sort((a, b) => a.start - b.start)
+    for (const window of windows) {
+      let cursor = Math.max(effectiveStart, window.start)
+      const upper = Math.min(b, window.end)
+      for (const span of exclusions) {
+        if (span.end <= cursor || span.start >= upper) continue
+        minutes += Math.max(0, Math.min(span.start, upper) - cursor)
+        cursor = Math.max(cursor, span.end)
+      }
+      minutes += Math.max(0, upper - cursor)
+    }
+  }
+  const budget = Math.floor(minutes / 30) * 30
+  const clock = (minute: number) => String(Math.floor(minute % 1440 / 60)).padStart(2, '0') + ':' + String(minute % 60).padStart(2, '0')
+  const from = approved.length ? Math.min(a, approved[0]!.start) : a
+  const to = approved.length ? Math.max(b, approved.at(-1)!.end) : b
+  return { start: clock(from), end: clock(to), ...(to >= 1440 ? { endNextDay: true } : {}), budget,
+    basis: approved.length ? (attendance.punches.length ? 'mixed' : 'approval') : 'punch' }
 }
 
 export function attendanceBudget(attendance: Attendance): number {

@@ -54,20 +54,26 @@ function signed(data: Record<string, unknown>, token: string) {
   return { encodeData: randomBytes(6).toString('hex'), timeStamp, data, key, sign: md5(`${key}&${timeStamp}&${JSON.stringify(data)}`) }
 }
 /// 已验证整期覆盖与打卡归属；仅日期可归属的字段异常允许日级隔离。
-type Calendar = { dates: Set<string>; punches: Record<string, unknown>[] }
+type Calendar = { dates: Set<string>; punches: Record<string, unknown>[]; work: Record<string, unknown>[] }
 
 /// 整体结构或归属不明时停止扫描，不能将未知记录当作无考勤。
 function parseCalendar(value: Record<string, unknown>): Calendar {
   requireThat(Array.isArray(value.dateList) && Array.isArray(value.dkList), 'schema', 'Coho 考勤日历：dateList 或 dkList 结构无效，已停止整月更新。')
+  requireThat(Array.isArray(value.workList), 'schema', 'Coho 请假明细 workList 缺失，不能计算考勤时间。')
   try {
     const dates = new Set(value.dateList.map(day => validDate(record(day).date)))
     const punches = value.dkList.map(record)
     for (const punch of punches) {
       validDate(punch.date)
     }
-    return { dates, punches }
+    const work = value.workList.map(record)
+    for (const row of work) {
+      validDate(row.date)
+      requireThat(typeof row.code === 'string', 'schema', 'Coho 业务明细类型缺失，不能确定请假记录。')
+    }
+    return { dates, punches, work }
   } catch {
-    throw new AppError('schema', 'Coho 考勤日历：dateList.date 或 dkList.date 无法确定打卡归属，已停止整月更新。')
+    throw new AppError('schema', 'Coho 考勤日历：dateList、dkList 或 workList 无法确定记录归属，已停止整月更新。')
   }
 }
 
@@ -76,10 +82,58 @@ function parsePunch(value: Record<string, unknown>, date: string): Punch {
   let realDate: string
   try { realDate = validDate(value.realDate) }
   catch { throw new AppError('attendance', `${date}：打卡 realDate 缺失或格式无效，不能计算考勤时间。`) }
-  try { minuteOfDay(value.time) }
+  // ATS may retain the attendance date in realDate and label an overnight punch
+  // as 次日HH:mm. Normalize only this explicit, consistent wire representation.
+  let time = value.time
+  if (typeof time === 'string' && /^次日([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+    requireThat(value.isNext === true && realDate === date, 'attendance', `${date}：打卡次日时间与日期或 isNext 不一致，不能计算考勤时间。`)
+    time = time.slice(2)
+    realDate = nextAttendanceDate(date)
+  }
+  try { minuteOfDay(time) }
   catch { throw new AppError('attendance', `${date}：打卡 time 缺失或格式无效，不能计算考勤时间。`) }
   requireThat(typeof value.isNext === 'boolean', 'attendance', `${date}：打卡 isNext 缺失或格式无效，不能计算考勤时间。`)
-  return { date, realDate, time: value.time as string, isNext: value.isNext, outFence: typeof value.outFence === 'boolean' ? value.outFence : null }
+  return { date, realDate, time: time as string, isNext: value.isNext, outFence: typeof value.outFence === 'boolean' ? value.outFence : null }
+}
+
+/// ATS approvals retain their explicit date/range and approved duration.
+function approvalSpan(row: Record<string, unknown>, date: string): { start: number; end: number } {
+  requireThat(row.statusCode === 10 && row.status === '审批通过', 'attendance', `${date}：申请审批状态未确认，不能计算考勤时间。`)
+  requireThat(typeof row.time === 'string', 'attendance', `${date}：申请起止时间缺失。`)
+  const match = /^(\d{4}-\d{2}-\d{2}) ([0-2]\d:[0-5]\d):00~(\d{4}-\d{2}-\d{2}) ([0-2]\d:[0-5]\d):00$/.exec(row.time)
+  requireThat(match, 'attendance', `${date}：申请起止时间格式未确认。`)
+  let start: number, end: number
+  try {
+    validDate(match[1]); validDate(match[3])
+    minuteOfDay(match[2]); minuteOfDay(match[4])
+    const origin = Date.parse(date + 'T00:00:00+08:00')
+    start = (Date.parse(match[1] + 'T' + match[2] + ':00+08:00') - origin) / 60000
+    end = (Date.parse(match[3] + 'T' + match[4] + ':00+08:00') - origin) / 60000
+  } catch { throw new AppError('attendance', `${date}：申请起止时间无效。`) }
+  requireThat(start < end, 'attendance', `${date}：申请起止顺序无效。`)
+  return { start, end }
+}
+
+function approvedLeave(calendar: Calendar, date: string): { start: number; end: number }[] {
+  return calendar.work.filter(row => row.date === date && row.code === 'leave').map(row => approvalSpan(row, date))
+}
+
+function approvedWork(calendar: Calendar, date: string): NonNullable<Attendance['approved']> {
+  const result = new Map<string, NonNullable<Attendance['approved']>[number]>()
+  for (const row of calendar.work.filter(row => row.date === date && (row.code === 'business' || row.code === 'overtime'))) {
+    const rawSpan = approvalSpan(row, date)
+    // Business applications can cover overnight travel, but the dated approval
+    // is normal working time; its travel envelope must not swallow overtime.
+    const span = row.code === 'business'
+      ? { start: Math.max(540, rawSpan.start), end: Math.min(1110, rawSpan.end) }
+      : rawSpan
+    requireThat(span.start < span.end && span.start >= 480 && span.end <= 1860, 'attendance', `${date}：工作审批超出当天至次日07:00的范围，需核实分日时长。`)
+    requireThat(typeof row.value === 'number' && Number.isFinite(row.value) && row.value > 0 &&
+      Number.isSafeInteger(row.value * 60) && row.value * 60 <= span.end - span.start && (row.code !== 'business' || row.value <= 8), 'attendance', `${date}：工作审批时长无效。`)
+    const value = { ...span, minutes: row.value * 60, kind: row.code as 'business' | 'overtime' }
+    result.set(JSON.stringify(value), value)
+  }
+  return [...result.values()].sort((a, b) => a.start - b.start || a.end - b.end)
 }
 
 export class CohoClient {
@@ -140,8 +194,10 @@ export class CohoClient {
         for (const key of keys) previousKeys.add(key)
       }
       punches.sort((a, b) => a.realDate.localeCompare(b.realDate) || a.time.localeCompare(b.time))
-      requireThat(punches.length > 0, 'no_attendance', '所选日期无打卡记录，禁止默认填入 8 小时。')
-      return { date, punches, fetchedAt: Date.now() }
+      const calendar = await readCalendar(date)
+      const approved = approvedWork(calendar, date)
+      requireThat(punches.length > 0 || approved.length > 0, 'no_attendance', '所选日期无打卡记录，禁止默认填入 8 小时。')
+      return { date, punches, leave: approvedLeave(calendar, date), approved, fetchedAt: Date.now() }
     }
   }
 }
