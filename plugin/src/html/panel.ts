@@ -59,12 +59,6 @@ export class WorkbenchUI {
   private bugError = ''
   private project = 'all'
   private projectName = ''
-  private projectFollowing = true
-  private projectFollowNote = ''
-  private projectGeneration = 0
-  private localProjectId?: string | null
-  private focusKey?: string
-  private workspaceSubscription?: { dispose(): void }
   private statuses: string[] | null = ['待处理', '重新打开', '修复中']
   private catalog: Option[] | null = null
   private expanded = false
@@ -121,53 +115,11 @@ export class WorkbenchUI {
     window.addEventListener('focus', this.onResume)
     document.addEventListener('visibilitychange', this.onResume)
     window.addEventListener('workbench-auth-invalid', this.onAuthInvalid)
-    try {
-      this.workspaceSubscription = orca.on('workspace.changed', ({ context }) => {
-        const key = JSON.stringify(context ? [context.displayName, context.branch, context.terminals.map(t => t.id).sort()] : null)
-        if (this.disposed || key === this.focusKey) return
-        this.focusKey = key
-        void this.followProject(true)
-      })
-    } catch { /* No read capability: the initial query falls back to all projects. */ }
     void this.start()
   }
   private async start(): Promise<void> {
     await this.refresh()
     if (!this.disposed && this.tab === 'bugs') void this.loadBugs()
-  }
-  /// 同步项目跟随；项目改变时统一重置分页并使旧目标页失效。
-  private async followProject(focusChanged = false): Promise<void> {
-    const generation = ++this.projectGeneration, epoch = this.epoch
-    if ((!this.projectFollowing && !focusChanged) || this.disposed || !this.status?.ones.connected || !this.team) return
-    const team = this.team, previousProject = this.project
-    const projects = [...new Map(this.bugs.map(task => [task.project.id, task.project])).values()]
-    this.render()
-    const current = () => generation === this.projectGeneration && epoch === this.epoch && team === this.team && !this.disposed
-    try {
-      const result = await request<{ localProject: Option | null; project: Option | null }>('bugs.projectFilter', { team, projects })
-      if (!current()) return
-      const localProjectId = result.localProject?.id ?? null
-      if (focusChanged && localProjectId !== this.localProjectId) this.projectFollowing = true
-      this.localProjectId = localProjectId
-      if (!this.projectFollowing) return
-      this.project = result.project?.id ?? 'all'
-      this.projectName = result.project?.name ?? ''
-      this.projectFollowNote = result.localProject
-        ? `跟随 Orca：${result.localProject.name} · ${result.project ? '已匹配项目' : '未找到唯一匹配，显示全部已读取项目'}`
-        : '未能识别当前 Orca 项目，显示全部已读取项目。'
-    } catch {
-      if (!current()) return
-      this.project = 'all'
-      this.projectName = ''
-      this.localProjectId = null
-      this.projectFollowing = true
-      this.projectFollowNote = '项目跟随不可用，显示全部已读取项目。'
-    } finally {
-      if (current()) {
-        if (this.project !== previousProject) this.resetBugPage()
-        else this.render()
-      }
-    }
   }
   async run<T>(
     action: (signal: AbortSignal) => Promise<T>,
@@ -205,7 +157,6 @@ export class WorkbenchUI {
   /// 使旧读取失效；导航时同时取消项目跟随，筛选和翻页保留最新跟随请求。
   private cancelBugs(cancelProject = true): void {
     if (cancelProject) {
-      this.projectGeneration++
       this.paginationFocus = ''
     }
     this.bugGeneration++
@@ -230,10 +181,6 @@ export class WorkbenchUI {
     this.cursors.clear()
     this.bugLoaded = false
     this.bugError = ''
-    this.projectGeneration++
-    this.projectFollowing = true
-    this.localProjectId = undefined
-    this.projectFollowNote = ''
     this.project = 'all'
     this.projectName = ''
     this.statuses = ['待处理', '重新打开', '修复中']
@@ -442,11 +389,7 @@ export class WorkbenchUI {
         this.next = page.nextCursor
         this.bugLoaded = true
         if (this.next !== null) this.cursors.add(this.next)
-        if (this.projectFollowing) {
-          await this.followProject()
-          if (!current()) return // 项目匹配改变筛选时，新第一页请求已接管。
 
-        }
       }
       // 3. 下一页无匹配结果时留在原页，末页允许不足十条。
       if (target === 1 || this.filteredBugs().length > (target - 1) * this.bugPageSize) this.bugPage = target
@@ -577,7 +520,7 @@ export class WorkbenchUI {
         (this.project === 'all' || task.project.id === this.project) &&
         (this.statuses === null || task.status.name === name)
       ).length
-      const tag = el('span', 'tag', el('span', 'status-dot'), name, el('span', 'status-count', count), remove)
+      const tag = el('span', 'tag', name, el('span', 'status-count', count), remove)
       tag.dataset.status = name
       tag.title = '当前项目已读取的缺陷数量'
       selectedTags.append(tag)
@@ -652,73 +595,77 @@ export class WorkbenchUI {
         )
       )
     }
-    const items = stack(
-      ...list.map((task) => {
-        const item = button('', () => this.openDetail(task), this.busy, 'card bug-item')
-        item.setAttribute('aria-label', `查看 Bug #${task.number} ${task.name} 的详情`)
-        const arrow = arrowIcon('bug-item-arrow')
-        item.dataset.status = task.status.name
-        item.append(
-          el('span', 'status-dot'),
-          el(
-            'span',
-            'bug-item-main',
-            el('span', 'bug-item-title', `#${task.number} ${task.name}`),
-            el('span', 'muted', `${task.project.name} · 缺陷 · ${task.status.name}`)
-          ),
-          arrow
-        )
-        return item
-      })
+    const headings = ['编号', '标题', '状态', '所属项目', '创建者'].map((label) => {
+      const heading = el('th', '', label)
+      heading.scope = 'col'
+      return heading
+    })
+    const items = el('div', 'bug-items',
+      el('table', 'bug-table',
+        el('caption', 'sr-only', '我的 Bug 列表'),
+        el('thead', '', el('tr', '', ...headings)),
+        el('tbody', '', ...list.map((task) => {
+          const item = button('', () => this.openDetail(task), this.busy, 'bug-item')
+          item.setAttribute('aria-label', `查看 Bug #${task.number} ${task.name} 的详情`)
+          item.append(el('span', 'bug-item-title', task.name))
+          item.title = task.name
+          const status = el('span', 'bug-table-status', el('span', 'status-dot'), task.status.name)
+          status.dataset.status = task.status.name
+          const project = el('td', 'bug-table-project', task.project.name)
+          project.title = task.project.name
+          const record = el('tr', 'bug-table-row',
+            el('td', 'bug-table-number', `#${task.number}`),
+            el('td', 'bug-table-title', item),
+            el('td', '', status),
+            project,
+            el('td', 'bug-table-creator', task.creator?.name ?? '—'))
+          record.dataset.status = task.status.name
+          record.setAttribute('aria-disabled', String(this.busy))
+          // 单一详情入口：鼠标可点击整行，键盘使用原生按钮，避免冒泡重复打开。
+          record.addEventListener('click', (event) => {
+            if (!item.contains(event.target as Node) && !item.disabled) item.click()
+          })
+          return record
+        }))
+      ))
+    items.tabIndex = 0
+    items.setAttribute('role', 'region')
+    items.setAttribute('aria-label', '缺陷表格，可横向滚动查看全部列')
+    const projectFilter = select(
+      '项目筛选',
+      this.project,
+      [{ value: 'all', label: '全部项目' }, ...projects.values()],
+      (value) => {
+        this.project = value
+        this.projectName = projects.get(value)?.label ?? ''
+        this.resetBugPage()
+      }
     )
-    items.classList.add('bug-items')
+    projectFilter.classList.add('compact-project-filter')
+    projectFilter.querySelector('label')?.classList.add('sr-only')
+    const projectField = projectFilter.querySelector('select')!
+    projectField.title = this.project === 'all' ? '全部项目' : this.projectName
+    const projectDisplay = el('span', 'project-filter-display',
+      this.project === 'all' ? '项目' : this.projectName,
+      icon('chevrons'))
+    projectDisplay.setAttribute('aria-hidden', 'true')
+    projectFilter.append(projectDisplay)
+    const refresh = button('', () => this.loadBugs(),
+      this.busy || this.bugLoading || !this.status?.ones.connected || !this.team,
+      'refresh-bugs')
+    refresh.setAttribute('aria-label', '刷新缺陷')
+    refresh.title = this.bugLoading ? '正在刷新缺陷' : '刷新缺陷'
+    refresh.append(icon('sync'))
+    refresh.classList.toggle('is-syncing', this.bugLoading)
+    refresh.setAttribute('aria-busy', String(this.bugLoading))
     const filters = el('section', 'stack filter-card',
-      el('div', 'row bug-actions',
-        el('span', 'auto-refresh', '进入时自动刷新'),
-        el('span', 'personal-only', '仅本人缺陷'),
-        button(
-          '刷新缺陷',
-          () => this.loadBugs(),
-          this.busy || this.bugLoading || !this.status?.ones.connected || !this.team,
-          'refresh-bugs'
-        ),
-        el('span', 'read-state', el('span', 'connection-dot'),
-          this.bugLoading ? '正在读取' : this.bugError ? '读取异常' : this.bugLoaded ? '已读取' : '未读取')
-      ),
+      el('div', 'row bug-actions', projectFilter, refresh),
       this.status?.ones.connected && !this.team
         ? notice('请在登录页选择 ONES 团队；多团队账号不默选。')
         : null,
-      this.bugLoading ? notice('正在刷新缺陷…') : null,
       this.bugError ? notice(this.bugError + ' 本次结果不完整。', true) : null,
-      select(
-        '项目筛选',
-        this.project,
-        [{ value: 'all', label: '全部已读取项目' }, ...projects.values()],
-        (v) => {
-          this.projectGeneration++
-          this.projectFollowing = false
-          this.projectFollowNote = '手动筛选；下次切换 Orca 项目后恢复自动匹配。'
-          this.project = v
-          this.projectName = projects.get(v)?.label ?? ''
-          this.resetBugPage()
-        },
-        false,
-        true
-      ),
-      this.projectFollowNote ? text(this.projectFollowNote, true) : null,
-      picker,
-      this.bugLoaded
-        ? text(
-            `当前显示 ${list.length} / 已读取 ${this.bugs.length} 项；${this.bugError ? '结果不完整' : this.next ? '仍有下一页' : '本次分页结束'}`,
-            true
-          )
-        : null
+      picker
     )
-    const projectLabel = filters.querySelector('label[for="项目筛选"]')
-    projectLabel?.prepend(icon('folder'))
-    projectLabel?.classList.add('filter-label')
-    const refresh = filters.querySelector('.refresh-bugs')
-    refresh?.prepend(icon('refresh'))
     const pageButton = (label: string, direction: number, disabled: boolean) => {
       const id = direction < 0 ? 'bug-page-previous' : 'bug-page-next'
       const control = button('', () => {
@@ -731,33 +678,31 @@ export class WorkbenchUI {
       control.append(arrowIcon('filter-arrow'))
       return control
     }
-    const position = el('div', 'pagination-position',
-      text(`第 ${this.bugPage} 页`, true),
-      el('span', 'pagination-hint', this.bugLoading ? '正在读取…'
-        : this.bugError ? '读取失败 · 保留当前页'
-        : !this.bugLoaded ? '尚未读取'
-        : filtered.length === 0 ? '无匹配结果'
-        : !hasNext ? '已到末页' : '还有下一页'))
+    const position = el('div', 'pagination-position', text(String(this.bugPage)))
+    position.setAttribute('aria-label', `第 ${this.bugPage} 页`)
     position.id = 'bug-page-position'
     position.tabIndex = -1
     position.setAttribute('role', 'status')
     position.setAttribute('aria-live', 'polite')
-    const pagination = el('div', 'pagination-controls', position,
+    const pagination = el('div', 'pagination-controls',
       el('div', 'pagination-arrows',
         pageButton('上一页', -1, this.busy || this.bugLoading || this.bugPage === 1),
+        position,
         pageButton('下一页', 1, this.busy || this.bugLoading || !hasNext || !this.bugLoaded)))
     pagination.setAttribute('aria-label', '缺陷分页')
     pagination.setAttribute('aria-busy', String(this.bugLoading))
     const footerRefresh = button('刷新', () => this.loadBugs(),
       this.busy || this.bugLoading || !this.status?.ones.connected || !this.team, 'footer-refresh')
-    footerRefresh.prepend(icon('refresh'))
+    footerRefresh.prepend(icon('sync'))
+    const total = el('p', 'muted pagination-total', '已筛选 ' + filtered.length + ' 条 · 每页 10 条')
+    total.title = total.textContent ?? ''
     return el('div', 'stack bug-workspace',
       filters,
       list.length
         ? items
         : text(
             this.bugLoading
-              ? '正在更新缺陷列表'
+              ? ''
               : this.bugError
                 ? '缺陷读取失败，不代表没有缺陷'
                 : !this.status?.ones.connected
@@ -767,7 +712,7 @@ export class WorkbenchUI {
           ),
       el('footer', 'row bug-footer',
         footerRefresh,
-        el('p', 'muted pagination-total', '已筛选 ' + filtered.length + ' 条 · 每页 10 条'),
+        total,
         pagination
       ),
       this.bugError && this.next !== null
@@ -870,8 +815,6 @@ export class WorkbenchUI {
     window.removeEventListener('workbench-auth-invalid', this.onAuthInvalid)
     this.implementation?.dispose()
     this.disposed = true
-    this.projectGeneration++
-    this.workspaceSubscription?.dispose()
     this.epoch++
     this.controller?.abort()
     this.cancelBugs()

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
   const click = async (label) =>
     evaluate(
-      `(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Button unavailable: '+${JSON.stringify(label)});b.click()})()`
+      `(()=>{const b=[...document.querySelectorAll('button')].find(b=>(b.textContent===${JSON.stringify(label)}||b.getAttribute('aria-label')===${JSON.stringify(label)}));if(!b||b.disabled)throw Error('Button unavailable: '+${JSON.stringify(label)});b.click()})()`
     )
   const fill = async (label, value) =>
     evaluate(
@@ -22,11 +22,11 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
     evaluate(`document.body.innerText.includes(${JSON.stringify(text)})`)
   const enabled = async (label) =>
     evaluate(
-      `(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent===${JSON.stringify(label)});return !!b&&!b.disabled})()`
+      `(()=>{const b=[...document.querySelectorAll('button')].find(b=>(b.textContent===${JSON.stringify(label)}||b.getAttribute('aria-label')===${JSON.stringify(label)}));return !!b&&!b.disabled})()`
     )
   const waitText = async (text) => wait(`document.body.innerText.includes(${JSON.stringify(text)})`)
   const report = {}
-  await waitText('当前显示 1 / 已读取 2 项')
+  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
   assert.equal(await contains('ONES 团队'), false)
   await evaluate(`document.querySelector('[aria-label="展开状态选项"]').click()`)
   await waitText('状态：已解决')
@@ -87,7 +87,7 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
     externalHTMLNotExecuted: true
   }
   await click('返回我的 Bug')
-  await waitText('当前显示 1 / 已读取 2 项')
+  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
   assert.equal(await evaluate(`document.querySelectorAll('video,img').length`), 0)
   assert.ok(
     (
@@ -126,7 +126,7 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
   await click('保存草稿')
   await waitText('已保存本机草稿')
   await click('我的 Bug')
-  await waitText('当前显示 1 / 已读取 2 项')
+  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
   await click('考勤工时')
   assert.equal(await contains('虚构：修复与验证'), true)
   await fill('业务日期（YYYY-MM-DD）', '2026-11-08')
@@ -197,7 +197,7 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
 
 // Focused regression for the row-only detail entry; no attendance or auth operations.
 export async function exerciseBugRows({ evaluate, wait, screenshot }) {
-  await wait(`document.body.innerText.includes('当前显示 1 / 已读取 2 项')`)
+  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
   assert.equal(
     await evaluate(
       `document.body.innerText.includes('打开原单') || document.body.innerText.includes('实施说明')`
@@ -206,9 +206,9 @@ export async function exerciseBugRows({ evaluate, wait, screenshot }) {
   )
   assert.deepEqual(
     await evaluate(
-      `(()=>{const b=document.querySelector('button.bug-item');return {type:b.type,disabled:b.disabled,nested:b.querySelectorAll('button,a').length,arrow:b.querySelector('svg').getAttribute('aria-hidden'),named:b.getAttribute('aria-label').includes('#88')}})()`
+      `(()=>{const b=document.querySelector('button.bug-item');return {type:b.type,disabled:b.disabled,nested:b.querySelectorAll('button,a').length,arrow:b.querySelectorAll('svg').length,named:b.getAttribute('aria-label').includes('#88')}})()`
     ),
-    { type: 'button', disabled: false, nested: 0, arrow: 'true', named: true }
+    { type: 'button', disabled: false, nested: 0, arrow: 0, named: true }
   )
   await screenshot('ones-bug-row-light', 'light')
   await screenshot('ones-bug-row-dark', 'dark')
@@ -224,11 +224,11 @@ export async function exerciseBugRows({ evaluate, wait, screenshot }) {
     await evaluate(
       `[...document.querySelectorAll('button')].find(b=>b.textContent==='返回我的 Bug').click()`
     )
-    await wait(`document.body.innerText.includes('当前显示 1 / 已读取 2 项')`)
+    await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
   }
   await back()
   await evaluate(
-    `document.querySelector('.bug-item-arrow').dispatchEvent(new MouseEvent('click',{bubbles:true}))`
+    `document.querySelector('.bug-table-creator').dispatchEvent(new MouseEvent('click',{bubbles:true}))`
   )
   await wait(`document.body.innerText.includes('正文末尾：此页面仅使用虚构数据。')`)
   await back()

@@ -8,6 +8,8 @@ const paths: Record<string, string> = {
   shield: 'm12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6l9-4Zm-5 9 4 4 6-7',
   filter: 'M3 3h18v3l-7 8v7l-4-2v-5L3 6V3',
   folder: 'M3 5h6l2 3h10v13H3V5',
+  chevrons: 'm8 8 4-4 4 4m-8 8 4 4 4-4',
+  sync: 'M16 4.2a8.5 8.5 0 0 1-2 16.1M8 19.8A8.5 8.5 0 0 1 10 3.7',
   refresh: 'M20 7a9 9 0 1 0 1 9M20 2v6h-6'
 }
 export function icon(name: string): SVGSVGElement {
@@ -24,5 +26,12 @@ export function icon(name: string): SVGSVGElement {
   path.setAttribute('stroke-linecap', 'round')
   path.setAttribute('stroke-linejoin', 'round')
   svg.append(path)
+  if (name === 'sync') {
+    path.setAttribute('stroke-width', '2.2')
+    const arrows = document.createElementNS(svg.namespaceURI, 'path')
+    arrows.setAttribute('d', 'M13 1h7l-7 7V1ZM11 23H4l7-7v7Z')
+    arrows.setAttribute('fill', 'currentColor')
+    svg.append(arrows)
+  }
   return svg
 }

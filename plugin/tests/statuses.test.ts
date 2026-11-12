@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { parseTask } from '../src/adapters/ones.ts'
 import { Workbench, type Store, type Vault } from '../src/service.ts'
 import type { Fetcher } from '../src/adapters/http.ts'
 
@@ -21,6 +22,7 @@ function fixture() {
     if (path.endsWith('/items/graphql')) {
       const {query,variables} = JSON.parse(String(init.body))
       assert.ok(!query.includes('mutation'))
+      assert.ok(query.includes('owner{uuid name}'))
       filters.push(variables.filter)
       const type = wrongType || !variables.filter.issueType_in ? 'normal-type' : 'bug-type'
       return Response.json({data:{buckets:[{tasks:[{uuid:'item-fixture',number:1,name:'虚构工作项',project:{uuid:'project-fixture',name:'项目'},issueType:{uuid:type,name:type === 'bug-type' ? '缺陷' : '任务'},status:{uuid:'status-2',name:'虚构状态-2'}}],pageInfo:{hasNextPage:false,endCursor:'',unstable:false}}]}})
@@ -86,4 +88,13 @@ test('TC-PLUGIN-002-bugs: server filter is mandatory and allocation tasks remain
   assert.deepEqual(env.filters[2],{assign_in:['owner-fixture']})
   env.wrongType=true
   await assert.rejects(()=>env.service.bugs('team-fixture'))
+})
+
+// 创建者独立于负责人；缺失关系不捏造用户，非法关系沿用严格 schema 检查。
+test('task creator is read from owner, not assignee', () => {
+  const task = { uuid: 'bug', number: 1, name: '示例缺陷', project: { uuid: 'project', name: '项目' }, issueType: { uuid: 'bug-type', name: '缺陷' }, status: { uuid: 'pending', name: '待处理' }, assign: { uuid: 'assignee', name: '负责人' } }
+  assert.deepEqual(parseTask({ ...task, owner: { uuid: 'creator', name: '创建者' } }).creator, { id: 'creator', name: '创建者' })
+  assert.equal(parseTask(task).creator, null)
+  assert.equal(parseTask({ ...task, owner: null }).creator, null)
+  assert.throws(() => parseTask({ ...task, owner: { uuid: 'creator' } }))
 })

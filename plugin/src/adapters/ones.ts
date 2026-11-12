@@ -10,14 +10,14 @@ function option(value: unknown) {
 export function parseTask(value: unknown): Task {
   const task = record(value)
   requireThat(Number.isSafeInteger(task.number), 'schema', '任务编号无效。')
-  return { id: id(task.uuid), number: task.number as number, name: text(task.name, 2000), project: option(task.project), issueType: option(task.issueType), status: option(task.status) }
+  return { id: id(task.uuid), number: task.number as number, name: text(task.name, 2000), project: option(task.project), issueType: option(task.issueType), status: option(task.status), creator: task.owner == null ? null : option(task.owner) }
 }
 export function parseWorklog(value: unknown): Worklog {
   const row = record(value)
   requireThat(Number.isSafeInteger(row.hours) && Number.isSafeInteger(row.startTime) && typeof row.description === 'string', 'schema', '工时字段格式不匹配。')
   return { key: text(row.key, 150), owner: id(record(row.owner).uuid), task: id(record(row.task).uuid), type: text(row.type), hours: row.hours as number, startTime: row.startTime as number, description: row.description }
 }
-const TASK_FIELDS = 'uuid number name project{uuid name} issueType{uuid name} status{uuid name}'
+const TASK_FIELDS = 'uuid number name project{uuid name} issueType{uuid name} status{uuid name} owner{uuid name}'
 const WORKLOG_FIELDS = 'key hours startTime type description owner{uuid} task{uuid}'
 export class OnesClient {
   constructor(private transport: Transport, readonly session: OnesSession, readonly team: string) {

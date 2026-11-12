@@ -67,10 +67,10 @@ export async function exerciseBugPagination({ page, screenshot }) {
   const stats = () => call('fixture.paginationStats')
   const button = name => page.getByRole('button', { name, exact: true })
   const rows = page.locator('button.bug-item')
-  const settled = () => page.waitForFunction(() => !document.body.innerText.includes('正在刷新缺陷'))
+  const settled = () => page.waitForFunction(() => document.querySelector('.pagination-controls')?.getAttribute('aria-busy') === 'false')
   const at = async (number, count) => {
     await settled()
-    await page.getByText(`第 ${number} 页`, { exact: true }).waitFor()
+    await page.getByRole('status', { name: `第 ${number} 页`, exact: true }).waitFor()
     assert.equal(await rows.count(), count)
   }
   const config = async pages => {
@@ -79,7 +79,7 @@ export async function exerciseBugPagination({ page, screenshot }) {
     await settled()
   }
   const pending = key => page.waitForFunction(async key => (await orca.host.call('plugin.request', { name: 'fixture.paginationStats' })).output.value[key] === 1, key)
-  const focus = () => page.evaluate(() => globalThis.fixtureWorkspaceChanged({ context: { displayName: String(Math.random()), branch: '', terminals: [] } }))
+  const focus = () => page.evaluate(() => globalThis.fixtureWorkspaceChanged?.({ context: { displayName: String(Math.random()), branch: '', terminals: [] } }))
   const chooseProject = value => page.getByLabel('项目筛选', { exact: true }).selectOption(value)
   const openStatuses = async () => {
     const toggle = page.getByLabel('展开状态选项', { exact: true })
@@ -94,7 +94,7 @@ export async function exerciseBugPagination({ page, screenshot }) {
   assert.equal(await page.getByText('加载更多缺陷（列表尚未完整）', { exact: true }).count(), 0)
   assert.equal((await page.locator('body').innerText()).includes('Bug 创建、修改、状态流转尚未开放'), false)
   await button('下一页').click(); await at(2, 10)
-  assert.match(await rows.first().innerText(), /#11 /)
+  assert.match(await rows.first().locator('xpath=ancestor::tr').innerText(), /#11\s/)
   assert.deepEqual((await stats()).reads, [0, 1, 2])
   await button('上一页').click(); await at(1, 10)
   await button('下一页').click(); await at(2, 10)
@@ -160,26 +160,17 @@ export async function exerciseBugPagination({ page, screenshot }) {
   await button('下一页').click(); await at(2, 10)
   assert.deepEqual((await stats()).reads, [0, 1, 1])
 
-  // 项目跟随改变筛选要回第一页；迟到的项目匹配不得覆盖手选。
+  // 默认全部项目；宿主项目变化不再自动覆盖用户筛选。
   await config([{ items: [...tasks(20), ...tasks(12, 101, 'other')] }])
   await button('下一页').click(); await at(2, 10)
-  await call('fixture.paginationFollow', { project: { id: 'other', name: '另一项目' } }); await focus(); await at(1, 10)
-  assert.equal(await page.getByLabel('项目筛选', { exact: true }).inputValue(), 'other')
-  await button('下一页').click(); await at(2, 2)
-  assert.ok((await rows.allTextContents()).every(text => text.includes('另一项目')))
-  await call('fixture.paginationFollow', { project: { id: 'project', name: '分页验证项目' }, hold: true }); await focus(); await pending('followHeld')
-  await chooseProject('all'); await at(1, 10)
-  await call('fixture.paginationFollowRelease'); await at(1, 10)
+  await call('fixture.paginationFollow', { project: { id: 'other', name: '另一项目' } }); await focus(); await at(2, 10)
   assert.equal(await page.getByLabel('项目筛选', { exact: true }).inputValue(), 'all')
-
-  // 状态改变不能丢失进行中的项目跟随；匹配到新项目后补足新筛选页。
-  await call('fixture.paginationFollow', { project: { id: 'project', name: '分页验证项目' }, hold: true })
-  await focus(); await pending('followHeld')
-  await openStatuses(); await button('清空状态').click(); await at(1, 0)
-  await call('fixture.paginationFollowRelease'); await at(1, 0)
-  assert.equal(await page.getByLabel('项目筛选', { exact: true }).inputValue(), 'project')
-  await defaultStatuses(); await at(1, 10)
-  assert.ok((await rows.allTextContents()).every(text => text.includes('分页验证项目')))
+  await chooseProject('other'); await at(1, 10)
+  assert.equal(await page.locator('.project-filter-display').innerText(), '另一项目')
+  await button('下一页').click(); await at(2, 2)
+  assert.ok((await page.locator('.bug-table tbody tr').allTextContents()).every(text => text.includes('另一项目')))
+  await call('fixture.paginationFollow', { project: { id: 'project', name: '分页验证项目' } }); await focus(); await at(2, 2)
+  assert.equal(await page.getByLabel('项目筛选', { exact: true }).inputValue(), 'other')
   await chooseProject('all'); await at(1, 10)
 
   // 导航、账号更换都拒绝迟到的旧分页数据。
@@ -200,7 +191,7 @@ export async function exerciseBugPagination({ page, screenshot }) {
   await call('fixture.paginationRelease')
   await call('fixture.pagination', { pages: [{ items: tasks(2, 201) }] })
   await page.getByRole('tab', { name: '我的 Bug', exact: true }).click(); await at(1, 2)
-  assert.match(await rows.first().innerText(), /#201 /)
+  assert.match(await rows.first().locator('xpath=ancestor::tr').innerText(), /#201\s/)
   assert.equal(await button('下一页').isDisabled(), true)
   await config([{ items: [], fail: true }, { items: tasks(1) }])
   await at(1, 0)
@@ -216,5 +207,5 @@ export async function exerciseBugPagination({ page, screenshot }) {
   }
   const calls = await call('fixture.calls')
   assert.equal(calls.calls.some(name => ['hours.submit', 'bugs.businessSubmit', 'repair.start'].includes(name)), false)
-  return { environment: 'Headless Chrome + production HTML + fictional Worker; no live ONES access', checks: ['10-item first/middle/partial-last pages', 'cached back/forward and detail return', 'filter before slicing with sparse and empty remote pages', 'all status controls and project change reset page', 'no fabricated next page', 'partial load failure retains page and retries cursor', 'duplicate ID and cursor stop', 'stale filter, navigation, account and project-follow responses rejected', 'empty state and first-page retry', '360 light / 460 dark without horizontal overflow', 'no business writes'] }
+  return { environment: 'Headless Chrome + production HTML + fictional Worker; no live ONES access', checks: ['10-item first/middle/partial-last pages', 'cached back/forward and detail return', 'filter before slicing with sparse and empty remote pages', 'all status controls and project change reset page', 'no fabricated next page', 'partial load failure retains page and retries cursor', 'duplicate ID and cursor stop', 'stale filter, navigation and account responses rejected; manual project selection survives workspace changes', 'empty state and first-page retry', '360 light / 460 dark without horizontal overflow', 'no business writes'] }
 }
