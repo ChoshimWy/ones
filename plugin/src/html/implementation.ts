@@ -1,7 +1,7 @@
-import { repairProgress, repairValidationSummary } from '../domain/repair-report.ts'
+import { repairProgress } from '../domain/repair-report.ts'
 import type { CachedRepairs } from '../repair-cache.ts'
 import type { Task } from '../domain/model.ts'
-import { button, card, el, message, notice, request, row, text, UIError } from './dom.ts'
+import { button, el, message, notice, request, row, text, UIError } from './dom.ts'
 
 // 仅用于文字着色；业务状态名称仍使用 ONES 原值，未知状态不猜测。
 const statusTones: Record<string, string> = {
@@ -15,7 +15,7 @@ const statusTones: Record<string, string> = {
 }
 function bugStatus(task: Task): HTMLElement {
   const name = task.status.name.trim() || '未知状态'
-  return el('p', `implementation-status status-${statusTones[name] ?? 'unknown'}`, `Bug 状态：${name}`)
+  return el('span', `implementation-status status-${statusTones[name] ?? 'unknown'}`, name)
 }
 
 /// 缓存首屏与远端同步分离；切页销毁后所有迟到响应失效。
@@ -74,20 +74,48 @@ export class ImplementationView {
     this.element.replaceChildren(
       row(el('h2', '', '执行记录'), button('刷新执行记录', () => this.load(true), this.busy)),
       this.failed ? notice(this.status, true) : text(`${this.busy ? '正在同步' : '本地记录'}${data?.syncedAt ? ` · 上次更新 ${new Date(data.syncedAt).toLocaleTimeString()}` : ' · 首次同步中'}`, true),
-      ...(items.length ? items.map(({ task, record, report, reportError }) => card(
-        `#${task.number} ${task.name}`,
-        bugStatus(task),
-        text(report ? repairProgress(report) : record.state === 'sent' ? '已发起 · 等待修复回执' : '启动结果待核实，不会重复发送'),
-        text(repairValidationSummary(report), true),
-        ...(reportError ? [notice('修复回执更新未接收，请在详情查看。', true)] : []),
-        row(button('查看详情', () => this.openDetail(task)), button('更新状态', () => this.openDetail(task,true)))
-      )) : data ? [notice(data.syncedAt ? '暂无匹配的执行记录。' : '暂无本地缓存，首次同步可能需要等待。')] : []),
+      ...(items.length ? [this.renderItems(items)] : data ? [notice(data.syncedAt ? '暂无匹配的执行记录。' : '暂无本地缓存，首次同步可能需要等待。')] : []),
       row(
         button('上一页', () => this.changePage(this.page - 1), !data || this.page === 1),
         text(`第 ${this.page} 页`, true),
         button('下一页', () => this.changePage(this.page + 1), !data || this.page >= pageCount)
       )
     )
+  }
+  /// 与 Bug 列表共用紧凑表格样式；详细验证信息保留在详情页。
+  private renderItems(items: CachedRepairs['items']): HTMLElement {
+    const headings = ['编号', '标题', 'Bug 状态', '修复进度', '操作'].map(label => {
+      const heading = el('th', '', label)
+      heading.scope = 'col'
+      return heading
+    })
+    const rows = items.map(({ task, record, report, reportError }) => {
+      const detail = button('', () => this.openDetail(task), false, 'bug-item')
+      detail.title = task.name
+      detail.setAttribute('aria-label', `查看 Bug #${task.number} ${task.name} 的详情`)
+      detail.append(el('span', 'bug-item-title', task.name))
+      const progress = report ? repairProgress(report) : record.state === 'sent' ? '等待修复回执' : '启动结果待核实'
+      const update = button('更新状态', () => this.openDetail(task, true))
+      const recordRow = el('tr', 'bug-table-row',
+        el('td', 'bug-table-number', `#${task.number}`),
+        el('td', 'bug-table-title', detail),
+        el('td', '', bugStatus(task)),
+        el('td', 'implementation-progress', progress,
+          reportError ? el('span', 'implementation-receipt-error', '回执异常，请查看详情') : null),
+        el('td', '', update))
+      recordRow.addEventListener('click', event => {
+        if (!detail.contains(event.target as Node) && !update.contains(event.target as Node)) detail.click()
+      })
+      return recordRow
+    })
+    const region = el('div', 'bug-items', el('table', 'bug-table implementation-table',
+      el('caption', 'sr-only', '实施列表'),
+      el('thead', '', el('tr', '', ...headings)),
+      el('tbody', '', ...rows)))
+    region.tabIndex = 0
+    region.setAttribute('role', 'region')
+    region.setAttribute('aria-label', '实施表格，可横向滚动查看全部列')
+    return region
   }
   /// 先显示缓存，再按过期时间同步；刷新失败不抹去缓存且明确标识。
   private async load(force = false) {

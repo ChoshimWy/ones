@@ -9,7 +9,7 @@ export function installImplementationPaginationFixture(handlers) {
   const snapshot = () => ({
     version: 1, syncedAt: Date.now(), reconciledAt: Date.now(),
     items: Array.from({ length: state.count }, (_, index) => ({
-      task: { id: `implementation-${index + 1}`, number: index + 1, name: `虚构实施分页记录 ${index + 1}`, project: { id: 'project', name: '实施验证项目' }, issueType: { id: 'bug', name: '缺陷' }, status: { id: 'pending', name: '待处理' } },
+      task: { id: `implementation-${index + 1}`, number: index + 1, name: `虚构实施分页记录 ${index + 1}：用于检查很长的缺陷标题始终只显示一行且不会挤压状态和操作列，超长内容通过悬停或进入详情查看完整信息`, project: { id: 'project', name: '实施验证项目' }, issueType: { id: 'bug', name: '缺陷' }, status: { id: 'pending', name: '待处理' } },
       record: { state: 'sent', projectId: 'local-fixture', projectName: '本地虚构项目', createdAt: 1794186000000 }
     }))
   })
@@ -34,10 +34,10 @@ export async function exerciseImplementationPagination({ page, screenshot }) {
   const config = input => call('fixture.implementationPagination', input)
   const stats = () => call('fixture.implementationPaginationStats')
   const button = name => page.getByRole('button', { name, exact: true })
-  const rows = page.locator('section.card').filter({ has: page.getByRole('button', { name: '查看详情', exact: true }) })
+  const rows = page.locator('.implementation-table tbody tr')
   const at = async (number, count) => {
     await page.getByText(`第 ${number} 页`, { exact: true }).waitFor()
-    await page.waitForFunction(count => document.querySelectorAll('section.card').length === count, count)
+    await page.waitForFunction(count => document.querySelectorAll('.implementation-table tbody tr').length === count, count)
     assert.equal(await rows.count(), count)
   }
   const idle = () => page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '刷新执行记录' && !button.disabled))
@@ -48,12 +48,26 @@ export async function exerciseImplementationPagination({ page, screenshot }) {
     await page.waitForFunction(async previous => (await orca.host.call('plugin.request', { name: 'fixture.implementationPaginationStats' })).output.value.cache > previous, previous)
     await idle()
   }
+  // 使用长文本压力验证共享标题样式，不改变任何业务状态。
+  const checkTitle = async () => {
+    const title = page.locator('.bug-item-title').first()
+    const layout = await title.evaluate(node => {
+      const style = getComputedStyle(node)
+      return { nowrap: style.whiteSpace, overflow: style.overflow, ellipsis: style.textOverflow, clipped: node.scrollWidth > node.clientWidth }
+    })
+    assert.deepEqual(layout, { nowrap: 'nowrap', overflow: 'hidden', ellipsis: 'ellipsis', clipped: true })
+  }
+  await page.locator('.bug-item-title').first().evaluate(node => { node.textContent = '虚构长标题单行截断验证'.repeat(20) })
+  await checkTitle()
+  await screenshot('bug-single-line-light', 'light', 1100)
   await page.getByRole('tab', { name: '实施', exact: true }).click()
   await at(1, 10); await idle()
   assert.equal(await button('上一页').isDisabled(), true)
+  await checkTitle()
+  await screenshot('implementation-compact-light', 'light', 1100)
   const initialReads = await stats()
   await button('下一页').click(); await at(2, 10)
-  assert.match(await rows.first().innerText(), /#11 /)
+  assert.match(await rows.first().innerText(), /#11/)
   await button('下一页').click(); await at(3, 5)
   assert.equal(await button('下一页').isDisabled(), true)
   await button('上一页').click(); await at(2, 10)
@@ -62,9 +76,9 @@ export async function exerciseImplementationPagination({ page, screenshot }) {
   await screenshot('implementation-pagination-page2-460', 'dark', 460)
 
   for (const entry of ['查看详情', '更新状态']) {
-    await rows.first().getByRole('button', { name: entry, exact: true }).click()
+    await (entry === '查看详情' ? rows.first().locator('.bug-item') : rows.first().getByRole('button', { name: entry, exact: true })).click()
     await button('返回执行记录').click(); await at(2, 10); await idle()
-    assert.match(await rows.first().innerText(), /#11 /)
+    assert.match(await rows.first().innerText(), /#11/)
   }
   await refresh(); await at(2, 10)
   await poll(); await at(2, 10)

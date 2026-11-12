@@ -414,7 +414,7 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
 .workbench .bug-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 12px 14px; text-align: left; border: 0; border-radius: 0; background: transparent; color: var(--orca-foreground); }
 .workbench .bug-item:hover:not(:disabled) { background: transparent; color: var(--orca-primary); }
 .workbench .bug-item:focus-visible { outline: 2px solid var(--orca-ring, var(--orca-primary)); outline-offset: -3px; }
-.workbench .bug-item-title { font-size: 13px; font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+.workbench .bug-item-title { font-size: 13px; font-weight: 500; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .bug-table-status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; overflow-wrap: anywhere; }
 .bug-table-status .status-dot { width: 7px; height: 7px; }
 .bug-table-project, .bug-table-creator { color: var(--orca-muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
@@ -505,3 +505,8 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
 @media (prefers-reduced-motion: reduce) {
   .refresh-bugs.is-syncing .ui-icon { animation-duration: 3s; }
 }
+
+.implementation-table th:nth-child(4) { width: 180px; }
+.implementation-table .implementation-status { margin: 0; font-size: 12px; }
+.implementation-progress { color: var(--orca-muted-foreground); font-size: 12px; }
+.implementation-receipt-error { display: block; color: var(--orca-destructive); }

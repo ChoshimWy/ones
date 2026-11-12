@@ -70,7 +70,7 @@ try{
     await page.getByRole('tab',{name:'实施',exact:true}).click()
     const labels=page.locator('.implementation-status')
     await labels.last().waitFor()
-    assert.deepEqual(await labels.allTextContents(),statuses.map(name=>'Bug 状态：'+name))
+    assert.deepEqual(await labels.allTextContents(),statuses)
     // Agent 的代码修复回执不能覆盖 ONES 状态。
     assert.equal(await page.getByText('已在隔离 Worktree 修复',{exact:true}).count(),7)
     for(const [mode,width] of [['light',360],['dark',460]]){
@@ -83,11 +83,11 @@ try{
     await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true,statuses:['已修复']}}))
     await page.getByRole('button',{name:'刷新执行记录',exact:true}).click()
     await page.waitForFunction(()=>document.querySelectorAll('.implementation-status').length===1)
-    assert.equal(await labels.innerText(),'Bug 状态：已修复')
+    assert.equal(await labels.innerText(),'已修复')
     await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true,statuses:['已修复'],error:true}}))
     await page.getByRole('button',{name:'刷新执行记录',exact:true}).click()
     await page.getByText(/同步失败，当前显示上次缓存/).waitFor()
-    assert.equal(await labels.innerText(),'Bug 状态：已修复')
+    assert.equal(await labels.innerText(),'已修复')
     const calls=await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.calls',input:{}}).then(r=>r.output.value.calls))
     assert.equal(calls.some(name=>['repair.start','bugs.businessSubmit'].includes(name)),false)
     assert.deepEqual(errors,[])
@@ -121,7 +121,7 @@ try{
         await page.getByRole('button',{name:'刷新执行记录',exact:true}).click()
         const message=mode==='passed'?'验收状态：1/1项验证已通过':'验收状态：测试证据待核对'
         await page.getByText(message,{exact:true}).waitFor()
-        await page.getByRole('button',{name:'查看详情',exact:true}).first().click()
+        await page.locator('.implementation-table .bug-item').first().click()
         await page.locator('.detail-toolbar').getByRole('button',{name:'查看执行记录',exact:true}).click()
         const progress=page.getByRole('heading',{name:'修复进度',exact:true}).locator('..')
         await progress.getByText(message,{exact:true}).waitFor()
@@ -179,11 +179,11 @@ try{
     await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.implementation',input:{seeded:true}}))
     await page.evaluate(()=>orca.host.call('plugin.request',{name:'fixture.report-mode',input:{mode:'passed'}}))
     await page.getByRole('tab',{name:'实施',exact:true}).click()
-    await page.getByText('验收状态：3/3项验证已通过',{exact:true}).waitFor()
-    await page.getByText('验收状态：暂无单元测试结果',{exact:true}).waitFor()
+    await page.locator('.implementation-table').waitFor()
+    assert.equal(await page.getByText(/验收状态：/).count(),0)
     assert.equal(await page.getByText('实体硬件尚未验收',{exact:true}).count(),0)
     await screenshot('unit-list-460','dark',460)
-    await page.getByRole('button',{name:'查看详情',exact:true}).first().click()
+    await page.locator('.implementation-table .bug-item').first().click()
     await page.locator('.detail-toolbar').getByRole('button',{name:'查看执行记录',exact:true}).click()
     const progress=page.getByRole('heading',{name:'修复进度',exact:true}).locator('..')
     await progress.getByText('验收状态：3/3项验证已通过',{exact:true}).waitFor()
@@ -192,7 +192,7 @@ try{
     await progress.getByText('技术信息',{exact:true}).click()
     await progress.getByText('实体硬件尚未验收',{exact:true}).waitFor()
     assert.deepEqual(errors,[])
-    const evidence={checks:['implementation uses passed counts and unknown fallback','hardware pending not shown as blocker','repair detail uses same short count','hardware reason retained in collapsed technical details'],pageErrors:errors}
+    const evidence={checks:['implementation keeps validation details out of the compact list','hardware pending not shown as blocker','repair detail uses same short count','hardware reason retained in collapsed technical details'],pageErrors:errors}
     await writeFile(join(output,'unit-list-evidence.json'),JSON.stringify(evidence,null,2))
     console.log(JSON.stringify(evidence,null,2))
   }else if(process.env.ONES_JOURNEY==='footer'){
