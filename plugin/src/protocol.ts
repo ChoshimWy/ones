@@ -54,6 +54,7 @@ declare module 'orca' {
     'hours.scan': { input: { team: string; month: string; cursor?: string; force?: boolean }; output: Answer<{ days: import('./domain/missing-hours.ts').MissingDay[]; nextCursor: string | null; total: number; savedAt: number | null }> }
     'day.read': { input: DayInput; output: Answer<Day> }
     'hours.preview': { input: PreviewInput; output: Answer<Preview> }
+    'hours.acceptanceSubmit': { input: { previewId: string; confirmed: boolean }; output: Answer<{ count: number }> }
     'hours.submit': { input: { previewId: string; confirmed: boolean }; output: Answer<{ count: number }> }
     'hours.list': { input: { team: string; date: string }; output: Answer<Worklog[]> }
     'recovery.list': { input: { team: string }; output: Answer<PendingWrite[]> }

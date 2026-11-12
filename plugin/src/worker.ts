@@ -1,3 +1,4 @@
+import { HoursAcceptance } from './hours-acceptance.ts'
 import { HoursCache } from './hours-cache.ts'
 import { privateDataRoot } from './private-files.ts'
 import { join } from 'node:path'
@@ -16,8 +17,11 @@ export default function activate(orca: OrcaWorkerApi): void {
     store: { get: key => orca.storage.get(key), set: (key, value) => orca.storage.set(key, value as never), delete: key => orca.storage.delete(key) },
     vault: orca.secrets,
     protection: async () => (await orca.host.call('secrets.protection')).status === 'os-keyring',
-    // Not a setting or a panel parameter. Requires verified end-to-end evidence to change.
-    writesVerified: false
+    // 2026-11-12: macOS single live write/readback + targeted batch/UI evidence.
+    // Each write still requires a fresh confirmed preview and durable recovery ledger.
+    writesVerified: process.platform === 'darwin',
+    descriptionWritesVerified: false,
+    consumeHoursAcceptance: grant => new HoursAcceptance(join(privateDataRoot(), 'hours-acceptance')).consume(grant)
   })
   const answer = async <T>(action: () => Promise<T>): Promise<Answer<T>> => {
     try { return { ok: true, value: await action() } }
@@ -28,7 +32,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     set: (key, value) => orca.storage.set(key, value as never),
     delete: key => orca.storage.delete(key)
   })
-  // 2026-11-10 正式 Worker 两步状态流转及独立回读已验证；仅开放 Adapter 支持的步骤，工时闸保持关闭。
+  // 2026-11-10 正式 Worker 两步状态流转及独立回读已验证；仅开放 Adapter 支持的步骤；与工时新增/描述权限独立。
   const transitions = new StatusWorkflow(detailId => service.transitionContext(detailId), undefined, true, async detailId => (await repair.result(detailId))?.report)
   const repairActions = new RepairActions(repair,transitions)
   orca.panels.handle('bugs.businessOptions', input => answer(() => transitions.businessOptions(input.detailId,'已修复')))
@@ -71,6 +75,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('hours.scan', (input, context) => answer(() => service.scanHours(input, context.signal)))
   orca.panels.handle('day.read', (input, context) => answer(() => service.readDay(input, context.signal)))
   orca.panels.handle('hours.preview', (input, context) => answer(() => service.makePreview(input, context.signal)))
+  orca.panels.handle('hours.acceptanceSubmit', input => answer(() => service.submitAcceptance(input.previewId, input.confirmed)))
   orca.panels.handle('hours.submit', input => answer(() => service.submit(input.previewId, input.confirmed)))
   orca.panels.handle('hours.list', (input, context) => answer(() => service.worklogs(input.team, input.date, context.signal)))
   orca.panels.handle('recovery.list', input => answer(() => service.pending(input.team)))

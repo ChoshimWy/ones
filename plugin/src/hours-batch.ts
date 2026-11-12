@@ -12,7 +12,7 @@ export type HoursBatchRow = Allocation & { date: string }
 export type HoursBatchPreview = { id: string; expiresAt: number; rows: (HoursBatchRow & { taskName: string; budget: number; existing: number })[]; total: number }
 /// 部分结果明确区分已回读、未知与未发送，禁止整批盲目重试。
 export type HoursBatchResult = { rows: { date: string; state: 'verified' | 'unknown' | 'not_attempted'; message: string }[] }
-/// 仅由 Workbench 构造：生产 writesVerified 固定 false，不能从请求参数修改。
+/// 仅由 Workbench 构造：writesVerified 由 Worker 的已验证平台能力决定，不能从请求参数修改。
 export type HoursBatchContext = {
   readonly writesVerified: boolean
   identity(): string
@@ -66,7 +66,7 @@ export class HoursBatch {
     return view
   }
 
-  /// 生产门禁未开放时立即拒绝；仅合成测试注入 true 可验证后续状态机。
+  /// 未开放的平台立即拒绝；已开放平台仍需单次确认及逐日权威复查。
   async submit(previewId: string, confirmed: boolean, team: string): Promise<HoursBatchResult> {
     requireThat(this.context.writesVerified === true, 'not_verified', '插件工时写入尚未完成端到端验证，当前禁止批量提交。')
     this.context.acquire()

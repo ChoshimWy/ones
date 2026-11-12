@@ -19,7 +19,7 @@ function fixture(writesVerified = true) {
   const removed: string[] = []
   const logs: Worklog[] = []
   const calls: string[] = []
-  const state = { failAt: 0, loseReplyAfterCommitAt: 0, existingKey: '', writes: 0, ordinary: true, end: '21:02', requested: '2026-02-01', duplicatePage: false, taskPage: 0 }
+  const state = { beforeTask: undefined as (() => Promise<void>) | undefined, failAt: 0, loseReplyAfterCommitAt: 0, existingKey: '', writes: 0, ordinary: true, end: '21:02', requested: '2026-02-01', duplicatePage: false, taskPage: 0 }
   const task = () => ({ uuid: 'task', number: 1, name: '虚构普通任务', project: { uuid: 'project', name: '项目' }, issueType: { uuid: state.ordinary ? 'ordinary' : 'bug', name: state.ordinary ? '任务' : '缺陷' }, status: { uuid: 'status', name: '处理中' } })
   const deps: Dependencies = { store, vault: store as Dependencies['vault'], writesVerified, protection: async () => true, hoursCache: {
     read: async (scope, month) => structuredClone(cache.get(scope + month) ?? null),
@@ -49,7 +49,10 @@ function fixture(writesVerified = true) {
       state.taskPage++
       return json({ data: { buckets: [{ tasks: [task()], pageInfo: { hasNextPage: state.duplicatePage && state.taskPage === 1, endCursor: 'next', unstable: false } }] } })
     }
-    if (query.includes('PluginTask')) return json({ data: { tasks: [task()] } })
+    if (query.includes('PluginTask')) {
+      await state.beforeTask?.()
+      return json({ data: { tasks: [task()] } })
+    }
     if (query.includes('PluginAdd')) {
       state.writes++
       if (state.writes === state.failAt) throw Error('simulated uncertain response')
@@ -285,4 +288,210 @@ test('hours batch acceptance: committed write with lost reply is never resent af
   await assert.rejects(restarted.submitHoursBatch(retry.id, true, 'team'), { code: 'unknown' })
   assert.equal(f.state.writes, 1)
   assert.equal(f.logs.length, 1)
+})
+
+// Single-day and batch submissions share the same public Workbench and fake API.
+function pauseTaskRead(f: ReturnType<typeof fixture>) {
+  let entered!: () => void
+  let release!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const waiting = new Promise<void>(resolve => { release = resolve })
+  let paused = false
+  f.state.beforeTask = async () => {
+    if (!paused) {
+      paused = true
+      entered()
+      await waiting
+    }
+  }
+  return { started, release: () => release() }
+}
+
+test('single-day confirmation: failed replacement revokes the previous token', async () => {
+  const f = fixture()
+  const day = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+  const preview = await f.service.makePreview({ dayId: day.id, allocations: [rows[0]!] })
+  await assert.rejects(f.service.makePreview({ dayId: day.id, allocations: [{ ...rows[0]!, description: '' }] }))
+  await assert.rejects(f.service.submit(preview.id, true), { code: 'stale' })
+  assert.equal(f.state.writes, 0)
+})
+
+test('single-day confirmation: caller mutations cannot change the previewed write', async () => {
+  const f = fixture()
+  const day = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+  const input = { dayId: day.id, allocations: [{ ...rows[0]!, minutes: 30 }] }
+  const pending = f.service.makePreview(input)
+  input.allocations[0]!.description = 'changed while awaiting authentication'
+  const preview = await pending
+  assert.equal(preview.rows[0]!.description, rows[0]!.description)
+  assert.deepEqual(await f.service.submit(preview.id, true), { count: 1 })
+  assert.equal(f.logs[0]!.description, rows[0]!.description)
+  const refreshed = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+  // Returned display data must not mutate the server-held confirmation.
+  const value = await f.service.makePreview({ dayId: refreshed.id, allocations: [{ ...rows[0]!, minutes: 30 }] })
+  const token = value.id
+  value.rows[0]!.description = 'changed returned view'
+  value.id = 'forged'
+  value.expiresAt = 0
+  assert.deepEqual(await f.service.submit(token, true), { count: 1 })
+  assert.equal(f.logs[0]!.description, rows[0]!.description)
+  assert.equal(f.logs[1]!.description, rows[0]!.description)
+  assert.equal(f.logs[1]!.hours, 50000)
+  await assert.rejects(f.service.submit(token, true), { code: 'stale' })
+  assert.equal(f.state.writes, 2)
+})
+
+test('single-day confirmation: late preview cannot replace a newer intent', async () => {
+  const f = fixture()
+  const day = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+  const pause = pauseTaskRead(f)
+  const first = f.service.makePreview({ dayId: day.id, allocations: [{ ...rows[0]!, minutes: 30 }] })
+  const rejected = assert.rejects(first, { code: 'stale' })
+  await pause.started
+  const second = await f.service.makePreview({ dayId: day.id, allocations: [{ ...rows[0]!, minutes: 60 }] })
+  pause.release()
+  await rejected
+  assert.deepEqual(await f.service.submit(second.id, true), { count: 1 })
+  assert.equal(f.logs[0]!.hours, 100000)
+})
+
+test('single-day confirmation: cancellation after task read never publishes authority', async () => {
+  const f = fixture()
+  const day = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+  const pause = pauseTaskRead(f)
+  const controller = new AbortController()
+  const pending = f.service.makePreview({ dayId: day.id, allocations: [rows[0]!] }, controller.signal)
+  const rejected = assert.rejects(pending)
+  await pause.started
+  controller.abort()
+  pause.release()
+  await rejected
+  assert.equal(f.state.writes, 0)
+})
+
+test('acceptance: private one-shot permit enables only its immutable single-day preview', async () => {
+  const { HoursAcceptance } = await import('../src/hours-acceptance.ts')
+  const { mkdtemp, writeFile, rm, chmod } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const directory = await mkdtemp(join(tmpdir(), 'ones-acceptance-'))
+  await chmod(directory, 0o700)
+  try {
+    const f = fixture(false)
+    const acceptance = new HoursAcceptance(directory)
+    f.deps.consumeHoursAcceptance = grant => acceptance.consume(grant)
+    const preview = async () => {
+      const day = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+      return f.service.makePreview({ dayId: day.id, allocations: [{ ...rows[0]!, minutes: 30 }] })
+    }
+    const first = await preview()
+    await assert.rejects(f.service.submit(first.id, true), { code: 'not_verified' })
+    const batch = await f.service.previewHoursBatch('team', rows)
+    await assert.rejects(f.service.submitHoursBatch(batch.id, true, 'team'), { code: 'not_verified' })
+    await assert.rejects(f.service.submitAcceptance(first.id, true)) // missing permit
+    assert.equal(f.state.writes, 0)
+    const value = await preview()
+    const grant = { previewId: value.id, identity: (await f.service.status()).identity!, expiresAt: value.expiresAt }
+    await writeFile(join(directory, 'permit.json'), JSON.stringify(grant), { mode: 0o600 })
+    assert.deepEqual(await f.service.submitAcceptance(value.id, true), { count: 1 })
+    assert.equal(f.logs[0]!.description, rows[0]!.description)
+    assert.equal(f.logs[0]!.hours, 50000)
+    assert.equal((await f.service.status()).writeEnabled, false)
+    await assert.rejects(acceptance.consume(grant)) // persisted claim, even in another instance
+    await assert.rejects(new HoursAcceptance(directory).consume(grant))
+    const next = await preview()
+    await assert.rejects(f.service.submitAcceptance(next.id, true)) // old permit cannot authorize new preview
+    assert.equal(f.state.writes, 1)
+  } finally { await rm(directory, { recursive: true }) }
+})
+
+test('acceptance: scope, expiry, permissions, symlink and concurrent claim fail closed', async () => {
+  const { HoursAcceptance } = await import('../src/hours-acceptance.ts')
+  const { mkdtemp, writeFile, rm, chmod, symlink } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const directory = await mkdtemp(join(tmpdir(), 'ones-acceptance-'))
+  await chmod(directory, 0o700)
+  const path = join(directory, 'permit.json')
+  const grant = { previewId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', identity: 'a'.repeat(64), expiresAt: Date.now() + 60000 }
+  const acceptance = new HoursAcceptance(directory)
+  try {
+    for (const change of [{ previewId: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' }, { identity: 'b'.repeat(64) }, { expiresAt: 0 }, { extra: true }]) {
+      await writeFile(path, JSON.stringify({ ...grant, ...change }), { mode: 0o600 })
+      await assert.rejects(acceptance.consume(grant))
+    }
+    await writeFile(path, JSON.stringify(grant))
+    await chmod(path, 0o644)
+    await assert.rejects(acceptance.consume(grant))
+    await rm(path)
+    await writeFile(join(directory, 'target'), JSON.stringify(grant), { mode: 0o600 })
+    await symlink(join(directory, 'target'), path)
+    await assert.rejects(acceptance.consume(grant))
+    await rm(path)
+    await writeFile(path, JSON.stringify(grant), { mode: 0o600 })
+    const results = await Promise.allSettled([acceptance.consume(grant), new HoursAcceptance(directory).consume(grant)])
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
+  } finally { await rm(directory, { recursive: true }) }
+})
+
+test('acceptance: multiple rows, stale data and unknown writes never widen authority', async () => {
+  const f = fixture(false)
+  let claims = 0
+  f.deps.consumeHoursAcceptance = async () => { claims++ }
+  let day = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+  const multi = await f.service.makePreview({ dayId: day.id, allocations: [{ ...rows[0]!, minutes: 30 }, { ...rows[0]!, minutes: 30 }] })
+  await assert.rejects(f.service.submitAcceptance(multi.id, true), { code: 'acceptance' })
+  assert.equal(claims, 0)
+  const stale = await f.service.makePreview({ dayId: day.id, allocations: [rows[0]!] })
+  f.state.end = '20:00'
+  await assert.rejects(f.service.submitAcceptance(stale.id, true), { code: 'stale' })
+  assert.equal(claims, 0)
+  f.state.end = '21:02'
+  day = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+  const value = await f.service.makePreview({ dayId: day.id, allocations: [{ ...rows[0]!, minutes: 30 }] })
+  f.state.loseReplyAfterCommitAt = 1
+  await assert.rejects(f.service.submitAcceptance(value.id, true))
+  assert.equal(claims, 1)
+  assert.equal(f.logs.length, 1)
+  const restarted = new Workbench(f.deps)
+  day = await restarted.readDay({ team: 'team', date: rows[0]!.date })
+  const retry = await restarted.makePreview({ dayId: day.id, allocations: [{ ...rows[0]!, minutes: 30 }] })
+  await assert.rejects(restarted.submitAcceptance(retry.id, true), { code: 'unknown' })
+  assert.equal(claims, 1)
+  assert.equal(f.state.writes, 1)
+})
+
+test('acceptance: identity change after permit consumption blocks the request', async () => {
+  const f = fixture(false)
+  f.deps.consumeHoursAcceptance = async () => { await f.service.logout('coho') }
+  const day = await f.service.readDay({ team: 'team', date: rows[0]!.date })
+  const value = await f.service.makePreview({ dayId: day.id, allocations: [rows[0]!] })
+  await assert.rejects(f.service.submitAcceptance(value.id, true), { code: 'stale' })
+  assert.equal(f.state.writes, 0)
+})
+
+test('enabled hours: adding hours never enables description updates', async () => {
+  const f = fixture(true)
+  assert.equal((await f.service.status()).writeEnabled, true)
+  assert.equal((await f.service.status()).descriptionWriteEnabled, false)
+  assert.ok(!(await f.service.status()).blockers.some(value => value.includes('当前仅开放预览')))
+  await assert.rejects(f.service.describe({ team: 'team', date: rows[0]!.date, key: 'existing', description: '不可连带开放', confirmed: true }), { code: 'not_verified' })
+  assert.equal(f.state.writes, 0)
+})
+
+test('enabled hours: lost batch result persistence still prevents replay of successful writes', async () => {
+  const f = fixture()
+  const original = f.deps.store.set
+  f.deps.store.set = async (key, value) => {
+    if (key.startsWith('hours.batch.result.')) throw Error('fixture result persistence failure')
+    await original(key, value)
+  }
+  const preview = await f.service.previewHoursBatch('team', rows)
+  await assert.rejects(f.service.submitHoursBatch(preview.id, true, 'team'))
+  assert.equal(f.state.writes, 2)
+  await assert.rejects(f.service.submitHoursBatch(preview.id, true, 'team'), { code: 'stale' })
+  const restarted = new Workbench(f.deps)
+  assert.equal((await restarted.readDay({ team: 'team', date: rows[0]!.date })).existing, 600)
+  await assert.rejects(restarted.previewHoursBatch('team', rows), { code: 'budget' })
+  assert.equal(f.state.writes, 2)
 })

@@ -201,7 +201,7 @@ export class RecordsView {
                 }
               ),
             app.busy ||
-              !app.status?.writeEnabled ||
+              !app.status?.descriptionWriteEnabled ||
               !this.description.trim() ||
               !this.descriptionConfirmed
           )

@@ -1,3 +1,4 @@
+import type { HoursAcceptanceGrant } from './hours-acceptance.ts'
 import { HoursBatch, type HoursBatchRow, type HoursBatchResult } from './hours-batch.ts'
 import { recentHoursMonths, alignedHoursMonth } from './domain/hours-year.ts'
 import type { HoursMonth, HoursMonthStore, HoursTasks } from './hours-cache.ts'
@@ -20,7 +21,7 @@ import { allPages, mediaIds, type CompleteBug } from './domain/repair-content.ts
 import type { BugContent } from './domain/bug-content.ts'
 export interface Store { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void>; delete(key: string): Promise<void> }
 export interface Vault { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; delete(key: string): Promise<void> }
-export interface Dependencies { store: Store; vault: Vault; protection(): Promise<boolean>; fetcher?: Fetcher; writesVerified?: boolean; hoursCache?: HoursMonthStore }
+export interface Dependencies { store: Store; vault: Vault; protection(): Promise<boolean>; fetcher?: Fetcher; writesVerified?: boolean; descriptionWritesVerified?: boolean; hoursCache?: HoursMonthStore; consumeHoursAcceptance?: (grant: HoursAcceptanceGrant) => Promise<void> }
 type SavedLogin = { account: string; password: string; principal: string; httpAcknowledged: boolean; paused: boolean; retryAfter: number }
 type Snapshot = { input: DayInput; data: Day; identity: string; stamp: string }
 type Confirmation = { view: Preview; snapshot: Snapshot; input: PreviewInput; identity: string }
@@ -37,6 +38,7 @@ export class Workbench {
   private readonly batch: HoursBatch
   private tasksEpoch = 0
   private dayEpoch = 0
+  private previewEpoch = 0
   private hoursScanEpoch = 0
   private hoursScan?: { cursor: string; identity: string; team: string; month: string; scope: string; startedAt: number; today: string; results: MissingDay[]; dates: string[]; groups: Map<string, Worklog[]>; offset: number; attendance: (date: string, signal?: AbortSignal) => Promise<Attendance> }
   private day?: Snapshot
@@ -248,6 +250,7 @@ export class Workbench {
     this.invalidateHoursScan()
     this.tasksEpoch++
     this.dayEpoch++
+    this.previewEpoch++
     this.day = undefined
     this.preview = undefined
     this.batch.clear()
@@ -279,7 +282,7 @@ export class Workbench {
       return { connected: this.connected(site), label: this.sessions[site]?.label ?? '未登录',
         ...(saved ? { savedLogin: { account: saved.account, paused: saved.paused, retryAfter: saved.retryAfter } } : {}) }
     }
-    return { identity: this.identity(), ones: connection('ones'), coho: connection('coho'), teams: this.sessions.ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, blockers: ['工时写入尚待插件端到端验证，当前仅开放预览。', 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建与内容修改尚未开放；状态更新按详情中的独立能力闸与字段配置校验，工时闸不受影响。'] }
+    return { identity: this.identity(), ones: connection('ones'), coho: connection('coho'), teams: this.sessions.ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, descriptionWriteEnabled: this.deps.descriptionWritesVerified === true, blockers: [...(this.deps.writesVerified ? [] : ['工时写入尚待插件端到端验证，当前仅开放预览。']), 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建与内容修改尚未开放；状态流转和工时描述更新各自受独立能力闸控制。'] }
   }
   async login(input: LoginInput, signal?: AbortSignal): Promise<Status> {
     await this.ensureReady()
@@ -803,6 +806,7 @@ export class Workbench {
     await this.ensureOnesReady()
     await this.ensureCohoReady()
     const epoch = ++this.dayEpoch
+    this.previewEpoch++
     this.day = undefined
     this.preview = undefined
     const snapshot = await this.fetchDay(input, signal)
@@ -811,11 +815,16 @@ export class Workbench {
     return snapshot.data
   }
   async makePreview(input: PreviewInput, signal?: AbortSignal): Promise<Preview> {
+    const epoch = ++this.previewEpoch
+    this.preview = undefined
+    // Freeze before the first await: validation, display and submission share one intent.
+    const frozenInput = structuredClone(input)
+    requireThat(!this.writeBusy, 'busy', '工时提交中，请稍后重新预览。')
     await this.ensureOnesReady()
     const snapshot = this.day
-    requireThat(snapshot && snapshot.data.id === input.dayId && snapshot.identity === this.identity() && Date.now() - snapshot.data.attendance.fetchedAt < 300000, 'stale', '考勤或身份已过期，请重新读取。')
+    requireThat(snapshot && snapshot.data.id === frozenInput.dayId && snapshot.identity === this.identity() && Date.now() - snapshot.data.attendance.fetchedAt < 300000, 'stale', '考勤或身份已过期，请重新读取。')
     const budget = attendanceBudget(snapshot.data.attendance)
-    const allocations = structuredClone(input.allocations)
+    const allocations = frozenInput.allocations
     const proposed = checkAllocations(allocations, budget, snapshot.data.existing)
     const client = this.ones(snapshot.input.team)
     const rows = []
@@ -823,18 +832,27 @@ export class Workbench {
       const task = await client.ordinaryTask(id(allocation.taskId), signal)
       rows.push({ ...allocation, taskName: task.name })
     }
-    requireThat(this.day === snapshot && snapshot.identity === this.identity(), 'stale', '预览期间身份或考勤已变化。')
+    requireThat(epoch === this.previewEpoch && !signal?.aborted && !this.writeBusy && this.day === snapshot && snapshot.identity === this.identity(), 'stale', '预览已取消、被替换或身份与考勤已变化。')
     const view = { id: randomUUID(), date: snapshot.input.date, budget, existing: snapshot.data.existing, proposed, remaining: budget - snapshot.data.existing - proposed, rows, expiresAt: Date.now() + 300000 }
-    this.preview = { view, snapshot, input: structuredClone(input), identity: this.identity() }
+    this.preview = { view: structuredClone(view), snapshot, input: frozenInput, identity: this.identity() }
     return view
   }
   async submit(previewId: string, confirmed: boolean): Promise<{ count: number }> {
+    return this.submitConfirmed(previewId, confirmed, false)
+  }
+  /** Separate acceptance entry point; it cannot enable normal or batch writes. */
+  async submitAcceptance(previewId: string, confirmed: boolean): Promise<{ count: number }> {
+    return this.submitConfirmed(previewId, confirmed, true)
+  }
+  private async submitConfirmed(previewId: string, confirmed: boolean, acceptance: boolean): Promise<{ count: number }> {
     await this.ensureOnesReady()
-    requireThat(this.deps.writesVerified === true, 'not_verified', '插件工时写入尚未完成端到端验证，当前禁止提交。')
+    requireThat(acceptance ? !!this.deps.consumeHoursAcceptance : this.deps.writesVerified === true, 'not_verified', '插件工时写入尚未完成端到端验证，当前禁止提交。')
     requireThat(!this.writeBusy, 'busy', '另一个写入尚未结束。'); this.writeBusy = true
     try {
       const confirmation = this.preview
       requireThat(confirmed === true && confirmation && confirmation.view.id === previewId && confirmation.identity === this.identity() && confirmation.view.expiresAt > Date.now(), 'stale', '请重新预览并确认工时。')
+      if (acceptance) requireThat(confirmation.input.allocations.length === 1, 'acceptance', '受控验收仅允许单笔工时。')
+      this.previewEpoch++
       this.preview = undefined // one-shot confirmation; errors never revive it
       const client = this.ones(confirmation.snapshot.input.team)
       const fresh = await this.fetchDay(confirmation.snapshot.input)
@@ -843,6 +861,7 @@ export class Workbench {
       checkAllocations(confirmation.input.allocations, budget, fresh.data.existing)
       const scope = digest([ONES, client.team, client.session.userId])
       const ledger = this.ledger()
+      assertNoPending(await ledger.load(), scope)
       await this.invalidateHoursMonths(confirmation.snapshot.input.team, [fresh.input.date.slice(0, 7)])
       const writer = new Submission(ledger, worklogWriter(client))
       let count = 0
@@ -853,7 +872,12 @@ export class Workbench {
         checkAllocations([allocation], budget, existingMinutes(rows, fresh.input.date, client.session.userId))
         const intent = { scope, date: fresh.input.date, task: allocation.taskId, owner: client.session.userId, hours: apiHours(allocation.minutes), startTime: startSeconds(fresh.input.date, allocation.start), description: allocation.description }
         requireThat(this.identity() === confirmation.identity, 'identity', '提交前账号已变化，未发送本笔写入。')
-        await writer.add(intent, digest([previewId, count, intent]), rows); count++
+        if (acceptance) {
+          await this.deps.consumeHoursAcceptance!({ previewId, identity: confirmation.identity, expiresAt: confirmation.view.expiresAt })
+          requireThat(this.identity() === confirmation.identity && confirmation.view.expiresAt > Date.now(), 'stale', '验收许可消费后身份或确认已变化，未发送写入。')
+        }
+        await writer.add(intent, digest([previewId, count, intent]), rows)
+        count++
       }
       this.invalidate()
       return { count }
@@ -929,7 +953,7 @@ export class Workbench {
   }
   async describe(input: { team: string; date: string; key: string; description: string; confirmed: boolean }) {
     await this.ensureOnesReady()
-    requireThat(this.deps.writesVerified === true, 'not_verified', '插件描述更新尚未完成端到端验证，当前禁止提交。')
+    requireThat(this.deps.descriptionWritesVerified === true, 'not_verified', '插件描述更新尚未完成端到端验证，当前禁止提交。')
     requireThat(input.confirmed === true && !this.writeBusy, 'confirmation', '请确认更新且等待其它写入结束。')
     validateDescription(input.description)
     this.writeBusy = true

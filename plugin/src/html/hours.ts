@@ -434,14 +434,22 @@ export class HoursView {
       button('确认批量提交到 ONES', () => {
         if (this.batchPreview !== preview) return
         return app.run(
-        () => request<HoursBatchResult>('hours.batchSubmit', { team: app.team, previewId: preview.id, confirmed: this.batchConfirmed }),
+        async () => {
+          this.batchResult = null
+          try {
+            return await request<HoursBatchResult>('hours.batchSubmit', { team: app.team, previewId: preview.id, confirmed: this.batchConfirmed })
+          } finally {
+            // The Worker may have consumed the confirmation even if the reply is lost.
+            this.invalidateBatch()
+            this.clearDay()
+            for (const month of new Set(preview.rows.map(row => row.date.slice(0, 7)))) { this.months.delete(month); this.enqueueMonth(month, true) }
+            this.showMonth()
+            void this.pump(this.generation)
+          }
+        },
         result => {
           this.batchResult = result
-          this.invalidateBatch()
-          for (const month of new Set(preview.rows.map(row => row.date.slice(0, 7)))) { this.months.delete(month); this.enqueueMonth(month, true) }
           for (const row of result.rows) if (row.state === 'verified') this.batchRows.delete(row.date)
-          this.showMonth()
-          void this.pump(this.generation)
         })
       }, app.busy || !app.status?.writeEnabled || !this.batchConfirmed))
       section.append(this.batchPreviewElement)

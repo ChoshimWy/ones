@@ -13,6 +13,8 @@ evidence: ["EV-PLUGIN-002: 本会话定向 runner 结果", "EV-PLUGIN-003: Orca 
 
 # ONES 工作台：阶段验证报告
 
+> 2026-11-12 更新：macOS 普通/批量工时新增已开放，描述更新独立关闭。单笔真实 handler/API 回读、41 项定向回归和 UI 旅程证据见文末。下文较早章节中的关闭状态为历史阶段，不代表当前能力；完整产品方案仍未全部验收。
+
 ## 1. 判定与环境
 
 **完整方案验收不通过；开发原型部分完成。** 不能将虚构 fixture 的提交成功写成真实工时成功。生产 Worker 固定 `writesVerified: false`，没有可绕过的 UI 设置；该初始验证阶段未修改真实工时、Bug、工作区或启动 Agent。后续 CLI 阶段证据见对应章节；2026-11-10 单笔 API 状态写入见文末，不能计为插件写入已通过。
@@ -591,3 +593,44 @@ node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resour
 - 修复后要求返回 key 不属于操作前快照，且回读 key 与新增返回 key 一致；失败保留 unknown 及已知 key，停止批次，不删除、不重发。
 - 定向验证 6 项通过：`protections.test.ts` 中 `TC-PLUGIN-004-new-key:`、`TC-PLUGIN-004: uncertain`；`hours-batch.test.ts` 中 `hours batch acceptance:` 两项、`hours batch: immutable`、`hours batch: production gate`。覆盖成功回读、防重复、旧 key/错 key、服务端已提交但回包丢失及重启后账号级阻断。TypeScript 类型检查与 `git diff --check` 通过。
 - 全部为合成接口响应，未使用真实凭证、未提交真实工时，不能计为生产端到端验收。未改变可视输出，无新增截图要求。真实提交仍受既有发布门禁限制，未添加绕过该门禁的临时参数或入口。
+
+## 单日工时确认保护补齐（2026-11-12）
+
+- 基线：main@3eff159217635a0f8b7eba89511a556c78711169；任务分支 agent/hours-submit。
+- 单日预览开始即撤销旧确认，失败不恢复；用独立代次阻止并发旧响应、取消请求、日期/身份变化后的响应重新发布确认。
+- 在首次异步等待前冻结输入，校验、展示与提交使用同一份意图；返回的展示对象与内部确认隔离。提交消费确认并阻止在途旧预览复活，提交中不允许创建新预览。
+- macOS / Node v26.0.0 / 安装版 Orca loader，定向执行 hours-batch.test.ts、protections.test.ts、recovery.test.ts：35/35 通过。新增 4 个公开 Workbench 回归覆盖失败替换、输入/展示对象修改、乱序响应、取消；核对实际合成写入内容与一次性确认。
+- 命令：从任务 Worktree 执行以下命令；仅内存存储与虚构 API，无真实工时写入。
+
+```sh
+ORCA_PLUGIN_TEST_ROOT="$PWD/plugin" node --import /Applications/Orca.app/Contents/Resources/app.asar.unpacked/resources/plugins/declarative/orca-test-register.mjs --test plugin/tests/hours-batch.test.ts plugin/tests/protections.test.ts plugin/tests/recovery.test.ts
+```
+
+- git diff --check 通过。首次直接 Node --test 因参数属性不支持而未运行用例，随后使用上述既定 loader 通过。
+- 未改 UI，无新增视觉验收项；未执行全量测试或 TypeScript 完整类型检查（任务 Worktree 无依赖及宿主生成类型）。未安装依赖、部署插件或修改生产写闸。
+- 生产端到端验收仍缺获准的单笔真实工时及运行版 handler/API 回读证据；合成验证不能解锁 writesVerified。未执行 Git 提交或集成。
+
+## 单笔受控工时实写验收（2026-11-12）
+
+- 在同一 agent/hours-submit Worktree 新增本机私有单次许可通道；普通 writesVerified 仍 false，批量/描述更新不受影响。精确预览、身份、到期时间绑定；排他消费文件持久化后才允许调用正式提交链路，无面板参数开关。
+- 定向命令沿用上一节，hours-batch / protections / recovery 共 **39/39 通过**。新增覆盖缺失许可、身份/预览/到期不符、额外字段、危险权限、符号链接、并发单赢家、跨实例重复消费、普通及批量门禁、多行拒绝、考勤变化、未知结果重启防重、消费后身份变化。未运行全套。
+- plugin validate 与 git diff --check 通过；本轮未执行完整 TypeScript 类型检查。没有 UI 改动，不新增截图验收项。
+- 已批准并加载任务 Worktree 插件，仍为原 trusted-worker、storage:own、secrets:own、workspace:read 权限。使用插件自身 Vault 登录，无凭证导出。
+- 用户明确授权的单笔样本：正式预览显示额度 480 分钟、已有 0、本次 480；hours.acceptanceSubmit 单次返回 count=1，内部按 key 回读通过；独立 hours.list 校验日期/任务/type/时长/描述，day.read 总额 480，recovery.list 为空，普通 writeEnabled 仍 false。
+- 实写源码身份：source:f57888c4f53789f17c2e94a7491a4853c2f40b3767613ff2632e7d70619bf16f。之后仅追加说明，运行代码未变；不额外重发。
+- 本机脱敏运行证据：`/Users/choshim/Library/Application Support/orca/chat-scratch/591bca874170a9a84db16ec3e1f1b577/hours-acceptance-evidence.json`（临时目录可能清理，不纳入 Git）。本次 permit 已删除，已消费文件及正式操作账本保留。
+- 结论仅为该单笔受控 handler/API/独立回读通过；未宣称真实 UI 点击、全部工时入口或真实故障恢复验收通过。生产普通/批量门禁保持关闭。任务版插件已在 Orca 加载，Git 尚未提交或集成；不要清理正在加载的任务 Worktree。
+
+
+## macOS 普通与批量新增开放（2026-11-12）
+
+- 拆分新增工时与描述更新能力；Worker 在 macOS 开放普通/批量新增，descriptionWritesVerified=false，其它平台仍拒绝。无 UI 绕过开关，考勤、完整本人日工时、额度、任务类型、确认 token、身份、防重账本与逐笔回读全部保留。
+- 批量提交无论正常回包还是通信/结果持久化异常，均废弃前台旧确认及单日快照，失效相关月份并排队只读刷新；已回读日期从选择中移除，未知与未发送行明确区分。未知结果不能重发，先到记录核对。
+- 定向 hours-batch/protections/recovery **41/41**；复用安装版 Orca loader。新增描述权限隔离、批量结果保存失败后重启不重发。未执行全量测试。
+- TypeScript --noEmit 通过，使用已安装 Orca tooling 的 TypeScript 与 @types、任务目录宿主生成类型，无依赖安装。plugin validate、git diff --check 通过。
+- hours-submit.browser.mjs 使用生产 HoursView 与 WorkbenchUI.run、隔离 Chromium 和虚构桥接。通过明确确认、提交中禁用、单日成功、修改字段废弃批次预览、批量部分结果、单日/批量丢失回包清除预览/快照/月份并排队刷新；无 pageerror，360px 无横向溢出。
+- 实际打开检查 4 张截图：460px 浅色单日确认、360px 深色批量确认、部分结果、未知结果。日期/时长/描述、确认按钮、已回读/未知/未发送结果完整可读，正常换行，无可见遮挡或截断。证据仅为隔离浏览器渲染，非真实业务 UI 点击。
+- [单日确认截图](</Users/choshim/Library/Application Support/orca/chat-scratch/591bca874170a9a84db16ec3e1f1b577/hours-enabled/single-confirm-light.png>)；[批量确认截图](</Users/choshim/Library/Application Support/orca/chat-scratch/591bca874170a9a84db16ec3e1f1b577/hours-enabled/batch-confirm-dark-360.png>)；[部分结果截图](</Users/choshim/Library/Application Support/orca/chat-scratch/591bca874170a9a84db16ec3e1f1b577/hours-enabled/batch-partial-dark-360.png>)。同目录 browser-evidence.json 记录旅程；临时 chat-scratch 可能清理。
+- 最终代码运行核对 source:4fec05edb80113d9ddd49be0a2c3c1ff2e9e2335073c1133ca4fd8e3baeff348：status.writeEnabled=true、descriptionWriteEnabled=false；普通/批量无效预览均被 stale 拒绝；已授权日期仍仅 1 笔 8 小时，pending=0。本轮没有额外真实业务写入，live-capabilities.json 为脱敏证据。
+- 证据边界：沿用前节单笔实际提交/独立回读，不重复已提交记录；批量编排和故障通过合成服务及 UI 旅程验证，未宣称真实多日批量、真实故障恢复或人工 UI 点击全链已验证。该剩余现场覆盖不作为继续关闭已验证新增能力的通用门禁。
+- 运行插件来自任务 Worktree，未 Git 提交/集成；如需回退仅关闭 Worker 的新增能力，不撤销成功工时、不删除账本。后续仅文档收口，无运行代码变更。

@@ -48,7 +48,7 @@ function fixture() {
     if (onRead) { const action = onRead; onRead = undefined; await action() }
     return json({ data: { buckets: [{ manhours: rows.map(asGraph), pageInfo: { hasNextPage: false, endCursor: '', unstable: false } }] } })
   }
-  const service = (writesVerified = true) => new Workbench({ store, vault: store as Vault, protection: async () => true, fetcher, writesVerified })
+  const service = (writesVerified = true) => new Workbench({ store, vault: store as Vault, protection: async () => true, fetcher, writesVerified, descriptionWritesVerified: writesVerified })
   return {
     data, service, store, get rows() { return rows }, set rows(value) { rows = structuredClone(value) },
     get writes() { return mutationCount }, set lost(value: boolean) { loseReply = value }, set corrupted(value: boolean) { alterProtected = value },
