@@ -8,7 +8,7 @@ export type Attendance = { date: string; punches: Punch[]; leave?: { start: numb
 export type Worklog = { key: string; task: string; owner: string; hours: number; startTime: number; description: string; type: string }
 export type Allocation = { taskId: string; start: string; minutes: number; description: string }
 export type Preview = { id: string; date: string; budget: number; existing: number; proposed: number; remaining: number; rows: (Allocation & { taskName: string })[]; expiresAt: number }
-export type Status = { identity?: string; ones: Connection; coho: Connection; teams: Option[]; writeEnabled: boolean; descriptionWriteEnabled?: boolean; blockers: string[] }
+export type Status = { identity?: string; ones: Connection; coho: Connection; teams: Option[]; writeEnabled: boolean; blockers: string[] }
 export class AppError extends Error {
   constructor(public code: string, message: string) { super(message); this.name = 'AppError' }
 }

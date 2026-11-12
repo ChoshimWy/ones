@@ -13,8 +13,6 @@ export type DayInput = { team: string; date: string }
 export type Day = { id: string; date: string; attendance: Attendance; existing: number; worklogs: Worklog[] }
 export type PreviewInput = { dayId: string; allocations: Allocation[] }
 export type Draft = { date: string; allocations: Allocation[] }
-export type PendingWrite = { id: string; kind: 'add' | 'describe'; date: string; minutes: number; state: 'submitting' | 'unknown'; hasKey: boolean }
-export type RecoveryPreview = { id: string | null; receiptId: string; matchCount: number; candidate: Worklog | null; message: string }
 export type ImplementationBrief = { task: Task; text: string; blockedReason: string }
 declare module 'orca' {
   interface PluginRequests {
@@ -59,11 +57,6 @@ declare module 'orca' {
     'hours.preview': { input: PreviewInput; output: Answer<Preview> }
     'hours.acceptanceSubmit': { input: { previewId: string; confirmed: boolean }; output: Answer<{ count: number }> }
     'hours.submit': { input: { previewId: string; confirmed: boolean }; output: Answer<{ count: number }> }
-    'hours.list': { input: { team: string; date: string }; output: Answer<Worklog[]> }
-    'recovery.list': { input: { team: string }; output: Answer<PendingWrite[]> }
-    'recovery.preview': { input: { team: string; receiptId: string }; output: Answer<RecoveryPreview> }
-    'recovery.confirm': { input: { previewId: string; confirmed: boolean }; output: Answer<{ verified: true }> }
-    'hours.describe': { input: { team: string; date: string; key: string; description: string; confirmed: boolean }; output: Answer<{ key: string }> }
     'draft.save': { input: Draft; output: Answer<{ saved: true }> }
     'draft.load': { output: Answer<Draft | null> }
   }

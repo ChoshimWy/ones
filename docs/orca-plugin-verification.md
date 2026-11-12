@@ -634,3 +634,21 @@ ORCA_PLUGIN_TEST_ROOT="$PWD/plugin" node --import /Applications/Orca.app/Content
 - 最终代码运行核对 source:4fec05edb80113d9ddd49be0a2c3c1ff2e9e2335073c1133ca4fd8e3baeff348：status.writeEnabled=true、descriptionWriteEnabled=false；普通/批量无效预览均被 stale 拒绝；已授权日期仍仅 1 笔 8 小时，pending=0。本轮没有额外真实业务写入，live-capabilities.json 为脱敏证据。
 - 证据边界：沿用前节单笔实际提交/独立回读，不重复已提交记录；批量编排和故障通过合成服务及 UI 旅程验证，未宣称真实多日批量、真实故障恢复或人工 UI 点击全链已验证。该剩余现场覆盖不作为继续关闭已验证新增能力的通用门禁。
 - 运行插件来自任务 Worktree，未 Git 提交/集成；如需回退仅关闭 Worker 的新增能力，不撤销成功工时、不删除账本。后续仅文档收口，无运行代码变更。
+
+
+## 连续列表与记录核对移除（2026-11-12）
+
+- 范围：`agent/continuous-lists`，基于 `main@fc6735ac36ad10b0c29b94508f5c838844ccc7c6`。最终源码身份由受管 `session-source-identity` 输出保存至下列证据目录 `source-identity.json`；非 clean checkpoint，未提交或集成。验证结束后仅补此报告，无产品/测试代码变化。
+- TypeScript 检查通过（已安装 Orca checkout 的编译器与类型，任务 Worktree 的宿主生成声明）；`plugin validate`、`plugin check`、`git diff --check` 通过。`plugin check` 返回空 components panels，不能代替 HTML 运行验证。
+- 定向单元/服务测试 **8/8**：`recovery.test.ts` 的 `records removal:` 两项；`protections.test.ts` 的 `TC-PLUGIN-004:` / `TC-PLUGIN-004-new-key:`；`hours-batch.test.ts` 的未知第二笔、已有 key、丢失成功回包、工时新增不暴露描述更新四项。覆盖旧 add/describe 账本保留，Worker 重启后仍阻止再写。只运行精确名称选择，未跑全套。
+- HTML 定向旅程 **2/2**：`repair-flow.browser.mjs` 的 `ONES_JOURNEY=bug-pagination` / `implementation-pagination`，已更新为连续列表合同。Bug 25→50→53 连续追加、到末尾停止、缓存返回、稀疏/空批次、状态筛选、失败显式重试、重复/循环游标拒绝、离页/换号旧响应拒绝；实施 25 条全显、滚动不读网络、详情/更新状态往返、轮询增加到 40/刷新缩到 11、网络失败留缓存、认证/权限失败清数据、空列表与迟到同步拒绝。pageErrors 均为空。
+- 环境：macOS 本机已有 Chrome for Testing（Playwright 缓存 chromium-1243）+ 生产 HTML/CSS + 虚构 Worker；不访问真实 ONES、不写真实工时或状态、不启动修复 Agent。浏览器最初受沙箱拒绝，按授权升级执行；未更换浏览器或宿主。首次 fixture 切换竞争导致断言失败，改为先离页再换 fixture；最终旅程通过。
+- 视觉：实际打开检查 1100px 浅色列表、460px 深色实施列表、360px 失败重试/空态。四个导航标签均完整可见；连续行、底部计数、重试与空态可读。窄屏保留表格容器横向滚动，页面本身无横向溢出，长标题按原样单行省略。首次截图发现 360px 登录标签截断，收紧导航间距后截图与断言通过。截图不能代替上述交互证据。
+- 剩余边界：未加载/重启用户正在使用的正式插件，未验证真实 ONES 大数据量时延或安装版 WebView。移除人工恢复入口后，未知工时结果需核实原记录并联系维护者，不能盲删账本或重发。底层接口批大小和实施同步安全预算未放宽，取消的是界面分页/条数截断。
+
+证据目录（本地临时缓存，可能被清理）：`/Users/choshim/Library/Application Support/orca/chat-scratch/f75d5a8c0e6e2ffd214105799ec56ea4/continuous-lists`。
+
+- [缺陷连续列表（浅色预览）](</Users/choshim/Library/Application Support/orca/chat-scratch/f75d5a8c0e6e2ffd214105799ec56ea4/continuous-lists/bugs/bugs-continuous-light.png>)
+- [360px 导航与失败重试](</Users/choshim/Library/Application Support/orca/chat-scratch/f75d5a8c0e6e2ffd214105799ec56ea4/continuous-lists/bugs/bugs-continuous-retry.png>)
+- [实施连续列表（深色预览）](</Users/choshim/Library/Application Support/orca/chat-scratch/f75d5a8c0e6e2ffd214105799ec56ea4/continuous-lists/implementation/implementation-continuous-dark.png>)
+- 行为证据：`bugs/bug-pagination-evidence.json`、`implementation/implementation-pagination-evidence.json`；以上均使用虚构数据。

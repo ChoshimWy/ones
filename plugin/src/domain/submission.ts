@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { id, record, requireThat, text, validDate, type Worklog } from './model.ts'
-import { existingMinutes } from './attendance.ts'
 
 export type WriteIntent = { scope: string; date: string; task: string; owner: string; hours: number; startTime: number; description: string }
 export type IntentProof = Omit<WriteIntent, 'description'> & { descriptionHash: string }
@@ -19,16 +18,12 @@ export interface Ledger { load(): Promise<Receipt[]>; save(rows: Receipt[]): Pro
 export interface Writer { add(intent: WriteIntent): Promise<string>; get(key: string): Promise<Worklog> }
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
-export function protectedDayHash(rows: Worklog[], key: string): string {
-  return hash(rows.map(row => ({ ...row, description: row.key === key ? '' : row.description })).sort((a, b) => a.key.localeCompare(b.key)))
-}
-export function createReceipt(intent: WriteIntent, fingerprint: string, before: Worklog[], kind: 'add' | 'describe' = 'add', key?: string): Receipt {
+export function createReceipt(intent: WriteIntent, fingerprint: string, before: Worklog[]): Receipt {
   const { description, ...fields } = intent
   return {
-    id: randomUUID(), fingerprint, scope: intent.scope, kind, state: 'submitting',
+    id: randomUUID(), fingerprint, scope: intent.scope, kind: 'add', state: 'submitting',
     intent: { ...fields, descriptionHash: hash(description) },
-    beforeKeys: before.map(row => row.key),
-    ...(key ? { key, protectedDayHash: protectedDayHash(before, key) } : {})
+    beforeKeys: before.map(row => row.key)
   }
 }
 export function parseReceipts(raw: unknown): Receipt[] {
@@ -57,18 +52,6 @@ export function parseReceipts(raw: unknown): Receipt[] {
 export function assertNoPending(rows: Receipt[], scope: string): void {
   requireThat(!rows.some(row => row.scope === scope && row.state !== 'verified'), 'unknown', '该账号存在未核实提交，禁止再次写入。')
 }
-export function receiptCandidates(receipt: Receipt, rows: Worklog[]): Worklog[] {
-  const expected = receipt.intent
-  existingMinutes(rows, expected.date, expected.owner)
-  requireThat(new Set(rows.map(row => row.key)).size === rows.length, 'partial', '回读工时存在重复身份。')
-  if (receipt.kind === 'describe' && protectedDayHash(rows, receipt.key!) !== receipt.protectedDayHash) return []
-  return rows.filter(row => {
-    if (receipt.key && row.key !== receipt.key) return false
-    if (receipt.kind === 'add' && receipt.beforeKeys.includes(row.key)) return false
-    return row.owner === expected.owner && row.task === expected.task && row.hours === expected.hours && row.startTime === expected.startTime && row.type === 'recorded' && hash(row.description) === expected.descriptionHash
-  })
-}
-
 // One coordinator per worker. No cross-process or server-side transaction guarantee.
 export class Submission {
   private busy = false

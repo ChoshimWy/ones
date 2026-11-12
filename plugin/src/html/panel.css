@@ -420,9 +420,9 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
 .bug-table-project, .bug-table-creator { color: var(--orca-muted-foreground); font-size: 12px; overflow-wrap: anywhere; }
 .bug-footer { padding: 13px 16px; border: 1px solid var(--orca-border); border-radius: 16px; background: linear-gradient(115deg, var(--wb-surface), var(--orca-background)); gap: 10px; }
 .bug-footer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; }
-.bug-footer .footer-refresh { margin: 0; white-space: nowrap; }
-.bug-footer > .pagination-total { min-width: 0; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bug-footer > .pagination-controls { margin: 0; }
+.bug-footer .footer-refresh { display: inline-flex; align-items: center; gap: 8px; margin: 0; white-space: nowrap; border: 0; border-radius: 10px; min-height: 38px; }
+.bug-footer > .list-total { min-width: 0; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 .bug-footer p { font-size: 12px; }
 .workbench .card { border-radius: 14px; }
 @media (max-width: 600px) {
@@ -435,29 +435,13 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
   .preview-badge { font-size: 11px; padding: 3px 9px; }
   .planet-scene { opacity: .4; width: 160px; }
   .workbench nav { gap: 4px; }
-  .workbench nav button { gap: 7px; padding: 12px 9px; }
+  .workbench nav button { gap: 5px; padding: 12px 6px; }
   .filter-card { padding: 12px; gap: 12px; }
   .workbench .tag { padding: 7px 9px; gap: 6px; }
   .workbench .selected-tags { gap: 6px; }
   .bug-footer { padding: 10px; gap: 7px; }
 }
 
-/* 成对的分页箭头保留原生 disabled 和可访问名称，不以颜色单独表达边界。 */
-.pagination-controls { display: flex; align-items: center; gap: 12px; margin-left: auto; }
-.pagination-position { display: grid; place-items: center; min-width: 28px; padding: 0 4px; }
-.pagination-position p { white-space: nowrap; font-variant-numeric: tabular-nums; }
-.pagination-arrows { display: flex; align-items: center; gap: 2px; }
-.pagination-arrows button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: transparent; }
-.pagination-arrows button:hover:not(:disabled) { background: var(--wb-hover); color: var(--orca-primary); }
-.pagination-arrows button:active:not(:disabled) { background: var(--wb-selected); }
-.pagination-arrows button:focus-visible { outline: 2px solid var(--orca-ring, var(--orca-primary)); outline-offset: -2px; }
-.pagination-arrows button:disabled { opacity: .3; }
-.pagination-previous svg { transform: rotate(180deg); }
-.footer-refresh { display: inline-flex; align-items: center; gap: 8px; border: 0; border-radius: 10px; min-height: 38px; }
-.pagination-position:focus { outline: 2px solid var(--orca-ring, var(--orca-primary)); outline-offset: 3px; border-radius: 4px; }
-@media (max-width: 600px) {
-  .pagination-arrows button { width: 40px; height: 40px; }
-}
 
 /* Monthly attendance overview: keep seven weekday columns even in the sidebar. */
 .hours-calendar { min-width: 0; display: flex; flex-direction: column; gap: 12px; }

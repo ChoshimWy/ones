@@ -266,34 +266,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       return { saved: true }
     },
     'draft.load': () => draft,
-    'hours.list': () => [
-      {
-        key: 'record-fixture',
-        task: 'task-fixture',
-        owner: 'owner',
-        hours: 200000,
-        startTime: 1794186000,
-        description: '',
-        type: 'recorded'
-      }
-    ],
-    'recovery.list': () => [
-      {
-        id: 'receipt',
-        kind: 'add',
-        date: '2026-11-09',
-        minutes: 120,
-        state: 'unknown',
-        hasKey: false
-      }
-    ],
-    'recovery.preview': () => ({
-      id: null,
-      receiptId: 'receipt',
-      matchCount: 2,
-      candidate: null,
-      message: '两个匹配结果，不能解除阻断。'
-    })
+
   }
   for (const [name, handler] of Object.entries(handlers))
     orca.panels.handle(name, (input) => {

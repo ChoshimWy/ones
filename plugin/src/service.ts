@@ -9,9 +9,9 @@ import { filterProject, projectMappingKey, type ProjectMapping } from './domain/
 import type { Option } from './domain/model.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { type Allocation, type Attendance, type Preview, type Site, type Status, type Worklog, AppError, id, record, requireThat, text, validDate } from './domain/model.ts'
-import { apiHours, attendanceBudget, checkAllocations, existingMinutes, startSeconds, validateDescription } from './domain/attendance.ts'
-import { Submission, assertNoPending, createReceipt, parseReceipts, protectedDayHash, receiptCandidates, type Ledger, type Receipt } from './domain/submission.ts'
-import { type Day, type DayInput, type Draft, type ImplementationBrief, type LoginInput, type PreviewInput, type PendingWrite, type RecoveryPreview } from './protocol.ts'
+import { apiHours, attendanceBudget, checkAllocations, existingMinutes, startSeconds } from './domain/attendance.ts'
+import { Submission, assertNoPending, parseReceipts, type Ledger, type Receipt } from './domain/submission.ts'
+import { type Day, type DayInput, type Draft, type ImplementationBrief, type LoginInput, type PreviewInput } from './protocol.ts'
 import { COHO, ONES, Transport, type Fetcher } from './adapters/http.ts'
 import { refreshOnes, loginOnes, type OnesSession } from './adapters/ones-auth.ts'
 import { CohoClient, loginCoho, type CohoSession } from './adapters/coho.ts'
@@ -22,7 +22,7 @@ import { allPages, mediaIds, type CompleteBug } from './domain/repair-content.ts
 import type { BugContent } from './domain/bug-content.ts'
 export interface Store { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void>; delete(key: string): Promise<void> }
 export interface Vault { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; delete(key: string): Promise<void> }
-export interface Dependencies { store: Store; vault: Vault; protection(): Promise<boolean>; fetcher?: Fetcher; writesVerified?: boolean; descriptionWritesVerified?: boolean; hoursCache?: HoursMonthStore; consumeHoursAcceptance?: (grant: HoursAcceptanceGrant) => Promise<void> }
+export interface Dependencies { store: Store; vault: Vault; protection(): Promise<boolean>; fetcher?: Fetcher; writesVerified?: boolean; hoursCache?: HoursMonthStore; consumeHoursAcceptance?: (grant: HoursAcceptanceGrant) => Promise<void> }
 type SavedLogin = { account: string; password: string; principal: string; httpAcknowledged: boolean; paused: boolean; retryAfter: number }
 type Snapshot = { input: DayInput; data: Day; identity: string; stamp: string }
 type Confirmation = { view: Preview; snapshot: Snapshot; input: PreviewInput; identity: string }
@@ -44,7 +44,6 @@ export class Workbench {
   private hoursScan?: { cursor: string; identity: string; team: string; month: string; scope: string; startedAt: number; today: string; results: MissingDay[]; dates: string[]; groups: Map<string, Worklog[]>; offset: number; attendance: (date: string, signal?: AbortSignal) => Promise<Attendance> }
   private day?: Snapshot
   private preview?: Confirmation
-  private recovery?: { id: string; receiptId: string; team: string; identity: string; key: string; stamp: string; expiresAt: number }
   private detailEpoch = 0
   private detailRequest?: string
   private detail?: { team: string; taskId: string; identity: string; media: BugMediaStore; view: BugDetail }
@@ -255,7 +254,6 @@ export class Workbench {
     this.day = undefined
     this.preview = undefined
     this.batch.clear()
-    this.recovery = undefined
     this.closeDetail()
   }
   /// 独立管理扫描代次，不废弃正在查看的单日或批量预览。
@@ -283,7 +281,7 @@ export class Workbench {
       return { connected: this.connected(site), label: this.sessions[site]?.label ?? '未登录',
         ...(saved ? { savedLogin: { account: saved.account, paused: saved.paused, retryAfter: saved.retryAfter } } : {}) }
     }
-    return { identity: this.identity(), ones: connection('ones'), coho: connection('coho'), teams: this.sessions.ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, descriptionWriteEnabled: this.deps.descriptionWritesVerified === true, blockers: [...(this.deps.writesVerified ? [] : ['工时写入尚待插件端到端验证，当前仅开放预览。']), 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建与内容修改尚未开放；状态流转和工时描述更新各自受独立能力闸控制。'] }
+    return { identity: this.identity(), ones: connection('ones'), coho: connection('coho'), teams: this.sessions.ones?.teams ?? [], writeEnabled: this.deps.writesVerified === true, blockers: [...(this.deps.writesVerified ? [] : ['工时写入尚待插件端到端验证，当前仅开放预览。']), 'Coho 外勤标志与考勤异常规则仍需实例验证。', '执行修复通过 CLI 在已有项目创建聊天；媒体是本地引用，不能直接打开指定 session。', 'Bug 创建与内容修改尚未开放；状态流转受独立能力闸控制。'] }
   }
   async login(input: LoginInput, signal?: AbortSignal): Promise<Status> {
     await this.ensureReady()
@@ -891,108 +889,6 @@ export class Workbench {
     }
   }
   private scope(client: OnesClient): string { return digest([ONES, client.team, client.session.userId]) }
-  async worklogs(team: string, date: string, signal?: AbortSignal): Promise<Worklog[]> {
-    await this.ensureOnesReady()
-    validDate(date)
-    return this.authenticated('ones', async () => {
-      const identity = this.identity()
-      const client = this.ones(team)
-      await client.assertIdentity(signal)
-      const rows = await client.worklogs(date, signal)
-      existingMinutes(rows, date, client.session.userId)
-      requireThat(identity === this.identity(), 'stale', '读取期间账号已变化。')
-      return rows
-    })
-  }
-  async pending(team: string): Promise<PendingWrite[]> {
-    await this.ensureOnesReady()
-    const client = this.ones(team)
-    return (await this.ledger().load()).filter(row => row.scope === this.scope(client) && row.state !== 'verified').map(row => ({
-      id: row.id, kind: row.kind, date: row.intent.date, minutes: row.intent.hours * 60 / 100000,
-      state: row.state as 'submitting' | 'unknown', hasKey: !!row.key
-    }))
-  }
-  async previewRecovery(team: string, receiptId: string, signal?: AbortSignal): Promise<RecoveryPreview> {
-    await this.ensureOnesReady()
-    requireThat(!this.writeBusy, 'busy', '写入或核对仍在进行。')
-    this.recovery = undefined
-    const identity = this.identity()
-    const client = this.ones(team)
-    const receipt = (await this.ledger().load()).find(row => row.id === receiptId && row.scope === this.scope(client) && row.state !== 'verified')
-    requireThat(receipt, 'identity', '当前身份没有这条待核实操作。')
-    const rows = await this.worklogs(team, receipt.intent.date, signal)
-    const matches = receiptCandidates(receipt, rows)
-    requireThat(identity === this.identity(), 'stale', '核对期间账号已变化。')
-    if (matches.length !== 1) return { id: null, receiptId, matchCount: matches.length, candidate: null, message: matches.length ? '发现多个符合项，无法唯一归属；继续阻断，不自动重试。' : '没有找到完整匹配项，不代表写入失败；继续阻断，不自动重试。' }
-    const candidate = matches[0]
-    const view = { id: randomUUID(), receiptId, team, identity, key: candidate.key, stamp: digest(rows), expiresAt: Date.now() + 300000 }
-    this.recovery = view
-    return { id: view.id, receiptId, matchCount: 1, candidate, message: '请核对该记录确属本次操作。确认只更新本地核对状态，不新增或修改 ONES 工时。' }
-  }
-  async confirmRecovery(previewId: string, confirmed: boolean): Promise<{ verified: true }> {
-    await this.ensureOnesReady()
-    requireThat(confirmed === true && !this.writeBusy, 'confirmation', '请确认匹配记录属于本次操作。')
-    const view = this.recovery
-    requireThat(view && view.id === previewId && view.identity === this.identity() && view.expiresAt > Date.now(), 'stale', '核对预览已失效，请重新回读。')
-    this.recovery = undefined
-    this.writeBusy = true
-    try {
-      const client = this.ones(view.team)
-      const ledger = this.ledger()
-      const receipts = await ledger.load()
-      const receipt = receipts.find(row => row.id === view.receiptId && row.scope === this.scope(client) && row.state !== 'verified')
-      requireThat(receipt, 'identity', '待核实操作已变化。')
-      const rows = await this.worklogs(view.team, receipt.intent.date)
-      const matches = receiptCandidates(receipt, rows)
-      requireThat(view.identity === this.identity() && digest(rows) === view.stamp && matches.length === 1 && matches[0].key === view.key, 'conflict', '记录或身份已变化，未解除阻断。')
-      receipt.key = view.key
-      receipt.state = 'verified'
-      await ledger.save(receipts)
-      this.invalidate()
-      return { verified: true }
-    } finally { this.writeBusy = false }
-  }
-  async describe(input: { team: string; date: string; key: string; description: string; confirmed: boolean }) {
-    await this.ensureOnesReady()
-    requireThat(this.deps.descriptionWritesVerified === true, 'not_verified', '插件描述更新尚未完成端到端验证，当前禁止提交。')
-    requireThat(input.confirmed === true && !this.writeBusy, 'confirmation', '请确认更新且等待其它写入结束。')
-    validateDescription(input.description)
-    this.writeBusy = true
-    try {
-      const identity = this.identity()
-      const client = this.ones(input.team)
-      validDate(input.date)
-      await client.assertIdentity()
-      await client.config()
-      const ledger = this.ledger()
-      const receipts = await ledger.load()
-      assertNoPending(receipts, this.scope(client))
-      requireThat(receipts.length < 1000, 'ledger', '本地操作记录已达到上限。')
-      const writer = worklogWriter(client)
-      const original = await writer.get(text(input.key, 150))
-      requireThat(original.owner === client.session.userId && original.type === 'recorded', 'identity', '不是本人登记工时。')
-      const before = await client.worklogs(input.date)
-      existingMinutes(before, input.date, client.session.userId)
-      requireThat(before.filter(row => row.key === original.key).length === 1, 'identity', '原日期无法唯一定位该工时。')
-      if (original.description === input.description) return { key: original.key }
-      requireThat(original.description.trim() === '', 'conflict', '原记录已有不同描述，禁止覆盖。')
-      const latest = await writer.get(original.key)
-      requireThat(JSON.stringify(latest) === JSON.stringify(original), 'conflict', '原记录已变化，请重新确认。')
-      const intent = { scope: this.scope(client), date: input.date, task: original.task, owner: original.owner, hours: original.hours, startTime: original.startTime, description: input.description }
-      const receipt = createReceipt(intent, digest([randomUUID(), intent]), before, 'describe', original.key)
-      receipts.push(receipt)
-      await ledger.save(receipts)
-      requireThat(identity === this.identity(), 'identity', '更新前账号已变化，未发送描述更新。')
-      await writer.describe(original.key, input.description)
-      const after = await client.worklogs(input.date)
-      const amended = await writer.get(original.key)
-      requireThat(identity === this.identity() && receiptCandidates(receipt, after).length === 1 && protectedDayHash([amended], original.key) === protectedDayHash([original], original.key) && amended.description === input.description, 'readback', '更新后保护字段不一致，请核实。')
-      receipt.state = 'verified'
-      await ledger.save(receipts)
-      this.invalidate()
-      return { key: original.key }
-    } finally { this.writeBusy = false }
-  }
   async saveDraft(draft: Draft): Promise<{ saved: true }> {
     await this.ensureReady()
     requireThat(this.sessions.ones && this.sessions.coho, 'identity', '请先登录两站，草稿需要绑定本人身份。')

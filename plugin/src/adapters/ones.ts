@@ -179,10 +179,6 @@ export function worklogWriter(client: OnesClient) {
       requireThat(Array.isArray(data.manhours) && data.manhours.length === 1, 'readback', '无法唯一回读原工时。')
       const row = parseWorklog(data.manhours[0]); requireThat(row.key === key, 'readback', '工时 key 不匹配。')
       return row
-    },
-    async describe(key: string, description: string): Promise<void> {
-      const data = await client.graph('mutation PluginDescribe{updateManhour(key:$key,description:$description,mode:$mode){key}}', { key, description, mode: 'simple' }, 'Manhour')
-      requireThat(record(data.updateManhour).key === key, 'readback', '描述更新响应不匹配，需要核实。')
     }
   }
 }

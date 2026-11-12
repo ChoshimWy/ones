@@ -22,7 +22,7 @@ try {
       const f = globalThis.fixture = { writes: 0, previews: 0, outcome, mode, hold: false }
       const app = globalThis.app = {
         epoch: 0, disposed: false, busy: false, team: 'fixture-team', error: '', info: '',
-        status: { identity: 'fixture', ones: { connected: true }, coho: { connected: true }, writeEnabled: true, descriptionWriteEnabled: false },
+        status: { identity: 'fixture', ones: { connected: true }, coho: { connected: true }, writeEnabled: true },
         records: { clear() {} },
         run: WorkbenchUI.prototype.run, invalidate: WorkbenchUI.prototype.invalidate, invalidateDay: WorkbenchUI.prototype.invalidateDay,
         render() {

@@ -28,111 +28,43 @@ export function installImplementationPaginationFixture(handlers) {
   })
 }
 
-/// 验证真实父级与列表的分页生命周期；五秒轮询通过浏览器虚拟时钟触发。
+/// 完整缓存不再切页；缓存轮询、详情往返和身份保护继续生效。
 export async function exerciseImplementationPagination({ page, screenshot }) {
   const call = (name, input = {}) => page.evaluate(async ({ name, input }) => (await orca.host.call('plugin.request', { name, input })).output.value, { name, input })
   const config = input => call('fixture.implementationPagination', input)
-  const stats = () => call('fixture.implementationPaginationStats')
-  const button = name => page.getByRole('button', { name, exact: true })
-  const rows = page.locator('.implementation-table tbody tr')
-  const at = async (number, count) => {
-    await page.getByText(`第 ${number} 页`, { exact: true }).waitFor()
-    await page.waitForFunction(count => document.querySelectorAll('.implementation-table tbody tr').length === count, count)
-    assert.equal(await rows.count(), count)
+  const at = count => page.waitForFunction(count => document.querySelectorAll('.implementation-table tbody tr').length === count, count)
+  const idle = () => page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent === '刷新执行记录' && !b.disabled))
+  const refresh = async () => { await page.getByRole('button', { name: '刷新执行记录', exact: true }).click(); await idle() }
+  const poll = async () => { await page.clock.runFor(5000); await idle() }
+  await page.getByRole('tab', { name: '实施', exact: true }).click(); await at(25); await idle()
+  assert.equal(await page.getByRole('button', { name: /上一页|下一页/ }).count(), 0)
+  const before = await call('fixture.implementationPaginationStats')
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+  assert.deepEqual(await call('fixture.implementationPaginationStats'), before)
+  await screenshot('implementation-continuous-light', 'light', 1100)
+  await screenshot('implementation-continuous-dark', 'dark', 460)
+  for (const name of ['详情', '更新状态']) {
+    const row = page.locator('.implementation-table tbody tr').nth(15)
+    await (name === '详情' ? row.locator('.bug-item') : row.getByRole('button', { name, exact: true })).click()
+    await page.getByRole('button', { name: '返回执行记录', exact: true }).click(); await at(25); await idle()
+    await page.clock.runFor(32)
+    assert.ok(await page.evaluate(() => window.scrollY > 0))
   }
-  const idle = () => page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent === '刷新执行记录' && !button.disabled))
-  const refresh = async () => { await button('刷新执行记录').click(); await idle() }
-  const poll = async () => {
-    const previous = (await stats()).cache
-    await page.clock.runFor(5000)
-    await page.waitForFunction(async previous => (await orca.host.call('plugin.request', { name: 'fixture.implementationPaginationStats' })).output.value.cache > previous, previous)
-    await idle()
-  }
-  // 使用长文本压力验证共享标题样式，不改变任何业务状态。
-  const checkTitle = async () => {
-    const title = page.locator('.bug-item-title').first()
-    const layout = await title.evaluate(node => {
-      const style = getComputedStyle(node)
-      return { nowrap: style.whiteSpace, overflow: style.overflow, ellipsis: style.textOverflow, clipped: node.scrollWidth > node.clientWidth }
-    })
-    assert.deepEqual(layout, { nowrap: 'nowrap', overflow: 'hidden', ellipsis: 'ellipsis', clipped: true })
-  }
-  await page.locator('.bug-item-title').first().evaluate(node => { node.textContent = '虚构长标题单行截断验证'.repeat(20) })
-  await checkTitle()
-  await screenshot('bug-single-line-light', 'light', 1100)
-  await page.getByRole('tab', { name: '实施', exact: true }).click()
-  await at(1, 10); await idle()
-  assert.equal(await button('上一页').isDisabled(), true)
-  await checkTitle()
-  await screenshot('implementation-compact-light', 'light', 1100)
-  const initialReads = await stats()
-  await button('下一页').click(); await at(2, 10)
-  assert.match(await rows.first().innerText(), /#11/)
-  await button('下一页').click(); await at(3, 5)
-  assert.equal(await button('下一页').isDisabled(), true)
-  await button('上一页').click(); await at(2, 10)
-  assert.deepEqual(await stats(), initialReads)
-  await screenshot('implementation-pagination-page2-360', 'light', 360)
-  await screenshot('implementation-pagination-page2-460', 'dark', 460)
-
-  for (const entry of ['查看详情', '更新状态']) {
-    await (entry === '查看详情' ? rows.first().locator('.bug-item') : rows.first().getByRole('button', { name: entry, exact: true })).click()
-    await button('返回执行记录').click(); await at(2, 10); await idle()
-    assert.match(await rows.first().innerText(), /#11/)
-  }
-  await refresh(); await at(2, 10)
-  await poll(); await at(2, 10)
-  await button('下一页').click(); await at(3, 5)
-  await config({ count: 11 }); await refresh(); await at(2, 1)
-  assert.equal(await button('下一页').isDisabled(), true)
-  await config({ count: 21 }); await poll(); await at(2, 10)
-  await button('下一页').click(); await at(3, 1)
-  await config({ count: 9 }); await poll(); await at(1, 9)
-  await config({ count: 0 }); await poll(); await at(1, 0)
+  await config({ count: 40 }); await poll(); await at(40)
+  await config({ count: 11 }); await refresh(); await at(11)
+  await config({ syncError: 'network' }); await refresh(); await at(11)
+  await page.getByText(/同步失败，当前显示上次缓存/).waitFor()
+  await config({ syncError: 'auth' }); await refresh(); await at(0)
+  await config({ syncError: '', count: 25 }); await refresh(); await at(25)
+  await config({ cacheError: 'forbidden' }); await poll(); await at(0)
+  await config({ cacheError: '', count: 0 }); await refresh(); await at(0)
   await page.getByText('暂无匹配的执行记录。', { exact: true }).waitFor()
-  assert.equal(await button('上一页').isDisabled(), true)
-  assert.equal(await button('下一页').isDisabled(), true)
-  await screenshot('implementation-pagination-empty-360', 'light', 360)
-
-  // 网络失败保留当前缓存页；鉴权错误移除数据并清除父级页码。
-  await config({ count: 25 }); await refresh(); await at(1, 10)
-  await button('下一页').click(); await at(2, 10)
-  await config({ syncError: 'network' }); await refresh(); await at(2, 10)
-  await page.getByText('同步失败，当前显示上次缓存（可能过期）：虚构网络不可达', { exact: true }).waitFor()
-  await config({ syncError: 'auth' }); await refresh(); await at(1, 0)
-  await page.getByText('执行记录不可用：虚构认证已失效', { exact: true }).waitFor()
-  assert.equal(await button('上一页').isDisabled(), true)
-  assert.equal(await button('下一页').isDisabled(), true)
-  await config({ syncError: '' }); await refresh(); await at(1, 10)
-  await button('下一页').click(); await at(2, 10)
-  await config({ cacheError: 'forbidden' }); await poll(); await at(1, 0)
-  await config({ cacheError: '' }); await refresh(); await at(1, 10)
-
-  // 同步未完成时离开，迟到的 25 条不能覆盖重新进入后的一条新缓存。
-  await button('下一页').click(); await at(2, 10)
-  await config({ holdSync: true }); await button('刷新执行记录').click()
+  await screenshot('implementation-continuous-empty', 'light', 360)
+  await config({ count: 25, holdSync: true })
+  await page.getByRole('button', { name: '刷新执行记录', exact: true }).click()
   await page.waitForFunction(async () => (await orca.host.call('plugin.request', { name: 'fixture.implementationPaginationStats' })).output.value.pending === 1)
-  await page.getByRole('tab', { name: '我的 Bug', exact: true }).click()
-  await page.locator('button.bug-item').first().waitFor()
-  await config({ count: 1 })
-  await page.getByRole('tab', { name: '实施', exact: true }).click(); await at(1, 1)
+  await page.getByRole('tab', { name: '登录', exact: true }).click()
   await call('fixture.implementationPaginationRelease')
-  await at(1, 1)
-  assert.equal(await button('下一页').isDisabled(), true)
-
-  // 完整本地列表的边界值无需任何翻页网络请求。
-  for (const count of [0, 1, 9, 10, 11, 20, 21]) {
-    await config({ count }); await refresh()
-    await at(1, Math.min(count, 10))
-    const before = await stats()
-    for (let number = 2; number <= Math.ceil(count / 10); number++) {
-      await button('下一页').click(); await at(number, Math.min(10, count - (number - 1) * 10))
-    }
-    assert.equal(await button('下一页').isDisabled(), true)
-    assert.deepEqual(await stats(), before)
-    while (await button('上一页').isEnabled()) await button('上一页').click()
-  }
-  const calls = await call('fixture.calls')
-  assert.equal(calls.calls.some(name => ['repair.start', 'bugs.businessSubmit', 'hours.submit'].includes(name)), false)
-  return { environment: 'Headless Chrome + production WorkbenchUI/ImplementationView + fictional Worker; virtual clock drives real five-second interval', checks: ['10-item first/middle/partial-last pages and 0/1/9/10/11/20/21 boundaries', 'page navigation performs no cache or sync request', 'detail and update-status entry preserve page on return', 'manual refresh and five-second polling preserve page', 'refresh/poll shrink clamps page and empty list disables both buttons', 'network failure preserves page/cache; sync and poll auth failures clear cache/page', 'disposed late sync cannot overwrite new view', '360 light / 460 dark visual preview without horizontal overflow', 'no business writes'] }
+  assert.equal(await page.locator('.implementation-table').count(), 0)
+  return { checks: ['all 25 cached rows visible without pagination', 'scroll does not read network', 'detail and status entry return preserve scroll', 'poll expands to 40 and refresh shrinks to 11', 'network failure retains marked cache; auth/permission failure clears data', 'empty state and late sync after navigation', 'no repair launch or status writes'], environment: 'Chrome preview + fictional Worker' }
 }

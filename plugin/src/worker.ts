@@ -20,7 +20,6 @@ export default function activate(orca: OrcaWorkerApi): void {
     // 2026-11-12: macOS single live write/readback + targeted batch/UI evidence.
     // Each write still requires a fresh confirmed preview and durable recovery ledger.
     writesVerified: process.platform === 'darwin',
-    descriptionWritesVerified: false,
     consumeHoursAcceptance: grant => new HoursAcceptance(join(privateDataRoot(), 'hours-acceptance')).consume(grant)
   })
   const answer = async <T>(action: () => Promise<T>): Promise<Answer<T>> => {
@@ -80,11 +79,6 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('hours.preview', (input, context) => answer(() => service.makePreview(input, context.signal)))
   orca.panels.handle('hours.acceptanceSubmit', input => answer(() => service.submitAcceptance(input.previewId, input.confirmed)))
   orca.panels.handle('hours.submit', input => answer(() => service.submit(input.previewId, input.confirmed)))
-  orca.panels.handle('hours.list', (input, context) => answer(() => service.worklogs(input.team, input.date, context.signal)))
-  orca.panels.handle('recovery.list', input => answer(() => service.pending(input.team)))
-  orca.panels.handle('recovery.preview', (input, context) => answer(() => service.previewRecovery(input.team, input.receiptId, context.signal)))
-  orca.panels.handle('recovery.confirm', input => answer(() => service.confirmRecovery(input.previewId, input.confirmed)))
-  orca.panels.handle('hours.describe', input => answer(() => service.describe(input)))
   orca.panels.handle('draft.save', input => answer(() => service.saveDraft(input)))
   orca.panels.handle('draft.load', () => answer(() => service.loadDraft()))
 }

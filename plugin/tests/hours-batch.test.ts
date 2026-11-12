@@ -122,7 +122,7 @@ test('hours batch: unknown second write preserves first and fences retries after
   const result = await f.service.submitHoursBatch(preview.id, true, 'team')
   assert.deepEqual(result.rows.map(row => row.state), ['verified', 'unknown', 'not_attempted'])
   const restarted = new Workbench(f.deps)
-  assert.equal((await restarted.pending('team')).length, 1)
+  assert.equal((await f.deps.store.get('receipts') as { state: string }[]).filter(row => row.state !== 'verified').length, 1)
   const retry = await restarted.previewHoursBatch('team', [rows[1]!])
   await assert.rejects(restarted.submitHoursBatch(retry.id, true, 'team'), { code: 'unknown' })
   assert.equal(f.state.writes, 2)
@@ -267,7 +267,7 @@ test('hours batch acceptance: existing key cannot verify a new write or resume r
   assert.equal(f.logs.length, 1)
   const restarted = new Workbench(f.deps)
   assert.deepEqual(await restarted.hoursBatchResult('team'), result)
-  assert.equal((await restarted.pending('team')).length, 1)
+  assert.equal((await f.deps.store.get('receipts') as { state: string }[]).filter(row => row.state !== 'verified').length, 1)
   const retry = await restarted.previewHoursBatch('team', [row])
   await assert.rejects(restarted.submitHoursBatch(retry.id, true, 'team'), { code: 'unknown' })
   assert.equal(f.state.writes, 1)
@@ -282,7 +282,7 @@ test('hours batch acceptance: committed write with lost reply is never resent af
   assert.equal(f.logs.length, 1)
   assert.equal(f.logs[0]!.startTime, startSeconds(rows[0]!.date, rows[0]!.start))
   const restarted = new Workbench(f.deps)
-  assert.equal((await restarted.pending('team')).length, 1)
+  assert.equal((await f.deps.store.get('receipts') as { state: string }[]).filter(row => row.state !== 'verified').length, 1)
   // A different date still cannot bypass an unresolved account-scoped operation.
   const retry = await restarted.previewHoursBatch('team', [rows[1]!])
   await assert.rejects(restarted.submitHoursBatch(retry.id, true, 'team'), { code: 'unknown' })
@@ -473,9 +473,9 @@ test('acceptance: identity change after permit consumption blocks the request', 
 test('enabled hours: adding hours never enables description updates', async () => {
   const f = fixture(true)
   assert.equal((await f.service.status()).writeEnabled, true)
-  assert.equal((await f.service.status()).descriptionWriteEnabled, false)
+  assert.equal('descriptionWriteEnabled' in await f.service.status(), false)
   assert.ok(!(await f.service.status()).blockers.some(value => value.includes('当前仅开放预览')))
-  await assert.rejects(f.service.describe({ team: 'team', date: rows[0]!.date, key: 'existing', description: '不可连带开放', confirmed: true }), { code: 'not_verified' })
+  assert.equal('describe' in f.service, false)
   assert.equal(f.state.writes, 0)
 })
 

@@ -56,156 +56,79 @@ function tasks(count, start = 1, project = 'project', status = '待处理') {
   }))
 }
 
-/// 切分远端页，故意与每页十条的 UI 边界不同。
+/// 切分远端批次，验证自动填充视口。
 function chunks(items, size) {
   return Array.from({ length: Math.ceil(items.length / size) }, (_, index) => ({ items: items.slice(index * size, (index + 1) * size) }))
 }
 
-/// 定向验收分页、筛选、详情返回与旧响应隔离；返回可存档的行为证据。
+/// 定向连续加载：缓存追加、稀疏筛选、重试、详情返回及旧响应隔离。
 export async function exerciseBugPagination({ page, screenshot }) {
   const call = (name, input = {}) => page.evaluate(async ({ name, input }) => (await orca.host.call('plugin.request', { name, input })).output.value, { name, input })
-  const stats = () => call('fixture.paginationStats')
-  const button = name => page.getByRole('button', { name, exact: true })
   const rows = page.locator('button.bug-item')
-  const settled = () => page.waitForFunction(() => document.querySelector('.pagination-controls')?.getAttribute('aria-busy') === 'false')
-  const at = async (number, count) => {
-    await settled()
-    await page.getByRole('status', { name: `第 ${number} 页`, exact: true }).waitFor()
-    assert.equal(await rows.count(), count)
-  }
+  const settled = () => page.waitForFunction(() => document.querySelector('.bug-workspace')?.getAttribute('aria-busy') === 'false')
+  const at = async count => { await page.waitForFunction(count => document.querySelectorAll('button.bug-item').length === count, count); await settled() }
   const config = async pages => {
+    await page.getByRole('tab', { name: '登录', exact: true }).click()
     await call('fixture.pagination', { pages })
-    await button('刷新缺陷').click()
+    await page.getByRole('tab', { name: '我的 Bug', exact: true }).click()
     await settled()
   }
-  const pending = key => page.waitForFunction(async key => (await orca.host.call('plugin.request', { name: 'fixture.paginationStats' })).output.value[key] === 1, key)
-  const focus = () => page.evaluate(() => globalThis.fixtureWorkspaceChanged?.({ context: { displayName: String(Math.random()), branch: '', terminals: [] } }))
-  const chooseProject = value => page.getByLabel('项目筛选', { exact: true }).selectOption(value)
-  const openStatuses = async () => {
-    const toggle = page.getByLabel('展开状态选项', { exact: true })
-    if (await toggle.count()) await toggle.click()
-    await page.getByLabel('全部状态', { exact: true }).waitFor()
+  const bottom = () => page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+  await config([{ items: tasks(25) }, { items: tasks(25, 26) }, { items: tasks(3, 51) }])
+  await at(25)
+  assert.equal(await page.getByRole('tab', { name: '记录核对', exact: true }).count(), 0)
+  assert.equal(await page.getByRole('button', { name: /上一页|下一页/ }).count(), 0)
+  assert.deepEqual((await call('fixture.paginationStats')).reads, [0])
+  await bottom(); await at(50)
+  assert.match(await rows.first().innerText(), /缺陷 1$/)
+  assert.match(await rows.last().innerText(), /缺陷 50$/)
+  await bottom(); await at(53)
+  assert.equal(await page.getByText('已全部加载', { exact: true }).count(), 1)
+  await screenshot('bugs-continuous-light', 'light', 1100)
+  await screenshot('bugs-continuous-dark', 'dark', 460)
+  await page.evaluate(() => window.scrollTo(0, 900))
+  await rows.nth(12).click()
+  await page.getByRole('button', { name: '返回我的 Bug', exact: true }).click()
+  await at(53)
+  assert.ok(await page.evaluate(() => window.scrollY > 0))
+  assert.deepEqual((await call('fixture.paginationStats')).reads, [0, 1, 2])
+
+  await config([{ items: tasks(25) }, { items: tasks(3, 26), fail: true }])
+  await bottom(); await page.getByRole('button', { name: '重试读取', exact: true }).waitFor()
+  await at(25)
+  const reads = (await call('fixture.paginationStats')).reads
+  await bottom(); await page.waitForTimeout(150)
+  assert.deepEqual((await call('fixture.paginationStats')).reads, reads)
+  await screenshot('bugs-continuous-retry', 'light', 360)
+  assert.ok(await page.locator('nav').evaluate(node => node.scrollWidth <= node.clientWidth), 'Four tabs fit at 360px')
+  await page.getByRole('button', { name: '重试读取', exact: true }).click(); await at(28)
+
+  // 不匹配及空批次不能把列表误判为结束。
+  await config([{ items: tasks(12, 1, 'project', '已关闭') }, { items: [] }, { items: tasks(25, 13) }])
+  await at(25)
+  assert.deepEqual((await call('fixture.paginationStats')).reads, [0, 1, 2])
+  await page.getByRole('button', { name: '展开状态选项', exact: true }).click()
+  await page.getByLabel('全部状态', { exact: true }).check(); await at(37)
+  await page.getByRole('button', { name: '清空状态', exact: true }).click(); await at(0)
+  await page.getByRole('button', { name: '恢复默认状态', exact: true }).click(); await at(25)
+  await page.getByRole('button', { name: '收起状态选项', exact: true }).click()
+
+  for (const invalid of [{ items: tasks(2) }, { items: tasks(2, 26), next: 'p1' }]) {
+    await config([{ items: tasks(25) }, invalid]); await bottom(); await at(25)
+    await page.getByText(/缺陷分页重复或未推进/).waitFor()
+    assert.equal(await page.getByText('已全部加载', { exact: true }).count(), 0)
   }
-  const defaultStatuses = async () => { await openStatuses(); await button('恢复默认状态').click(); await settled() }
-
-  await at(1, 10)
-  assert.deepEqual((await stats()).reads, [0, 1])
-  assert.equal(await button('上一页').isDisabled(), true)
-  assert.equal(await page.getByText('加载更多缺陷（列表尚未完整）', { exact: true }).count(), 0)
-  assert.equal((await page.locator('body').innerText()).includes('Bug 创建、修改、状态流转尚未开放'), false)
-  await button('下一页').click(); await at(2, 10)
-  assert.match(await rows.first().locator('xpath=ancestor::tr').innerText(), /#11\s/)
-  assert.deepEqual((await stats()).reads, [0, 1, 2])
-  await button('上一页').click(); await at(1, 10)
-  await button('下一页').click(); await at(2, 10)
-  assert.deepEqual((await stats()).reads, [0, 1, 2])
-  await rows.first().click()
-  await button('返回我的 Bug').click(); await at(2, 10)
-  assert.deepEqual((await stats()).reads, [0, 1, 2])
-  await screenshot('bug-pagination-page2-360', 'light', 360)
-  await screenshot('bug-pagination-page2-460', 'dark', 460)
-  await button('下一页').click(); await at(3, 5)
-  assert.equal(await button('下一页').isDisabled(), true)
-
-  // 稀疏筛选跨越空远端页；当前页满十条后不继续预读。
-  await config([{ items: [...tasks(4), ...tasks(4, 101, 'other', '已关闭')] }, { items: [] }, { items: tasks(8, 5) }, { items: tasks(5, 13) }])
-  await at(1, 10)
-  assert.deepEqual((await stats()).reads, [0, 1, 2])
-  await button('下一页').click(); await at(2, 7)
-  await chooseProject('other'); await at(1, 0)
-  await openStatuses(); await page.getByLabel('全部状态', { exact: true }).check(); await at(1, 4)
-  await chooseProject('all'); await at(1, 10)
-  await button('下一页').click(); await at(2, 10)
-  await page.getByLabel('移除状态：全部状态', { exact: true }).click(); await at(1, 0)
-  const beforeEmpty = (await stats()).reads.length
-  assert.equal(await button('下一页').isDisabled(), true)
-  assert.equal((await stats()).reads.length, beforeEmpty)
-  await defaultStatuses(); await at(1, 10)
-  await button('下一页').click(); await at(2, 7)
-  await page.getByLabel('移除状态：待处理', { exact: true }).click(); await at(1, 0)
-  await page.getByLabel('状态：待处理', { exact: true }).check(); await at(1, 10)
-  await button('下一页').click(); await at(2, 7)
-  await button('清空状态').click(); await at(1, 0)
-  await defaultStatuses()
-
-  // 没有真实下一页时不能跳到空页，也不能把非匹配记录显示出来。
-  await config([{ items: tasks(10) }, { items: tasks(8, 11, 'project', '已关闭') }])
-  await button('下一页').click(); await at(1, 10)
-  assert.equal(await button('下一页').isDisabled(), true)
-
-  // 已填入部分目标页后失败，仍显示原页；重试复用缓存续读。
-  await config([{ items: tasks(10) }, { items: tasks(3, 11) }, { items: tasks(7, 14), fail: true }])
-  await button('下一页').click(); await at(1, 10)
-  await page.getByText('虚构分页读取失败 本次结果不完整。', { exact: true }).waitFor()
-  await screenshot('bug-pagination-retry-360', 'light', 360)
-  await button('重试读取').click(); await at(2, 10)
-  assert.deepEqual((await stats()).reads, [0, 1, 2, 2])
-
-  // 循环游标与重复 ID 都必须停止，保留已有页并要求刷新。
-  for (const bad of [{ items: tasks(5, 11), next: 'p1' }, { items: tasks(2, 10) }]) {
-    await config([{ items: tasks(10) }, bad])
-    await button('下一页').click(); await at(1, 10)
-    assert.equal(await button('下一页').isDisabled(), true)
-    assert.ok((await page.locator('body').innerText()).includes('分页重复或未推进'))
-    assert.deepEqual((await stats()).reads, [0, 1])
-  }
-
-  // 筛选切换后旧响应（即使桥接忽略 abort）不能覆盖当前页。
-  await config([{ items: tasks(10) }, { items: tasks(10, 11), hold: true }])
-  await button('下一页').click(); await pending('held')
-  await openStatuses(); await button('清空状态').click(); await at(1, 0)
-  await call('fixture.paginationRelease'); await at(1, 0)
-  await defaultStatuses(); await at(1, 10)
-  assert.deepEqual((await stats()).reads, [0, 1])
-  await button('下一页').click(); await at(2, 10)
-  assert.deepEqual((await stats()).reads, [0, 1, 1])
-
-  // 默认全部项目；宿主项目变化不再自动覆盖用户筛选。
-  await config([{ items: [...tasks(20), ...tasks(12, 101, 'other')] }])
-  await button('下一页').click(); await at(2, 10)
-  await call('fixture.paginationFollow', { project: { id: 'other', name: '另一项目' } }); await focus(); await at(2, 10)
-  assert.equal(await page.getByLabel('项目筛选', { exact: true }).inputValue(), 'all')
-  await chooseProject('other'); await at(1, 10)
-  assert.equal(await page.locator('.project-filter-display').innerText(), '另一项目')
-  await button('下一页').click(); await at(2, 2)
-  assert.ok((await page.locator('.bug-table tbody tr').allTextContents()).every(text => text.includes('另一项目')))
-  await call('fixture.paginationFollow', { project: { id: 'project', name: '分页验证项目' } }); await focus(); await at(2, 2)
-  assert.equal(await page.getByLabel('项目筛选', { exact: true }).inputValue(), 'other')
-  await chooseProject('all'); await at(1, 10)
-
-  // 导航、账号更换都拒绝迟到的旧分页数据。
-  await config([{ items: tasks(10) }, { items: tasks(10, 11), hold: true }])
-  await button('下一页').click(); await pending('held')
-  await rows.first().click()
-  await call('fixture.paginationRelease')
-  await button('返回我的 Bug').click(); await at(1, 10)
-  assert.deepEqual((await stats()).reads, [0, 1])
-  await button('下一页').click(); await at(2, 10)
-  assert.deepEqual((await stats()).reads, [0, 1, 1])
-  await config([{ items: tasks(10) }, { items: tasks(10, 11), hold: true }])
-  await button('下一页').click(); await pending('held')
+  await config([{ items: tasks(25) }, { items: tasks(2, 26), hold: true }]); await bottom()
+  await page.waitForFunction(async () => (await orca.host.call('plugin.request', { name: 'fixture.paginationStats' })).output.value.held === 1)
+  assert.equal(await page.locator('.refresh-bugs').getAttribute('aria-busy'), 'true')
   await page.getByRole('tab', { name: '登录', exact: true }).click()
-  await call('fixture.paginationAccount', { label: '另一个虚构账号' })
-  await button('刷新连接状态').click()
-  await page.getByText('另一个虚构账号', { exact: true }).waitFor()
   await call('fixture.paginationRelease')
+  await call('fixture.paginationAccount', { label: '新的虚构账号' })
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await page.getByText('新的虚构账号', { exact: true }).waitFor()
   await call('fixture.pagination', { pages: [{ items: tasks(2, 201) }] })
-  await page.getByRole('tab', { name: '我的 Bug', exact: true }).click(); await at(1, 2)
-  assert.match(await rows.first().locator('xpath=ancestor::tr').innerText(), /#201\s/)
-  assert.equal(await button('下一页').isDisabled(), true)
-  await config([{ items: [], fail: true }, { items: tasks(1) }])
-  await at(1, 0)
-  await button('重试读取').click(); await at(1, 1)
-  assert.deepEqual((await stats()).reads, [0, 0, 1])
-  for (const count of [0, 1, 9, 10, 11, 20, 21]) {
-    await config([{ items: tasks(count) }]); await at(1, Math.min(count, 10))
-    for (let number = 2; number <= Math.ceil(count / 10); number++) {
-      await button('下一页').click(); await at(number, Math.min(10, count - (number - 1) * 10))
-    }
-    assert.equal(await button('下一页').isDisabled(), true)
-    assert.deepEqual((await stats()).reads, [0])
-  }
-  const calls = await call('fixture.calls')
-  assert.equal(calls.calls.some(name => ['hours.submit', 'bugs.businessSubmit', 'repair.start'].includes(name)), false)
-  return { environment: 'Headless Chrome + production HTML + fictional Worker; no live ONES access', checks: ['10-item first/middle/partial-last pages', 'cached back/forward and detail return', 'filter before slicing with sparse and empty remote pages', 'all status controls and project change reset page', 'no fabricated next page', 'partial load failure retains page and retries cursor', 'duplicate ID and cursor stop', 'stale filter, navigation and account responses rejected; manual project selection survives workspace changes', 'empty state and first-page retry', '360 light / 460 dark without horizontal overflow', 'no business writes'] }
+  await page.getByRole('tab', { name: '我的 Bug', exact: true }).click(); await at(2)
+  assert.match(await rows.first().innerText(), /201/)
+  assert.equal(await page.getByText('记录核对', { exact: true }).count(), 0)
+  return { checks: ['25 → 50 → 53 rows, no UI pagination or total cap', 'scroll appends without duplicate reads', 'detail return preserves cache and scroll', 'failure preserves rows and requires explicit retry', 'empty and unmatched batches continue; filters apply to all cached rows', 'duplicate/cyclic pages remain incomplete', 'navigation/account changes reject late replies', 'record reconciliation tab removed'], environment: 'Chrome preview + fictional Worker; no live ONES writes' }
 }

@@ -30,18 +30,12 @@ export class ImplementationView {
   private busy = false
   private timer?: ReturnType<typeof setInterval>
   private ticks = 0
-  /// 当前显示页，仅保存在本页面及其父级的内存生命周期中。
-  private page: number
-  /// 本地完整记录按每页十条展示，不新增远端分页请求。
-  private readonly pageSize = 10
-  /// 接收父级保留的页码；回调仅更新内存状态，不持久化或发起业务写入。
+  private restoredScroll = false
   constructor(
     private team: string,
     private openDetail: (task: Task, updateStatus?: boolean) => void,
-    initialPage = 1,
-    private pageChanged: (page: number) => void = () => {}
+    private initialScroll = 0
   ) {
-    this.page = initialPage
     void this.load()
     this.timer = setInterval(() => {
       if (!this.busy && !this.disposed) void this.poll(++this.ticks % 12 === 0)
@@ -54,33 +48,25 @@ export class ImplementationView {
     this.controller.abort()
     clearInterval(this.timer)
   }
-  /// 本地切页不读取网络；刷新和轮询由既有读取流程独立负责。
-  private changePage(page: number): void {
-    this.page = page
-    this.render()
-  }
-  /// 先约束有效页再切片；远端业务动作仍由详情重新鉴权，缓存不是写入授权。
+  /// 完整缓存连续展示；轮询刷新保留滚动位置，不额外发起网络请求。
   private render() {
     const data = this.data
-    const pageCount = Math.max(1, Math.ceil((data?.items.length ?? 0) / this.pageSize))
-    // 1. 首次缓存未返回时保留父级页码；真实空列表或鉴权失败则回到第一页。
-    if (data || this.failed) {
-      this.page = Math.max(1, Math.min(this.page, pageCount))
-      this.pageChanged(this.page)
-    }
-
-    const items = data?.items.slice((this.page - 1) * this.pageSize, this.page * this.pageSize) ?? []
-    // 2. 仅渲染当前页，后台同步不重置仍然有效的页码。
+    const items = data?.items ?? []
+    const scroll = this.restoredScroll ? window.scrollY : this.initialScroll
+    const horizontalScroll = this.element.querySelector('.bug-items')?.scrollLeft ?? 0
     this.element.replaceChildren(
       row(el('h2', '', '执行记录'), button('刷新执行记录', () => this.load(true), this.busy)),
       this.failed ? notice(this.status, true) : text(`${this.busy ? '正在同步' : '本地记录'}${data?.syncedAt ? ` · 上次更新 ${new Date(data.syncedAt).toLocaleTimeString()}` : ' · 首次同步中'}`, true),
       ...(items.length ? [this.renderItems(items)] : data ? [notice(data.syncedAt ? '暂无匹配的执行记录。' : '暂无本地缓存，首次同步可能需要等待。')] : []),
-      row(
-        button('上一页', () => this.changePage(this.page - 1), !data || this.page === 1),
-        text(`第 ${this.page} 页`, true),
-        button('下一页', () => this.changePage(this.page + 1), !data || this.page >= pageCount)
-      )
+      text(`共 ${items.length} 条执行记录`, true)
     )
+    requestAnimationFrame(() => {
+      if (this.disposed || !this.element.isConnected) return
+      window.scrollTo(0, scroll)
+      const region = this.element.querySelector('.bug-items')
+      if (region) region.scrollLeft = horizontalScroll
+      if (data || this.failed) this.restoredScroll = true
+    })
   }
   /// 与 Bug 列表共用紧凑表格样式；详细验证信息保留在详情页。
   private renderItems(items: CachedRepairs['items']): HTMLElement {

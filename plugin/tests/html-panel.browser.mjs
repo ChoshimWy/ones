@@ -26,7 +26,7 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
     )
   const waitText = async (text) => wait(`document.body.innerText.includes(${JSON.stringify(text)})`)
   const report = {}
-  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
+  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.bug-workspace')?.getAttribute('aria-busy')==='false'`)
   assert.equal(await contains('ONES 团队'), false)
   await evaluate(`document.querySelector('[aria-label="展开状态选项"]').click()`)
   await waitText('状态：已解决')
@@ -87,7 +87,7 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
     externalHTMLNotExecuted: true
   }
   await click('返回我的 Bug')
-  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
+  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.bug-workspace')?.getAttribute('aria-busy')==='false'`)
   assert.equal(await evaluate(`document.querySelectorAll('video,img').length`), 0)
   assert.ok(
     (
@@ -126,7 +126,7 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
   await click('保存草稿')
   await waitText('已保存本机草稿')
   await click('我的 Bug')
-  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
+  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.bug-workspace')?.getAttribute('aria-busy')==='false'`)
   await click('考勤工时')
   assert.equal(await contains('虚构：修复与验证'), true)
   await fill('业务日期（YYYY-MM-DD）', '2026-11-08')
@@ -144,19 +144,8 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
     draftAcrossTabs: true,
     dateChangeInvalidates: true
   }
-  await click('记录核对')
-  await click('读取待核实操作')
-  await waitText('只读核对此项')
-  await click('只读核对此项')
-  await waitText('两个匹配结果')
-  assert.equal(await enabled('确认本地核对结果'), false)
-  await click('读取本人当日原记录')
-  await waitText('补全此条描述')
-  await click('补全此条描述')
-  await fill('补全描述（只更新原记录）', '虚构补全')
-  await check('确认仅补全这条原记录的描述，不改变日期或时长', true)
-  assert.equal(await enabled('提交原记录描述补全'), false)
-  report.recovery = { ambiguousBlocked: true, descriptionWriteDisabled: true }
+  assert.equal(await contains('记录核对'), false)
+  report.recordsRemoved = true
   await click('登录')
   await fill('ONES 邮箱', 'fixture@example.invalid')
   await fill('ONES 密码', 'fixture-only-password')
@@ -197,7 +186,7 @@ export async function exerciseHtmlPanel({ evaluate, wait, screenshot }) {
 
 // Focused regression for the row-only detail entry; no attendance or auth operations.
 export async function exerciseBugRows({ evaluate, wait, screenshot }) {
-  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
+  await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.bug-workspace')?.getAttribute('aria-busy')==='false'`)
   assert.equal(
     await evaluate(
       `document.body.innerText.includes('打开原单') || document.body.innerText.includes('实施说明')`
@@ -224,7 +213,7 @@ export async function exerciseBugRows({ evaluate, wait, screenshot }) {
     await evaluate(
       `[...document.querySelectorAll('button')].find(b=>b.textContent==='返回我的 Bug').click()`
     )
-    await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.pagination-controls')?.getAttribute('aria-busy')==='false'`)
+    await wait(`document.querySelectorAll('.bug-item').length===1 && document.querySelector('.bug-workspace')?.getAttribute('aria-busy')==='false'`)
   }
   await back()
   await evaluate(
