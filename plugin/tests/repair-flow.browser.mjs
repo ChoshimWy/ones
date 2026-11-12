@@ -5,6 +5,7 @@ import { resolve,join } from 'node:path'
 import { fileURLToPath,pathToFileURL } from 'node:url'
 import { installImplementationPaginationFixture, exerciseImplementationPagination } from './implementation-pagination.browser.mjs'
 import { installBugPaginationFixture, exerciseBugPagination } from './bug-pagination.browser.mjs'
+import { exerciseStickyTabs } from './sticky-tabs.browser.mjs'
 import { exerciseWorkbenchDesign } from './workbench-design.browser.mjs'
 import { exerciseRepairPanel } from './repair-panel.browser.mjs'
 import { exerciseStatusUpdate,exerciseStatusKeyboard } from './status-update.browser.mjs'
@@ -18,8 +19,8 @@ const root=resolve(fileURLToPath(new URL('..',import.meta.url)))
 const activate=(await import(pathToFileURL(join(root,'tests/fixtures/html-worker.ts')).href)).default
 const handlers=new Map()
 activate({panels:{handle:(name,callback)=>handlers.set(name,callback)}})
-if(['bug-pagination','ui-design'].includes(process.env.ONES_JOURNEY))installBugPaginationFixture(handlers)
-if(process.env.ONES_JOURNEY==='implementation-pagination')installImplementationPaginationFixture(handlers)
+if(['bug-pagination','ui-design','sticky-tabs'].includes(process.env.ONES_JOURNEY))installBugPaginationFixture(handlers)
+if(['implementation-pagination','sticky-tabs'].includes(process.env.ONES_JOURNEY))installImplementationPaginationFixture(handlers)
 const bundle=await build({entryPoints:[join(root,'src/html/panel.ts')],bundle:true,platform:'browser',format:'iife',write:false})
 await mkdir(output,{recursive:true})
 const browser=await chromium.launch({headless:true,executablePath:process.env.ONES_BROWSER})
@@ -52,10 +53,15 @@ try{
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false)
     const title=name.startsWith('content-spacing')?'Bug 正文':name.startsWith('repair-business')?'开始修复并更新状态':name.startsWith('repair-detail')?'修复进度':(name==='completion-business-preview'||name.startsWith('summary-layout'))?'确认一次完成状态更新':name.startsWith('completion-')?'更新为已修复':null
     if(title)await page.getByRole('heading',{name:title,exact:true}).locator('..').screenshot({path:join(output,name+'.png')})
-    else await page.screenshot({path:join(output,name+'.png'),fullPage:true})
+    else await page.screenshot({path:join(output,name+'.png'),fullPage:!name.startsWith('sticky-tabs-')})
   }
   const api={evaluate:expression=>page.evaluate(expression),wait:async expression=>{try{return await page.waitForFunction(expression)}catch(error){console.log(JSON.stringify({waiting:expression,body:await page.locator('body').innerText(),errors}));throw error}},screenshot,press:key=>page.keyboard.press(key)}
-  if(process.env.ONES_JOURNEY==='repair-direct'){
+  if(process.env.ONES_JOURNEY==='sticky-tabs'){
+    const evidence=await exerciseStickyTabs({page,screenshot})
+    assert.deepEqual(errors,[])
+    await writeFile(join(output,'sticky-tabs-evidence.json'),JSON.stringify({...evidence,pageErrors:errors},null,2))
+    console.log(JSON.stringify(evidence,null,2))
+  }else if(process.env.ONES_JOURNEY==='repair-direct'){
     const evidence=await exerciseRepairPanel(api)
     assert.deepEqual(errors,[])
     console.log(JSON.stringify({...evidence,pageErrors:errors}))

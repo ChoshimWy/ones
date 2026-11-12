@@ -695,7 +695,7 @@ export class WorkbenchUI {
         ? [active.selectionStart, active.selectionEnd]
         : null
     const horizontalScroll = this.root.querySelector('.bug-workspace .bug-items')?.scrollLeft ?? this.bugHorizontalScroll
-    const nav = el('nav')
+    const nav = el('nav', 'workbench-tabs')
     nav.setAttribute('aria-label', '工作台功能')
     nav.setAttribute('role', 'tablist')
     for (const [value, label] of [
@@ -732,9 +732,9 @@ export class WorkbenchUI {
             text('从问题到实施，从考勤到工时', true)
           )
         ),
-        el('div', 'row connections', connection('ones', 'ONES'), connection('coho', 'Coho')),
-        nav
+        el('div', 'row connections', connection('ones', 'ONES'), connection('coho', 'Coho'))
       ),
+      nav,
       ...(this.busy
         ? [
             row(
