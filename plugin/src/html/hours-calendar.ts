@@ -28,6 +28,14 @@ export function calendarLabels(day?: MissingDay): { attendance: string; registra
   return { attendance, registration }
 }
 
+export function calendarPunchLabels(day?: MissingDay): { first: string; last: string } {
+  const times = day?.attendanceTime
+  return times ? {
+    first: (times.startNextDay ? '次日 ' : '') + times.start,
+    last: (times.endNextDay ? '次日 ' : '') + times.end
+  } : { first: '—', last: '—' }
+}
+
 export function hoursCalendar(options: {
   days: MissingDay[]; month: string; selected: string | null; busy: boolean; loading?: boolean
   selectedDates?: Set<string>; toggleDate?(date: string): void
@@ -59,21 +67,24 @@ export function hoursCalendar(options: {
       if (!date) { td.className = 'calendar-empty'; tr.append(td); continue }
       const day = byDate.get(date)
       const labels = calendarLabels(day)
+      const punches = calendarPunchLabels(day)
       const content = [
         el('span', 'calendar-date', String(Number(date.slice(-2)))),
+        el('span', 'calendar-punch', el('span', 'calendar-punch-label', '首次'), el('span', 'calendar-punch-time', punches.first)),
+        el('span', 'calendar-punch', el('span', 'calendar-punch-label', '末次'), el('span', 'calendar-punch-time', punches.last)),
         el('span', 'calendar-attendance', labels.attendance),
         el('span', 'calendar-registration', labels.registration)
       ]
       const selectable = day && day.state !== 'not_required' && day.state !== 'pending'
       const cell = selectable ? button('', () => options.chooseDate(date), options.busy, 'calendar-day') : el('div', 'calendar-day')
       cell.append(...content)
-      cell.setAttribute('aria-label', `${date}，${labels.attendance}，${labels.registration}`)
+      cell.setAttribute('aria-label', `${date}，首次打卡 ${punches.first}，末次打卡 ${punches.last}，${labels.attendance}，${labels.registration}`)
       cell.classList.add('calendar-' + (day?.state ?? 'unqueried'))
       if (date === options.selected && selectable) {
         cell.classList.add('calendar-selected')
         cell.setAttribute('aria-pressed', 'true')
       } else if (selectable) cell.setAttribute('aria-pressed', 'false')
-      if (day) cell.title = [date, day.attendanceTime ? `${day.attendanceTime.start}—${day.attendanceTime.end}` : '', day.reason].filter(Boolean).join(' · ')
+      if (day) cell.title = [date, day.attendanceTime ? `${punches.first}—${punches.last}` : '', day.reason].filter(Boolean).join(' · ')
       td.append(cell)
       if (day && ['missing', 'partial'].includes(day.state) && options.toggleDate) {
         const choose = check(`选择 ${date}`, options.selectedDates?.has(date) ?? false, () => options.toggleDate!(date), options.busy)

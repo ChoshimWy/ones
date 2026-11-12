@@ -486,7 +486,7 @@ export class HoursView {
         const calculated = resolveAttendance(this.day.attendance)
         attendanceValid = true
         content.append(card('考勤已自动识别',
-          text(this.day.date + ' · ' + calculated.start + '—' + calculated.end),
+          text(this.day.date + ' · ' + calculated.start + '—' + (calculated.endNextDay ? '次日 ' : '') + calculated.end),
           text('折算工时：' + hours(calculated.budget) + ' · 已登记：' + hours(this.day.existing)),
           text('符合正常考勤规则，无需手动配对或确认。', true)))
       } catch (error) {

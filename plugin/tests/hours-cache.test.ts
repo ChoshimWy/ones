@@ -1,3 +1,4 @@
+import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, symlink } from 'node:fs/promises'
@@ -48,5 +49,30 @@ test('hours cache: ordinary tasks survive restart with scope isolation; wrong ty
     await cache.publish('team-owner', { month: '2026-02', days: [{ date: '2026-02-01', existing: 0, budget: 0, remaining: 0, state: 'not_required', reason: 'fixture' }], savedAt: 1 }, () => {})
     await cache.invalidate('team-owner', '2026-02')
     assert.equal(await cache.read('team-owner', '2026-02'), null)
+  } finally { cache.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('hours cache: obsolete rule projections are ignored and refreshed, without invalidating tasks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ones-hours-rules-'))
+  const directory = join(root, 'db')
+  const cache = new HoursCache(directory)
+  try {
+    await cache.publish('owner', value, () => {})
+    const tasks = { typeId: 'ordinary', savedAt: 1, items: [] }
+    await cache.publishTasks('owner', tasks, () => {})
+    cache.close()
+    const db = new DatabaseSync(join(directory, 'hours.sqlite'))
+    try {
+      for (const old of [value, { ...value, attendanceRuleVersion: 'obsolete' }]) {
+        db.prepare('UPDATE months SET data=? WHERE scope=?').run(JSON.stringify(old), 'owner')
+        assert.equal(await cache.read('owner', value.month), null)
+        cache.close()
+      }
+    } finally { db.close() }
+    assert.deepEqual(await cache.readTasks('owner'), tasks)
+    const refreshed = { ...value, savedAt: 2, days: [{ ...value.days[0]!, budget: 450, remaining: 450, attendanceTime: {start:'09:00',end:'05:00',endNextDay:true} }] }
+    await cache.publish('owner', refreshed, () => {})
+    cache.close()
+    assert.deepEqual(await cache.read('owner', value.month), refreshed)
   } finally { cache.close(); await rm(root, { recursive: true, force: true }) }
 })

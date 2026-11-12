@@ -1,20 +1,48 @@
-import { type Allocation, type Attendance, type Worklog, requireThat, minuteOfDay, validDate } from './model.ts'
+import { type Allocation, type Attendance, type Punch, type Worklog, requireThat, minuteOfDay, validDate } from './model.ts'
 
-export function resolveAttendance(attendance: Attendance): { start: string; end: string; budget: number } {
+// Persisted projections must not reuse budgets calculated under older rules.
+export const ATTENDANCE_RULE_VERSION = 'attendance-0800-window-first-last-v1'
+
+export function nextAttendanceDate(date: string): string {
+  validDate(date)
+  return new Date(Date.parse(date + 'T00:00:00Z') + 86400000).toISOString().slice(0, 10)
+}
+
+export function attendanceDayEnded(date: string, now = Date.now()): boolean {
+  return now >= Date.parse(nextAttendanceDate(date) + 'T08:00:00+08:00')
+}
+
+// Use the actual date and time, never lexical HH:mm order across midnight.
+export function attendancePunchMinute(punch: Punch, date: string): number {
+  const next = nextAttendanceDate(date)
+  requireThat((punch.date === date || punch.date === next) && typeof punch.isNext === 'boolean', 'attendance', '打卡日期或跨日标志不明确。')
+  requireThat((punch.realDate === punch.date && !punch.isNext) || (punch.realDate === nextAttendanceDate(punch.date) && punch.isNext), 'attendance', '打卡实际日期与跨日标志不一致。')
+  const minute = minuteOfDay(punch.time)
+  const offset = punch.realDate === date ? minute : punch.realDate === next ? minute + 1440 : -1
+  requireThat(offset >= 480 && offset < 1920, 'attendance', '打卡不在当天 08:00 至次日 08:00 的考勤窗口内。')
+  return offset
+}
+
+export function resolveAttendance(attendance: Attendance): { start: string; end: string; endNextDay?: boolean; budget: number } {
   validDate(attendance.date)
   requireThat(attendance.punches.length === 2, 'attendance', '缺卡、多次打卡或异常记录不能自动折算，请先处理考勤异常。')
   for (const punch of attendance.punches) {
-    requireThat(punch.date === attendance.date && punch.realDate === attendance.date && punch.isNext === false, 'attendance', '跨日或日期不明的打卡不能自动折算。')
+    attendancePunchMinute(punch, attendance.date)
     requireThat(punch.outFence === false, 'attendance', '外勤标志未知或异常，需先核实接口与考勤。')
     minuteOfDay(punch.time)
   }
-  // Exactly two verified same-day punches: ordering is deterministic, never pick
-  // extrema from an ambiguous multi-punch day or trust a caller confirmation flag.
-  const [start, end] = [...attendance.punches].sort((a, b) => a.time.localeCompare(b.time))
-  const a = minuteOfDay(start!.time)
-  const b = minuteOfDay(end!.time)
-  requireThat((a <= 540 || (a === 555 && b === 1260)) && b >= 1110, 'attendance', '此上下班时段不在已确认工时规则内，不能自动折算。')
-  return { start: start!.time, end: end!.time, budget: 480 + Math.floor(Math.max(0, b - 1140) / 30) * 30 }
+  // Exactly two verified punches in one business window; multiple punches remain review-only.
+  const [start, end] = [...attendance.punches].sort((a, b) => attendancePunchMinute(a, attendance.date) - attendancePunchMinute(b, attendance.date))
+  const a = attendancePunchMinute(start!, attendance.date)
+  const b = attendancePunchMinute(end!, attendance.date)
+  requireThat(a < 1110 && b >= 1110, 'attendance', '此上下班时段不在已确认工时规则内，不能自动折算。')
+  // Count only missed scheduled work: 09:00–12:30 and 14:00–18:30.
+  // Lunch is not work and must not be deducted a second time.
+  const missedMorning = Math.max(0, Math.min(a, 750) - 540)
+  const missedAfternoon = Math.max(0, Math.min(a, 1110) - 840)
+  const deduction = Math.floor((missedMorning + missedAfternoon) / 30) * 30
+  const overtime = Math.floor(Math.max(0, b - 1140) / 30) * 30
+  return { start: start!.time, end: end!.time, ...(b >= 1440 ? { endNextDay: true } : {}), budget: 480 - deduction + overtime }
 }
 
 export function attendanceBudget(attendance: Attendance): number {

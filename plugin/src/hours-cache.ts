@@ -3,6 +3,7 @@ import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ensurePrivateDirectory, assertPrivatePath } from './private-files.ts'
 import { record, requireThat, validDate, minuteOfDay, text, id, type Task } from './domain/model.ts'
+import { ATTENDANCE_RULE_VERSION } from './domain/attendance.ts'
 import { businessDate, type MissingDay } from './domain/missing-hours.ts'
 
 export type HoursMonth = { month: string; days: MissingDay[]; savedAt: number }
@@ -35,7 +36,8 @@ export function parseHoursMonth(value: unknown, month: string): HoursMonth {
     if (row.attendanceTime !== undefined) {
       const times = record(row.attendanceTime)
       minuteOfDay(times.start); minuteOfDay(times.end)
-      result.attendanceTime = { start: times.start as string, end: times.end as string }
+      requireThat((times.endNextDay === undefined || typeof times.endNextDay === 'boolean') && (times.startNextDay === undefined || typeof times.startNextDay === 'boolean'), 'cache', '打卡跨日标志无效。')
+      result.attendanceTime = { start: times.start as string, end: times.end as string, ...(times.startNextDay ? { startNextDay: true } : {}), ...(times.endNextDay ? { endNextDay: true } : {}) }
     }
     return result
   }).sort((a, b) => a.date.localeCompare(b.date))
@@ -70,13 +72,17 @@ export class HoursCache implements HoursMonthStore {
   async read(scope: string, month: string): Promise<HoursMonth | null> {
     validDate(month + '-01')
     const row = (await this.db()).prepare('SELECT data FROM months WHERE scope=? AND month=?').get(scope, month)
-    return row ? parseHoursMonth(JSON.parse(String(row.data)), month) : null
+    if (!row) return null
+    const data = record(JSON.parse(String(row.data)))
+    // A rule change invalidates even previously aligned historical months.
+    if (data.attendanceRuleVersion !== ATTENDANCE_RULE_VERSION) return null
+    return parseHoursMonth(data, month)
   }
   async publish(scope: string, value: HoursMonth, check: () => void): Promise<void> {
     const data = parseHoursMonth(value, value.month)
     const db = await this.db()
     check()
-    db.prepare('INSERT INTO months(scope,month,data,saved_at) VALUES(?,?,?,?) ON CONFLICT(scope,month) DO UPDATE SET data=excluded.data,saved_at=excluded.saved_at WHERE excluded.saved_at>=months.saved_at').run(scope, data.month, JSON.stringify(data), data.savedAt)
+    db.prepare('INSERT INTO months(scope,month,data,saved_at) VALUES(?,?,?,?) ON CONFLICT(scope,month) DO UPDATE SET data=excluded.data,saved_at=excluded.saved_at WHERE excluded.saved_at>=months.saved_at').run(scope, data.month, JSON.stringify({ ...data, attendanceRuleVersion: ATTENDANCE_RULE_VERSION }), data.savedAt)
   }
   /// 写入前移除该月份摘要，避免成功或未知结果后继续使用旧的已对齐结论。
   async invalidate(scope: string, month: string): Promise<void> {

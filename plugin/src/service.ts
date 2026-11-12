@@ -1,3 +1,4 @@
+import { attendanceDayEnded } from './domain/attendance.ts'
 import type { HoursAcceptanceGrant } from './hours-acceptance.ts'
 import { HoursBatch, type HoursBatchRow, type HoursBatchResult } from './hours-batch.ts'
 import { recentHoursMonths, alignedHoursMonth } from './domain/hours-year.ts'
@@ -769,11 +770,11 @@ export class Workbench {
             days.push({ date, existing, budget: null, remaining: null, state: 'review', reason: error.message })
           } else throw error
         }
-        if (date === scan.today) {
+        if (!attendanceDayEnded(date, scan.startedAt)) {
           const last = days[days.length - 1]!
           last.state = 'pending'
           last.remaining = null
-          last.reason = '当天尚未结束，不判定缺失工时。'
+          last.reason = '考勤窗口至次日 08:00 才结束，暂不判定缺失工时。'
         }
         check()
         requireThat(this.hoursScan === scan, 'stale', '扫描已被新的查询替换。')

@@ -1,5 +1,5 @@
 import { AppError, type Attendance, type Allocation, type Task, requireThat, validDate } from './model.ts'
-import { resolveAttendance, checkAllocations } from './attendance.ts'
+import { resolveAttendance, checkAllocations, attendancePunchMinute } from './attendance.ts'
 
 export type MissingDay = {
   date: string
@@ -7,7 +7,7 @@ export type MissingDay = {
   budget: number | null
   remaining: number | null
   state: 'missing' | 'partial' | 'covered' | 'review' | 'not_required' | 'pending'
-  attendanceTime?: { start: string; end: string }
+  attendanceTime?: { start: string; end: string; startNextDay?: boolean; endNextDay?: boolean }
   reason: string
 }
 export function businessDate(now = new Date()): string {
@@ -32,14 +32,26 @@ export function adjacentMonth(month: string, delta: number): string {
   return date.toISOString().slice(0, 7)
 }
 
+// Display-only projection: endpoints never make an ambiguous day allocatable.
+export function attendanceEndpoints(attendance: Attendance): MissingDay['attendanceTime'] {
+  if (!attendance.punches.length) return undefined
+  try {
+    const ordered = attendance.punches.map(punch => ({ time: punch.time, minute: attendancePunchMinute(punch, attendance.date) })).sort((a, b) => a.minute - b.minute)
+    return { start: ordered[0]!.time, end: ordered.at(-1)!.time, ...(ordered[0]!.minute >= 1440 ? { startNextDay: true } : {}), ...(ordered.at(-1)!.minute >= 1440 ? { endNextDay: true } : {}) }
+  } catch {
+    return undefined
+  }
+}
+
 export function classifyDay(attendance: Attendance, existing: number): MissingDay {
   requireThat(Number.isFinite(existing) && existing >= 0, 'schema', '已有工时无效。')
-  const base = { date: attendance.date, existing }
+  const endpoints = attendanceEndpoints(attendance)
+  const base = { date: attendance.date, existing, ...(endpoints ? { attendanceTime: endpoints } : {}) }
   validDate(attendance.date)
   if (attendance.punches.length === 0) return { ...base, budget: 0, remaining: 0, state: 'not_required', reason: '该日无考勤，无需填写工时。' }
   try {
-    const { start, end, budget } = resolveAttendance(attendance)
-    return { ...base, attendanceTime: { start, end }, budget, remaining: Math.max(0, budget - existing),
+    const { start, end, endNextDay, budget } = resolveAttendance(attendance)
+    return { ...base, attendanceTime: { start, end, ...(endNextDay ? { endNextDay } : {}) }, budget, remaining: Math.max(0, budget - existing),
       state: existing === 0 ? 'missing' : existing < budget ? 'partial' : 'covered',
       reason: existing > budget ? '已有工时超过考勤额度，请核对；不自动修改。' : '考勤额度仅为上限，不代表实际任务投入。' }
   } catch (error) {

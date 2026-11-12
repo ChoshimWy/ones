@@ -1,6 +1,7 @@
+import { nextAttendanceDate } from '../src/domain/attendance.ts'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { monthDates, businessDate, classifyDay, taskDraft } from '../src/domain/missing-hours.ts'
+import { monthDates, businessDate, classifyDay, taskDraft, attendanceEndpoints } from '../src/domain/missing-hours.ts'
 import { Workbench, type Vault, type Dependencies } from '../src/service.ts'
 import { startSeconds } from '../src/domain/attendance.ts'
 import type { Attendance, Task } from '../src/domain/model.ts'
@@ -35,6 +36,22 @@ test('missing hours: absent, partial, covered and ambiguous attendance remain di
   assert.equal(classifyDay({ ...attendance, punches: [] }, 0).state, 'not_required')
   assert.equal(classifyDay({ ...attendance, punches: attendance.punches.map(p => ({ ...p, outFence: null })) }, 0).state, 'review')
 })
+test('missing hours: late punches reduce subsequent draft capacity without rewriting punch times or worklogs', () => {
+  const late = { ...attendance, punches: attendance.punches.map(p => ({ ...p, time: p.time === '09:00' ? '09:30' : p.time })) }
+  const result = classifyDay(late, 420)
+  assert.equal(result.budget, 450)
+  assert.equal(result.remaining, 30)
+  assert.equal(result.state, 'partial')
+  assert.deepEqual(result.attendanceTime, { start: '09:30', end: '18:30' })
+  assert.equal(taskDraft(task, '09:30', 30, 'fixture', result.budget!, result.existing, []).minutes, 30)
+  assert.throws(() => taskDraft(task, '09:30', 60, 'fixture', result.budget!, result.existing, []))
+  const over = classifyDay(late, 480)
+  assert.equal(over.existing, 480)
+  assert.equal(over.remaining, 0)
+  assert.match(over.reason, /超过/)
+  assert.equal(classifyDay(late, 450).state, 'covered')
+})
+
 test('missing hours: draft uses chosen duration, rejects duplicates and budget overflow', () => {
   const draft = taskDraft(task, '09:00', 120, '', 480, 120, [])
   assert.equal(draft.minutes, 120)
@@ -45,7 +62,7 @@ test('missing hours: draft uses chosen duration, rejects duplicates and budget o
   assert.throws(() => taskDraft(task, '09:00', 121, '', 480, 0, []))
 })
 
-function fixture() {
+function fixture(start = '09:00') {
   const data = new Map<string, string>([
     ['session.ones', JSON.stringify({ token: 'fixture', userId: 'owner', label: 'Fixture', teams: [{ id: 'team', name: 'Team' }], expiresAt: Date.now() + 172800000 })],
     ['session.coho', JSON.stringify({ token: 'fixture', principal: 'owner', label: 'Fixture', expiresAt: null })]
@@ -77,7 +94,7 @@ function fixture() {
     }
     if (path.endsWith('/attCalendar')) {
       if (fail) return new Response('', { status: 503 })
-      return json({ code: 200, data: { dateList: requested.endsWith('02') ? [] : [{ date: requested }], dkList: requested.endsWith('01') ? [] : ['09:00', '18:30'].map(time => ({ date: requested, realDate: requested, time, isNext: false, outFence: false })) } })
+      return json({ code: 200, data: { dateList: [{ date: requested }, { date: nextAttendanceDate(requested) }], dkList: [requested, nextAttendanceDate(requested)].filter(date => !date.endsWith('01')).flatMap(date => [start, '18:30'].map(time => ({ date, realDate: date, time, isNext: false, outFence: date.endsWith('02') ? null : false }))) } })
     }
     throw new Error('unexpected endpoint')
   } }
@@ -182,4 +199,35 @@ test('missing hours: late initial month request cannot replace a newer scan curs
   assert.ok(fresh.nextCursor)
   const next = await f.service.scanHours({ ...input, cursor: fresh.nextCursor! })
   assert.equal(next.days[0]?.date, '2026-02-08')
+})
+
+test('missing hours: service scan and selected-day preview share the late budget', async () => {
+  const f = fixture('09:30')
+  const result = await f.service.scanHours(input)
+  const scanned = result.days.find(day => day.date === '2026-02-03')!
+  assert.equal(scanned.budget, 450)
+  assert.equal(scanned.remaining, 450)
+  const selected = await f.service.readDay({ team: 'team', date: scanned.date })
+  await assert.rejects(f.service.makePreview({
+    dayId: selected.id,
+    allocations: [{ taskId: task.id, start: '09:30', minutes: 480, description: 'fixture' }]
+  }), { code: 'budget' })
+})
+
+test('missing hours: first and last punches are display-only for multi-punch and incomplete days', () => {
+  const punches = ['18:40', '12:30', '08:57', '14:00'].map(time => ({ ...attendance.punches[0]!, time }))
+  const multiple = { ...attendance, punches }
+  assert.deepEqual(attendanceEndpoints(multiple), { start: '08:57', end: '18:40' })
+  const result = classifyDay(multiple, 0)
+  assert.deepEqual(result.attendanceTime, { start: '08:57', end: '18:40' })
+  assert.equal(result.state, 'review')
+  assert.equal(result.budget, null)
+  assert.equal(result.remaining, null)
+  assert.deepEqual(attendanceEndpoints({ ...attendance, punches: [punches[0]!] }), { start: '18:40', end: '18:40' })
+  assert.equal(classifyDay({ ...attendance, punches: [punches[0]!] }, 0).state, 'review')
+  assert.equal(attendanceEndpoints({ ...attendance, punches: [] }), undefined)
+  for (const changed of [{ isNext: true }, { realDate: '2026-02-11' }, { time: 'invalid' }]) {
+    assert.equal(attendanceEndpoints({ ...attendance, punches: [{ ...punches[0]!, ...changed }] }), undefined)
+  }
+  assert.deepEqual(multiple.punches.map(p => p.time), ['18:40', '12:30', '08:57', '14:00'])
 })

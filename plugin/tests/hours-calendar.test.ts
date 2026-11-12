@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { calendarDates, calendarLabels, calendarMonths } from '../src/html/hours-calendar.ts'
+import { calendarDates, calendarLabels, calendarMonths, calendarPunchLabels } from '../src/html/hours-calendar.ts'
 import type { MissingDay } from '../src/domain/missing-hours.ts'
 const day: MissingDay = { date: '2026-11-02', existing: 0, budget: 480, remaining: 480, state: 'missing', reason: 'fixture' }
 test('hours calendar: Monday first, complete months, leap year and no invented adjacent dates', () => {
@@ -20,4 +20,10 @@ test('hours calendar: ordered queried months and truthful attendance/registratio
   assert.equal(calendarLabels({ ...day, state: 'not_required', budget: 0 }).registration, '无需工时')
   assert.equal(calendarLabels({ ...day, state: 'review', budget: null }).attendance, '考勤待核实')
   assert.equal(calendarLabels().attendance, '未查询')
+})
+
+test('hours calendar: visible first/last labels distinguish next-day punches without inventing times', () => {
+  assert.deepEqual(calendarPunchLabels(), { first: '—', last: '—' })
+  assert.deepEqual(calendarPunchLabels({ ...day, attendanceTime: { start:'09:00',end:'05:00',endNextDay:true } }), {first:'09:00',last:'次日 05:00'})
+  assert.deepEqual(calendarPunchLabels({ ...day, state:'review',budget:null,attendanceTime: {start:'05:00',end:'05:00',startNextDay:true,endNextDay:true} }), {first:'次日 05:00',last:'次日 05:00'})
 })

@@ -489,6 +489,9 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
 .hours-calendar-table td { padding: 0; border: 1px solid var(--orca-border); vertical-align: top; }
 .hours-calendar-table .calendar-day { display: flex; flex-direction: column; align-items: stretch; gap: 7px; width: 100%; min-height: 104px; height: 100%; padding: 8px 5px; border: 0; border-radius: 0; text-align: left; font-size: 12px; font-weight: 400; background: transparent; color: var(--orca-foreground); white-space: normal; overflow-wrap: anywhere; }
 .calendar-date { text-align: right; font-weight: 650; font-variant-numeric: tabular-nums; }
+.calendar-punch { display: flex; flex-wrap: wrap; column-gap: 4px; line-height: 1.4; }
+.calendar-punch-label { color: var(--orca-muted-foreground); }
+.calendar-punch-time { white-space: normal; word-break: keep-all; overflow-wrap: normal; font-variant-numeric: tabular-nums; }
 .calendar-attendance, .calendar-registration { display: block; line-height: 1.4; }
 .calendar-missing .calendar-registration { color: var(--orca-destructive, #d84b4b); font-weight: 650; }
 .calendar-partial .calendar-registration, .calendar-review .calendar-attendance { color: var(--orca-primary, #b38132); font-weight: 650; }

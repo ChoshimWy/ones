@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { AppError, id, record, requireThat, text, validDate, minuteOfDay, type Attendance, type Punch } from '../domain/model.ts'
+import { nextAttendanceDate } from '../domain/attendance.ts'
 import { COHO, Transport, jsonBody } from './http.ts'
 export type CohoSession = { token: string; principal: string; label: string; expiresAt: number | null }
 const TENANT = 'ATS'
@@ -102,19 +103,43 @@ export class CohoClient {
         verified = true
       }
       const request = async (path: string, data: Record<string, unknown>) => dataOf(await this.transport.json(path, { ...jsonBody(signed(data, this.session.token)), headers: headers(this.session.token), signal }))
-      let calendar = [...calendars.values()].find(value => value.dates.has(date))
-      if (!calendar) {
-        const period = await request('/gateway/wtspro-attendance/attQishu/getInfoByDateAndUser', { curDate: date, empId: this.session.principal })
-        requireThat(typeof period.kqqs === 'string' && period.kqqs.length > 0 && period.kqqs.length <= 100, 'schema', `Coho 考勤期间查询（${date}）：kqqs 缺失或格式无效，已停止整月更新。`)
-        const kqqs = period.kqqs
-        calendar = calendars.get(kqqs)
+      const readCalendar = async (day: string): Promise<Calendar> => {
+        let calendar = [...calendars.values()].find(value => value.dates.has(day))
         if (!calendar) {
-          calendar = parseCalendar(await request('/gateway/wtspro-attendance/attSummaryComfirm/attCalendar', { userId: this.session.principal, kqqsId: kqqs, kqqs }))
-          calendars.set(kqqs, calendar)
+          const period = await request('/gateway/wtspro-attendance/attQishu/getInfoByDateAndUser', { curDate: day, empId: this.session.principal })
+          requireThat(typeof period.kqqs === 'string' && period.kqqs.length > 0 && period.kqqs.length <= 100, 'schema', `Coho 考勤期间查询（${day}）：kqqs 缺失或格式无效，已停止整月更新。`)
+          const kqqs = period.kqqs
+          calendar = calendars.get(kqqs)
+          if (!calendar) {
+            calendar = parseCalendar(await request('/gateway/wtspro-attendance/attSummaryComfirm/attCalendar', { userId: this.session.principal, kqqsId: kqqs, kqqs }))
+            calendars.set(kqqs, calendar)
+          }
         }
+        requireThat(calendar.dates.has(day), 'attendance', `${date}：考勤 dateList 未覆盖 ${day}，覆盖未知，不能计算考勤时间。`)
+        return calendar
       }
-      requireThat(calendar.dates.has(date), 'attendance', `${date}：考勤 dateList 未覆盖该日，覆盖未知，不能计算考勤时间。`)
-      const punches = calendar.punches.filter(value => value.date === date).map(value => parsePunch(value, date))
+      const next = nextAttendanceDate(date)
+      const sources = new Set([await readCalendar(date), await readCalendar(next)])
+      const punches: Punch[] = []
+      const previousKeys = new Set<string>()
+      for (const calendar of sources) {
+        const keys: string[] = []
+        for (const value of calendar.punches) {
+          // Malformed nearby records remain review-only; never drop an unknown punch.
+          const nearby = value.realDate === date || value.realDate === next || value.date === date || value.date === next
+          if (!nearby) continue
+          const punch = parsePunch(value, value.date as string)
+          const minute = minuteOfDay(punch.time)
+          const inWindow = (punch.realDate === date && minute >= 480) || (punch.realDate === next && minute < 480)
+          if (!inWindow) continue
+          const key = JSON.stringify([punch.date, punch.realDate, punch.time, punch.isNext, punch.outFence])
+          keys.push(key)
+          // Same period is read once; overlapping period responses must not duplicate punches.
+          if (!previousKeys.has(key)) punches.push(punch)
+        }
+        for (const key of keys) previousKeys.add(key)
+      }
+      punches.sort((a, b) => a.realDate.localeCompare(b.realDate) || a.time.localeCompare(b.time))
       requireThat(punches.length > 0, 'no_attendance', '所选日期无打卡记录，禁止默认填入 8 小时。')
       return { date, punches, fetchedAt: Date.now() }
     }

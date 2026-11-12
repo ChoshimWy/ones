@@ -35,7 +35,7 @@ async function fixture(change: (calendar: Record<string, unknown>) => void = () 
         if (failure === 'network') throw Error('fixture offline')
         if (failure === 'http') return new Response('', { status: 503 })
         if (failure === 'auth') return Response.json({ code: 401, data: {} })
-        const dates = monthDates('2026-04')
+        const dates = [...monthDates('2026-04'), '2026-05-01']
         const calendar = { dateList: dates.map(date => ({ date })), dkList: dates.filter(date => date !== '2026-04-12').flatMap(date => ['08:50', '18:31'].map(time => ({ date, realDate: date, time, isNext: false, outFence: false }))) }
         change(calendar)
         return Response.json({ code: 200, data: calendar })
@@ -178,5 +178,22 @@ test('Coho day isolation: empty but well-formed dateList never implies no attend
     const saved = (await f.service.cachedHours('team', '2026-04'))!
     assert.equal(saved.days.length, 30)
     assert.ok(saved.days.every(day => day.state === 'review' && day.budget === null))
+  } finally { await f.close() }
+})
+
+test('Coho day isolation: previous month stays pending until the next 08:00 and refreshes after closing', async t => {
+  let now = Date.parse('2026-05-01T07:59:59+08:00')
+  t.mock.method(Date, 'now', () => now)
+  const f = await fixture()
+  try {
+    await scan(f.service)
+    let saved = (await f.service.cachedHours('team', '2026-04'))!
+    assert.equal(saved.days.at(-1)!.state, 'pending')
+    assert.equal(saved.days.at(-1)!.remaining, null)
+    now = Date.parse('2026-05-01T08:00:00+08:00')
+    await scan(f.service)
+    saved = (await f.service.cachedHours('team', '2026-04'))!
+    assert.equal(saved.days.at(-1)!.state, 'missing')
+    assert.equal(saved.days.at(-1)!.remaining, 480)
   } finally { await f.close() }
 })

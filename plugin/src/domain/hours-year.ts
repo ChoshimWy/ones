@@ -1,4 +1,5 @@
 import { adjacentMonth, businessDate, monthDates, type MissingDay } from './missing-hours.ts'
+import { attendanceDayEnded } from './attendance.ts'
 import type { HoursMonth } from '../hours-cache.ts'
 
 /// 近一年按当月及前 11 个自然月排列，当前月优先同步。
@@ -17,7 +18,7 @@ export function completeHoursMonth(value: HoursMonth | null | undefined, now = n
 /// 仅已结束、日期完整且额度逐日完全一致的月份可跳过自动云端刷新。
 export function alignedHoursMonth(value: HoursMonth | null | undefined, now = new Date()): boolean {
   if (!value || value.month >= businessDate(now).slice(0, 7)) return false
-  return completeHoursMonth(value, now) && value.days.every(day => (day.state === 'covered' || day.state === 'not_required') &&
+  return completeHoursMonth(value, now) && attendanceDayEnded(value.days.at(-1)!.date, now.getTime()) && value.days.every(day => (day.state === 'covered' || day.state === 'not_required') &&
     day.budget !== null && day.existing === day.budget && day.remaining === 0)
 }
 
