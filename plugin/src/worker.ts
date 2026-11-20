@@ -18,8 +18,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     vault: orca.secrets,
     protection: async () => (await orca.host.call('secrets.protection')).status === 'os-keyring',
     // 2026-11-12: macOS single live write/readback + targeted batch/UI evidence.
+    // 2026-11-20: Windows 77-day / 167-entry live write with per-day readback.
     // Each write still requires a fresh confirmed preview and durable recovery ledger.
-    writesVerified: process.platform === 'darwin',
+    writesVerified: process.platform === 'darwin' || process.platform === 'win32',
     consumeHoursAcceptance: grant => new HoursAcceptance(join(privateDataRoot(), 'hours-acceptance')).consume(grant)
   })
   const answer = async <T>(action: () => Promise<T>): Promise<Answer<T>> => {
