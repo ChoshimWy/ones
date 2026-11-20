@@ -24,13 +24,26 @@ export function calendarLabels(day?: MissingDay): { attendance: string; registra
   if (day.state === 'not_required') return { attendance: '无考勤', registration: '无需工时' }
   const attendance = day.budget === null ? '考勤待核实' : '考勤 ' + hours(day.budget)
   const registration = day.existing === 0 ? '未登记' :
-    day.state === 'partial' ? '部分登记 ' + hours(day.existing) : '已登记 ' + hours(day.existing)
+    day.state === 'partial' ? '部分登记 ' + hours(day.existing) :
+    calendarOverRegistered(day) ? '超额登记 ' + hours(day.existing) : '已登记 ' + hours(day.existing)
   return { attendance, registration }
 }
 
-// 考勤额度已知且已登记工时与之不一致（超额）时，"已登记"文本以警示色展示；不改变日期状态与可选性。
-export function calendarRegistrationMismatch(day?: MissingDay): boolean {
-  return !!day && day.state === 'covered' && day.budget !== null && day.existing !== day.budget
+export function calendarOverRegistered(day?: MissingDay): boolean {
+  return !!day && day.state === 'covered' && day.budget !== null && day.existing > day.budget
+}
+
+export function calendarMismatchIcon(day?: MissingDay): string {
+  if (day?.state === 'partial') return '▼'
+  return calendarOverRegistered(day) ? '▲' : ''
+}
+
+function registrationLabel(day: MissingDay | undefined, text: string): HTMLElement {
+  const icon = calendarMismatchIcon(day)
+  if (!icon) return el('span', 'calendar-registration', text)
+  const mark = el('span', 'calendar-mismatch-icon', icon)
+  mark.setAttribute('aria-hidden', 'true')
+  return el('span', 'calendar-registration calendar-mismatch', mark, text)
 }
 
 export function calendarPunchLabels(day?: MissingDay): { first: string; last: string } {
@@ -78,7 +91,7 @@ export function hoursCalendar(options: {
         el('span', 'calendar-punch', el('span', 'calendar-punch-label', '首次'), el('span', 'calendar-punch-time', punches.first)),
         el('span', 'calendar-punch', el('span', 'calendar-punch-label', '末次'), el('span', 'calendar-punch-time', punches.last)),
         el('span', 'calendar-attendance', labels.attendance),
-        el('span', calendarRegistrationMismatch(day) ? 'calendar-registration calendar-registration-mismatch' : 'calendar-registration', labels.registration)
+        registrationLabel(day, labels.registration)
       ]
       const selectable = day && day.state !== 'not_required' && day.state !== 'pending'
       const cell = selectable ? button('', () => options.chooseDate(date), options.busy, 'calendar-day') : el('div', 'calendar-day')

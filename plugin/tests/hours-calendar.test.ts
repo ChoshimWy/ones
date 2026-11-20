@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { calendarDates, calendarLabels, calendarMonths, calendarPunchLabels, calendarRegistrationMismatch } from '../src/html/hours-calendar.ts'
+import { calendarDates, calendarLabels, calendarMismatchIcon, calendarMonths, calendarOverRegistered, calendarPunchLabels } from '../src/html/hours-calendar.ts'
 import type { MissingDay } from '../src/domain/missing-hours.ts'
 const day: MissingDay = { date: '2026-11-02', existing: 0, budget: 480, remaining: 480, state: 'missing', reason: 'fixture' }
 test('hours calendar: Monday first, complete months, leap year and no invented adjacent dates', () => {
@@ -17,6 +17,13 @@ test('hours calendar: ordered queried months and truthful attendance/registratio
   assert.deepEqual(calendarLabels(day), { attendance: '考勤 8 小时', registration: '未登记' })
   assert.match(calendarLabels({ ...day, state: 'covered', existing: 480 }).registration, /已登记 8 小时/)
   assert.match(calendarLabels({ ...day, state: 'partial', existing: 120 }).registration, /部分登记 2 小时/)
+  assert.match(calendarLabels({ ...day, state: 'covered', existing: 900 }).registration, /超额登记 15 小时/)
+  assert.equal(calendarOverRegistered({ ...day, state: 'covered', existing: 900 }), true)
+  assert.equal(calendarOverRegistered({ ...day, state: 'covered', existing: 480 }), false)
+  assert.equal(calendarMismatchIcon({ ...day, state: 'covered', existing: 900 }), '▲')
+  assert.equal(calendarMismatchIcon({ ...day, state: 'partial', existing: 120 }), '▼')
+  assert.equal(calendarMismatchIcon({ ...day, state: 'covered', existing: 480 }), '')
+  assert.equal(calendarMismatchIcon(day), '')
   assert.equal(calendarLabels({ ...day, state: 'not_required', budget: 0 }).registration, '无需工时')
   assert.equal(calendarLabels({ ...day, state: 'review', budget: null }).attendance, '考勤待核实')
   assert.equal(calendarLabels().attendance, '未查询')
@@ -29,9 +36,9 @@ test('hours calendar: visible first/last labels distinguish next-day punches wit
 })
 
 test('hours calendar: registered hours differing from attendance budget are flagged as mismatch', () => {
-  assert.equal(calendarRegistrationMismatch({ ...day, state: 'covered', existing: 480 }), false)
-  assert.equal(calendarRegistrationMismatch({ ...day, state: 'covered', existing: 540 }), true)
-  assert.equal(calendarRegistrationMismatch({ ...day, state: 'partial', existing: 120 }), false)
-  assert.equal(calendarRegistrationMismatch({ ...day, state: 'review', budget: null, existing: 480 }), false)
-  assert.equal(calendarRegistrationMismatch(), false)
+  assert.equal(calendarOverRegistered({ ...day, state: 'covered', existing: 480 }), false)
+  assert.equal(calendarOverRegistered({ ...day, state: 'covered', existing: 540 }), true)
+  assert.equal(calendarOverRegistered({ ...day, state: 'partial', existing: 120 }), false)
+  assert.equal(calendarOverRegistered({ ...day, state: 'review', budget: null, existing: 480 }), false)
+  assert.equal(calendarOverRegistered(), false)
 })
