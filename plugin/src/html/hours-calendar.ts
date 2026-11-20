@@ -28,6 +28,11 @@ export function calendarLabels(day?: MissingDay): { attendance: string; registra
   return { attendance, registration }
 }
 
+// 考勤额度已知且已登记工时与之不一致（超额）时，"已登记"文本以警示色展示；不改变日期状态与可选性。
+export function calendarRegistrationMismatch(day?: MissingDay): boolean {
+  return !!day && day.state === 'covered' && day.budget !== null && day.existing !== day.budget
+}
+
 export function calendarPunchLabels(day?: MissingDay): { first: string; last: string } {
   const times = day?.attendanceTime
   return times ? {
@@ -73,7 +78,7 @@ export function hoursCalendar(options: {
         el('span', 'calendar-punch', el('span', 'calendar-punch-label', '首次'), el('span', 'calendar-punch-time', punches.first)),
         el('span', 'calendar-punch', el('span', 'calendar-punch-label', '末次'), el('span', 'calendar-punch-time', punches.last)),
         el('span', 'calendar-attendance', labels.attendance),
-        el('span', 'calendar-registration', labels.registration)
+        el('span', calendarRegistrationMismatch(day) ? 'calendar-registration calendar-registration-mismatch' : 'calendar-registration', labels.registration)
       ]
       const selectable = day && day.state !== 'not_required' && day.state !== 'pending'
       const cell = selectable ? button('', () => options.chooseDate(date), options.busy, 'calendar-day') : el('div', 'calendar-day')

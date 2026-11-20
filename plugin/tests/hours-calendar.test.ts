@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { calendarDates, calendarLabels, calendarMonths, calendarPunchLabels } from '../src/html/hours-calendar.ts'
+import { calendarDates, calendarLabels, calendarMonths, calendarPunchLabels, calendarRegistrationMismatch } from '../src/html/hours-calendar.ts'
 import type { MissingDay } from '../src/domain/missing-hours.ts'
 const day: MissingDay = { date: '2026-11-02', existing: 0, budget: 480, remaining: 480, state: 'missing', reason: 'fixture' }
 test('hours calendar: Monday first, complete months, leap year and no invented adjacent dates', () => {
@@ -26,4 +26,12 @@ test('hours calendar: visible first/last labels distinguish next-day punches wit
   assert.deepEqual(calendarPunchLabels(), { first: '—', last: '—' })
   assert.deepEqual(calendarPunchLabels({ ...day, attendanceTime: { start:'09:00',end:'05:00',endNextDay:true } }), {first:'09:00',last:'次日 05:00'})
   assert.deepEqual(calendarPunchLabels({ ...day, state:'review',budget:null,attendanceTime: {start:'05:00',end:'05:00',startNextDay:true,endNextDay:true} }), {first:'次日 05:00',last:'次日 05:00'})
+})
+
+test('hours calendar: registered hours differing from attendance budget are flagged as mismatch', () => {
+  assert.equal(calendarRegistrationMismatch({ ...day, state: 'covered', existing: 480 }), false)
+  assert.equal(calendarRegistrationMismatch({ ...day, state: 'covered', existing: 540 }), true)
+  assert.equal(calendarRegistrationMismatch({ ...day, state: 'partial', existing: 120 }), false)
+  assert.equal(calendarRegistrationMismatch({ ...day, state: 'review', budget: null, existing: 480 }), false)
+  assert.equal(calendarRegistrationMismatch(), false)
 })
