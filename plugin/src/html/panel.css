@@ -472,7 +472,8 @@ button.primary { background: var(--orca-primary); color: var(--orca-primary-fore
 .calendar-missing .calendar-registration { color: var(--orca-destructive, #d84b4b); font-weight: 650; }
 .calendar-partial .calendar-registration, .calendar-review .calendar-attendance { color: var(--orca-primary, #b38132); font-weight: 650; }
 .calendar-covered .calendar-registration { color: var(--orca-success, #328565); }
-.calendar-covered .calendar-registration-mismatch { color: var(--orca-primary, #b38132); font-weight: 650; }
+.hours-calendar-table .calendar-registration.calendar-mismatch { display: inline-flex; align-items: center; gap: 3px; align-self: flex-start; max-width: 100%; padding: 1px 6px; border-radius: 4px; background: #ffc400; color: #1f1a00; font-weight: 700; }
+.calendar-mismatch-icon { font-size: 10px; line-height: 1; }
 .hours-calendar-table .calendar-not_required, .hours-calendar-table .calendar-unqueried { color: var(--orca-muted-foreground); }
 .hours-calendar-table .calendar-selected { box-shadow: inset 0 0 0 2px var(--orca-ring, var(--orca-primary)); }
 .hours-calendar-table button.calendar-day:hover:not(:disabled) { background: var(--wb-hover, var(--orca-card)); }
